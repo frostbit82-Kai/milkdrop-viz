@@ -23,6 +23,18 @@ import subprocess
 from collections import deque
 import numpy as np
 
+# The Windows console encodes as cp1252, and this module prints stars, arrows
+# and em dashes throughout. An encoding error there is never worth a crash: one
+# already killed the audio backend and another killed the render thread mid
+# preset. Change only the error handler, not the encoding, so the console keeps
+# its native code page and the literal keys hosts parse (XID=) are untouched.
+if sys.platform == "win32":
+    for _stream in (sys.stdout, sys.stderr):
+        try:
+            _stream.reconfigure(errors="replace")
+        except Exception:
+            pass       # not a TextIOWrapper (redirected, or replaced by a host)
+
 logger_audio = logging.getLogger("visualizer.audio")
 
 
