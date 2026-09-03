@@ -1,0 +1,42 @@
+"""
+renderer.py — milkdrop-viz standalone renderer.
+Core logic lives in viz_common.Renderer; this subclass wires up the local
+config/keymaps/ratings save paths and the local projectm_wrapper config_dir.
+"""
+
+import sys, os
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).parent))
+from viz_common import Renderer as _BaseRenderer, load_projectm, _build_key_lookup, _token_matches, _xdotool_move
+
+# Import local config helpers so callers can do: from renderer import ...
+from config import (
+    QUALITY_MESH, save_config, save_ratings, save_keymaps,
+    set_preset_rating, get_preset_rating, is_excluded, load_keymaps,
+    CONFIG_PATH, RATINGS_PATH, KEYMAPS_PATH,
+)
+
+os.environ.setdefault("SDL_VIDEODRIVER", "x11")
+os.environ["PYSDL2_DLL_PATH"] = "/usr/lib/x86_64-linux-gnu"
+
+_CONFIG_DIR = Path(__file__).parent
+
+
+class Renderer(_BaseRenderer):
+    """milkdrop-viz renderer — saves config/keymaps/ratings to the local dir."""
+
+    def _save_config(self, cfg: dict):
+        save_config(cfg)
+
+    def _save_keymaps(self, km: dict):
+        save_keymaps(km)
+
+    def _save_ratings(self, ratings: dict):
+        save_ratings(ratings)
+
+    def _create_projectm(self):
+        return load_projectm(config_dir=_CONFIG_DIR)
+
+
+__all__ = ["Renderer"]

@@ -1,0 +1,72 @@
+"""
+config.py — milkdrop-viz standalone config.
+Shared logic lives in viz_common.py; this file supplies the local file paths
+and the DEFAULT_CONFIG.
+"""
+
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).parent))
+from viz_common import (
+    QUALITY_MESH,
+    DEFAULT_KEYMAPS,
+    load_config_from,
+    save_config_to,
+    load_ratings_from,
+    save_ratings_to,
+    load_keymaps_from,
+    save_keymaps_to,
+    get_preset_rating,
+    set_preset_rating,
+    is_excluded,
+)
+
+BASE_DIR = Path(__file__).parent
+
+CONFIG_PATH  = BASE_DIR / "config.json"
+RATINGS_PATH = BASE_DIR / "ratings.json"
+KEYMAPS_PATH = BASE_DIR / "keymaps.json"
+
+DEFAULT_CONFIG = {
+    "preset_dir":           "/home/fr0st/projectm-presets",
+    "audio_device":         "",  # Empty = auto-detect at runtime
+    "preset_duration":      30,
+    "preset_random_extra":  15,
+    "fps":                  60,
+    "width":                1280,
+    "height":               720,
+    "quality":              "high",
+    "mesh_x":               64,
+    "mesh_y":               48,
+    "hard_cuts_enabled":    True,
+    "hard_cut_sensitivity": 1.0,
+    "beat_sensitivity":     1.0,
+    "soft_cut_duration":    3.0,
+    "projectm_lib":         "",
+    "projectm_version":     4,
+}
+
+
+def load_config() -> dict:
+    return load_config_from(CONFIG_PATH, DEFAULT_CONFIG)
+
+
+def save_config(cfg: dict):
+    save_config_to(CONFIG_PATH, cfg)
+
+
+def load_ratings() -> dict:
+    return load_ratings_from(RATINGS_PATH)
+
+
+def save_ratings(ratings: dict):
+    save_ratings_to(RATINGS_PATH, ratings)
+
+
+def load_keymaps() -> dict:
+    return load_keymaps_from(KEYMAPS_PATH)
+
+
+def save_keymaps(km: dict):
+    save_keymaps_to(KEYMAPS_PATH, km)

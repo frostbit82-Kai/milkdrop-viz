@@ -1,0 +1,19 @@
+# Virtualenv and bytecode
+.venv/
+__pycache__/
+*.pyc
+
+# Assets are not shipped and not ours to redistribute — point the app at them
+# with the texture/preset directory settings instead.
+textures/
+projectm-presets/
+
+# Local state
+config.json
+ratings.json
+keymaps.json
+*.log
+kai_workflows.db
+
+# Vendored tooling that belongs to its own project
+ponytail-main/

@@ -1,0 +1,1781 @@
+  audio.py
+  config.json
+  config.py
+  keymaps.json
+  main.py
+  projectm_wrapper.py
+  project.txt
+  __pycache__
+    audio.cpython-314.pyc
+    config.cpython-314.pyc
+    projectm_wrapper.cpython-314.pyc
+    renderer.cpython-314.pyc
+    ui.cpython-314.pyc
+  renderer.py
+  run.sh
+  ui.py
+  .venv
+    bin
+    .gitignore
+    include
+    lib
+    lib64
+    pyvenv.cfg
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  ./audio.py
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+"""
+audio.py
+--------
+Captures system audio from a PipeWire/PulseAudio monitor source
+via sounddevice and provides PCM chunks to the render loop.
+"""
+
+import threading
+import numpy as np
+
+try:
+    import sounddevice as sd
+    _SD_AVAILABLE = True
+except ImportError:
+    _SD_AVAILABLE = False
+    print("[audio] sounddevice not installed — visualization will run silent")
+
+
+class AudioCapture:
+    CHUNK = 512
+
+    def __init__(self, device_name: str):
+        self._device_name = device_name
+        self._buffer: list[np.ndarray] = []
+        self._lock = threading.Lock()
+        self._stream = None
+
+    def _resolve_device(self) -> int:
+        """Find device index by partial name match, fall back to any monitor."""
+        if not _SD_AVAILABLE:
+            return 0
+        devices = sd.query_devices()
+        name = self._device_name.lower()
+        # Exact substring match first
+        for i, d in enumerate(devices):
+            if name in d["name"].lower() and d["max_input_channels"] > 0:
+                return i
+        # Any monitor source
+        for i, d in enumerate(devices):
+            if "monitor" in d["name"].lower() and d["max_input_channels"] > 0:
+                print(f"[audio] Falling back to monitor: {d['name']}")
+                return i
+        return sd.default.device[0]
+
+    def start(self):
+        if not _SD_AVAILABLE:
+            return
+        device = self._resolve_device()
+        print(f"[audio] Using device: {sd.query_devices(device)['name']}")
+
+        def callback(indata, frames, time_info, status):
+            with self._lock:
+                self._buffer.append(indata.copy())
+                while len(self._buffer) > 8:
+                    self._buffer.pop(0)
+
+        try:
+            self._stream = sd.InputStream(
+                device=device,
+                channels=2,
+                samplerate=44100,
+                blocksize=self.CHUNK,
+                dtype="float32",
+                callback=callback,
+            )
+            self._stream.start()
+        except Exception as e:
+            print(f"[audio] Could not open audio stream: {e}")
+            print("[audio] Visualization will run without audio reaction.")
+
+    def stop(self):
+        if self._stream:
+            try:
+                self._stream.stop()
+                self._stream.close()
+            except Exception:
+                pass
+            self._stream = None
+
+    def get_chunk(self) -> "np.ndarray | None":
+        with self._lock:
+            if self._buffer:
+                return self._buffer.pop(0)
+        return None
+
+    def update_device(self, device_name: str):
+        """Hot-swap audio device (called from settings dialog)."""
+        was_running = self._stream is not None
+        self.stop()
+        self._device_name = device_name
+        if was_running:
+            self.start()
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  ./config.py
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+"""
+config.py
+---------
+All persistent state: settings, ratings, keymaps.
+"""
+
+import json
+from pathlib import Path
+
+BASE_DIR = Path(__file__).parent
+
+CONFIG_PATH  = BASE_DIR / "config.json"
+RATINGS_PATH = BASE_DIR / "ratings.json"
+KEYMAPS_PATH = BASE_DIR / "keymaps.json"
+
+QUALITY_MESH = {
+    "low":    (32, 24),
+    "medium": (48, 36),
+    "high":   (64, 48),
+    "ultra":  (96, 72),
+}
+
+DEFAULT_CONFIG = {
+    "preset_dir":           "/home/fr0st/projectm-presets",
+    "audio_device":         "alsa_output.pci-0000_01_00.1.hdmi-stereo-extra4.monitor",
+    "preset_duration":      30,
+    "preset_random_extra":  15,
+    "fps":                  60,
+    "width":                1280,
+    "height":               720,
+    "quality":              "high",
+    "mesh_x":               64,
+    "mesh_y":               48,
+    "hard_cuts_enabled":    True,
+    "hard_cut_sensitivity": 1.0,
+    "beat_sensitivity":     1.0,
+    "soft_cut_duration":    3.0,
+    "projectm_lib":         "",
+    "projectm_version":     4,
+}
+
+# Default keybindings — SDL2 keysym names
+# Special values: "SCROLLLOCK" uses scancode; "DBLCLICK" is mouse
+DEFAULT_KEYMAPS = {
+    "next":           "RIGHT",
+    "prev":           "LEFT",
+    "hard_cut_next":  "SPACE",
+    "random":         "r",
+    "lock":           "SCROLLLOCK",
+    "toggle_hard_cuts": "h",
+    "fullscreen":     "f",
+    "fullscreen_alt": "F11",
+    "rate_up":        "+",
+    "rate_down":      "-",
+    "quit":           "ESCAPE",
+    "toggle_mode":      "m",
+    "fullscreen_mouse": "DBLCLICK",
+}
+
+
+def load_config() -> dict:
+    cfg = dict(DEFAULT_CONFIG)
+    if CONFIG_PATH.exists():
+        try:
+            with open(CONFIG_PATH) as f:
+                cfg.update(json.load(f))
+        except Exception as e:
+            print(f"[config] Warning: could not load config.json: {e}")
+    return cfg
+
+
+def save_config(cfg: dict):
+    try:
+        with open(CONFIG_PATH, "w") as f:
+            json.dump(cfg, f, indent=4)
+    except Exception as e:
+        print(f"[config] Warning: could not save config.json: {e}")
+
+
+def load_ratings() -> dict:
+    if RATINGS_PATH.exists():
+        try:
+            with open(RATINGS_PATH) as f:
+                return json.load(f)
+        except Exception:
+            pass
+    return {}
+
+
+def save_ratings(ratings: dict):
+    try:
+        with open(RATINGS_PATH, "w") as f:
+            json.dump(ratings, f, indent=4, sort_keys=True)
+    except Exception as e:
+        print(f"[config] Warning: could not save ratings.json: {e}")
+
+
+def load_keymaps() -> dict:
+    km = dict(DEFAULT_KEYMAPS)
+    if KEYMAPS_PATH.exists():
+        try:
+            with open(KEYMAPS_PATH) as f:
+                km.update(json.load(f))
+        except Exception as e:
+            print(f"[config] Warning: could not load keymaps.json: {e}")
+    return km
+
+
+def save_keymaps(km: dict):
+    try:
+        with open(KEYMAPS_PATH, "w") as f:
+            json.dump(km, f, indent=4)
+    except Exception as e:
+        print(f"[config] Warning: could not save keymaps.json: {e}")
+
+
+def get_preset_rating(ratings: dict, name: str) -> int:
+    return ratings.get(name, 5)
+
+
+def set_preset_rating(ratings: dict, name: str, value: int) -> int:
+    """Clamp to 0-10, save, return new value. Rating 0 = excluded from random."""
+    value = max(0, min(10, value))
+    ratings[name] = value
+    save_ratings(ratings)
+    return value
+
+
+def is_excluded(ratings: dict, name: str) -> bool:
+    """Rating of 0 means excluded from random rotation."""
+    return ratings.get(name, 5) == 0
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  ./main.py
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+#!/usr/bin/env python3
+"""
+main.py — MilkDrop Visualizer
+==============================
+Entry point. Wires together config, renderer, audio, and UI.
+
+Launch:  python main.py
+Or:      bash run.sh
+"""
+
+import sys
+import os
+import signal
+import threading
+
+os.environ.setdefault("SDL_VIDEODRIVER", "x11")
+os.environ.setdefault("SDL_AUDIODRIVER", "pulse")
+os.environ["LD_LIBRARY_PATH"] = "/usr/local/lib:" + os.environ.get("LD_LIBRARY_PATH", "")
+
+from PyQt6.QtWidgets import QApplication
+from PyQt6.QtCore import Qt, QTimer, QObject, pyqtSignal
+
+from config import load_config, load_ratings, load_keymaps
+from audio import AudioCapture
+from renderer import Renderer
+from ui import Bridge, ContextMenu
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+#  Extended Bridge with context-menu signal
+# ─────────────────────────────────────────────────────────────────────────────
+
+class AppBridge(Bridge):
+    """Adds show_context_menu signal to the base Bridge."""
+    show_context_menu = pyqtSignal()
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+#  Application coordinator
+# ─────────────────────────────────────────────────────────────────────────────
+
+class App:
+    def __init__(self):
+        signal.signal(signal.SIGINT, signal.SIG_DFL)
+
+        self._cfg     = load_config()
+        self._ratings = load_ratings()
+        self._keymaps = load_keymaps()
+
+        self._qt_app = QApplication(sys.argv)
+        self._qt_app.setApplicationName("MilkDrop Visualizer")
+        # Keep Qt running even without a visible window
+        self._qt_app.setQuitOnLastWindowClosed(False)
+
+        self._bridge = AppBridge()
+
+        self._renderer = Renderer(
+            cfg=self._cfg,
+            bridge=self._bridge,
+            ratings=self._ratings,
+            keymaps=self._keymaps,
+        )
+
+        # Connect signals
+        self._bridge.request_quit.connect(self._on_quit)
+        self._bridge.show_context_menu.connect(self._show_context_menu)
+        self._bridge.preset_changed.connect(self._on_preset_changed)
+        self._bridge.lock_changed.connect(self._on_lock_changed)
+        self._bridge.status_message.connect(self._on_status)
+
+        # Render thread
+        self._render_thread = threading.Thread(
+            target=self._renderer.run, daemon=True
+        )
+
+    def run(self) -> int:
+        self._render_thread.start()
+        return self._qt_app.exec()
+
+    # ── Signal handlers ───────────────────────────────────────────────────
+
+    def _on_quit(self):
+        self._renderer._running = False
+        self._qt_app.quit()
+
+    def _show_context_menu(self):
+        """Called in Qt thread — spawn the right-click menu."""
+        menu = ContextMenu(
+            renderer=self._renderer,
+            cfg=self._cfg,
+            ratings=self._ratings,
+            keymaps=self._keymaps,
+        )
+        menu.popup_at_cursor()
+
+    def _on_preset_changed(self, name: str, rating: int):
+        # No overlay to update — just print (or could be used by a future tray icon)
+        pass
+
+    def _on_lock_changed(self, locked: bool):
+        pass
+
+    def _on_status(self, msg: str):
+        # Could route to a tray tooltip or notification in the future
+        pass
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+#  Entry point
+# ─────────────────────────────────────────────────────────────────────────────
+
+def main():
+    app = App()
+    exit_code = app.run()
+    sys.exit(exit_code)
+
+
+if __name__ == "__main__":
+    main()
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  ./projectm_wrapper.py
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+"""
+projectm_wrapper.py  (v2 — symbols verified against nm output)
+---------------------------------------------------------------
+ctypes bindings for libprojectM-4.so + libprojectM-4-playlist.so
+All function names verified against actual exported symbols.
+
+Core .so symbols used:
+  projectm_create, projectm_destroy
+  projectm_opengl_render_frame          ← NOT projectm_render_frame
+  projectm_pcm_add_float
+  projectm_set_window_size
+  projectm_set_fps, projectm_get_fps
+  projectm_set_beat_sensitivity, projectm_get_beat_sensitivity
+  projectm_set_hard_cut_enabled, projectm_get_hard_cut_enabled
+  projectm_set_hard_cut_sensitivity, projectm_get_hard_cut_sensitivity
+  projectm_set_hard_cut_duration, projectm_get_hard_cut_duration
+  projectm_set_soft_cut_duration, projectm_get_soft_cut_duration
+  projectm_set_preset_duration, projectm_get_preset_duration
+  projectm_set_mesh_size, projectm_get_mesh_size
+  projectm_set_preset_locked, projectm_get_preset_locked
+  projectm_load_preset_file
+  projectm_set_preset_switch_requested_event_callback
+
+Playlist .so symbols used:
+  projectm_playlist_create, projectm_playlist_destroy
+  projectm_playlist_connect             ← connects playlist to pm handle
+  projectm_playlist_add_path
+  projectm_playlist_size
+  projectm_playlist_item
+  projectm_playlist_get_position, projectm_playlist_set_position
+  projectm_playlist_play_next, projectm_playlist_play_previous
+  projectm_playlist_get_shuffle, projectm_playlist_set_shuffle
+"""
+
+import ctypes
+import ctypes.util
+import os
+import glob
+import json
+import random
+from pathlib import Path
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+#  Library discovery
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _find_lib(candidates: list[str], util_name: str) -> ctypes.CDLL | None:
+    for p in candidates:
+        if os.path.exists(p):
+            return ctypes.CDLL(p)
+    # glob versioned
+    for p in candidates:
+        base = p.rstrip(".0123456789")
+        for match in glob.glob(base + "*"):
+            if os.path.isfile(match):
+                return ctypes.CDLL(match)
+    name = ctypes.util.find_library(util_name)
+    if name:
+        return ctypes.CDLL(name)
+    return None
+
+
+def _load_libraries() -> tuple[ctypes.CDLL, ctypes.CDLL | None]:
+    """Returns (core_lib, playlist_lib). playlist_lib may be None."""
+    config_path = Path(__file__).parent / "config.json"
+    explicit_core = ""
+    if config_path.exists():
+        with open(config_path) as f:
+            cfg = json.load(f)
+        explicit_core = cfg.get("projectm_lib", "")
+
+    # Core
+    if explicit_core and os.path.exists(explicit_core):
+        core = ctypes.CDLL(explicit_core)
+    else:
+        core = _find_lib([
+            "/usr/local/lib/libprojectM-4.so",
+            "/usr/local/lib/libprojectM-4.so.4",
+            "/usr/local/lib/libprojectM-4.so.4.1.0",
+            "/usr/lib/x86_64-linux-gnu/libprojectM-4.so",
+        ], "projectM-4")
+
+    if core is None:
+        raise RuntimeError(
+            "Cannot find libprojectM-4.so. "
+            "Set 'projectm_lib' in config.json to the full path."
+        )
+
+    # Playlist (optional but strongly preferred)
+    playlist = _find_lib([
+        "/usr/local/lib/libprojectM-4-playlist.so",
+        "/usr/local/lib/libprojectM-4-playlist.so.4",
+        "/usr/local/lib/libprojectM-4-playlist.so.4.1.0",
+        "/usr/lib/x86_64-linux-gnu/libprojectM-4-playlist.so",
+    ], "projectM-4-playlist")
+
+    return core, playlist
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+#  ProjectM4  (uses both .so files)
+# ─────────────────────────────────────────────────────────────────────────────
+
+class ProjectM4:
+
+    def __init__(self, core: ctypes.CDLL, playlist: ctypes.CDLL | None):
+        self._core     = core
+        self._playlist = playlist
+        self._pm       = None   # core handle  (c_void_p)
+        self._pl       = None   # playlist handle (c_void_p)
+        self._locked   = False
+
+        # Fallback preset list when no playlist .so
+        self._preset_files: list[str] = []
+        self._preset_index: int = 0
+
+        self._setup_core_signatures()
+        if playlist:
+            self._setup_playlist_signatures()
+
+    # ── Signature setup ───────────────────────────────────────────────────
+
+    def _setup_core_signatures(self):
+        C = self._core
+
+        C.projectm_create.restype  = ctypes.c_void_p
+        C.projectm_create.argtypes = []
+
+        C.projectm_destroy.restype  = None
+        C.projectm_destroy.argtypes = [ctypes.c_void_p]
+
+        # THE KEY FIX: render is projectm_opengl_render_frame, not projectm_render_frame
+        C.projectm_opengl_render_frame.restype  = None
+        C.projectm_opengl_render_frame.argtypes = [ctypes.c_void_p]
+
+        C.projectm_set_window_size.restype  = None
+        C.projectm_set_window_size.argtypes = [ctypes.c_void_p,
+                                                ctypes.c_size_t, ctypes.c_size_t]
+
+        C.projectm_get_window_size.restype  = None
+        C.projectm_get_window_size.argtypes = [ctypes.c_void_p,
+                                                ctypes.POINTER(ctypes.c_size_t),
+                                                ctypes.POINTER(ctypes.c_size_t)]
+
+        C.projectm_pcm_add_float.restype  = None
+        C.projectm_pcm_add_float.argtypes = [ctypes.c_void_p,
+                                              ctypes.POINTER(ctypes.c_float),
+                                              ctypes.c_uint32,
+                                              ctypes.c_uint32]
+
+        C.projectm_set_fps.restype  = None
+        C.projectm_set_fps.argtypes = [ctypes.c_void_p, ctypes.c_int32]
+
+        C.projectm_get_fps.restype  = ctypes.c_int32
+        C.projectm_get_fps.argtypes = [ctypes.c_void_p]
+
+        C.projectm_set_mesh_size.restype  = None
+        C.projectm_set_mesh_size.argtypes = [ctypes.c_void_p,
+                                              ctypes.c_size_t, ctypes.c_size_t]
+
+        C.projectm_set_beat_sensitivity.restype  = None
+        C.projectm_set_beat_sensitivity.argtypes = [ctypes.c_void_p, ctypes.c_float]
+
+        C.projectm_get_beat_sensitivity.restype  = ctypes.c_float
+        C.projectm_get_beat_sensitivity.argtypes = [ctypes.c_void_p]
+
+        C.projectm_set_hard_cut_enabled.restype  = None
+        C.projectm_set_hard_cut_enabled.argtypes = [ctypes.c_void_p, ctypes.c_bool]
+
+        C.projectm_get_hard_cut_enabled.restype  = ctypes.c_bool
+        C.projectm_get_hard_cut_enabled.argtypes = [ctypes.c_void_p]
+
+        C.projectm_set_hard_cut_sensitivity.restype  = None
+        C.projectm_set_hard_cut_sensitivity.argtypes = [ctypes.c_void_p, ctypes.c_float]
+
+        C.projectm_get_hard_cut_sensitivity.restype  = ctypes.c_float
+        C.projectm_get_hard_cut_sensitivity.argtypes = [ctypes.c_void_p]
+
+        C.projectm_set_hard_cut_duration.restype  = None
+        C.projectm_set_hard_cut_duration.argtypes = [ctypes.c_void_p, ctypes.c_double]
+
+        C.projectm_set_soft_cut_duration.restype  = None
+        C.projectm_set_soft_cut_duration.argtypes = [ctypes.c_void_p, ctypes.c_double]
+
+        C.projectm_set_preset_duration.restype  = None
+        C.projectm_set_preset_duration.argtypes = [ctypes.c_void_p, ctypes.c_double]
+
+        C.projectm_get_preset_duration.restype  = ctypes.c_double
+        C.projectm_get_preset_duration.argtypes = [ctypes.c_void_p]
+
+        # Lock lives on core handle
+        C.projectm_set_preset_locked.restype  = None
+        C.projectm_set_preset_locked.argtypes = [ctypes.c_void_p, ctypes.c_bool]
+
+        C.projectm_get_preset_locked.restype  = ctypes.c_bool
+        C.projectm_get_preset_locked.argtypes = [ctypes.c_void_p]
+
+        # Direct preset load (used as fallback when no playlist .so)
+        C.projectm_load_preset_file.restype  = None
+        C.projectm_load_preset_file.argtypes = [ctypes.c_void_p,
+                                                 ctypes.c_char_p,
+                                                 ctypes.c_bool]
+
+        # Preset-switched callback (used to track current name)
+        C.projectm_set_preset_switch_requested_event_callback.restype  = None
+        C.projectm_set_preset_switch_requested_event_callback.argtypes = [
+            ctypes.c_void_p,   # handle
+            ctypes.c_void_p,   # callback fn ptr (CFUNCTYPE)
+            ctypes.c_void_p,   # user_data
+        ]
+
+    def _setup_playlist_signatures(self):
+        P = self._playlist
+
+        # projectm_playlist_create takes NO arguments (unlike what I assumed before)
+        P.projectm_playlist_create.restype  = ctypes.c_void_p
+        P.projectm_playlist_create.argtypes = []
+
+        P.projectm_playlist_destroy.restype  = None
+        P.projectm_playlist_destroy.argtypes = [ctypes.c_void_p]
+
+        # connect(playlist_handle, projectm_handle)
+        P.projectm_playlist_connect.restype  = None
+        P.projectm_playlist_connect.argtypes = [ctypes.c_void_p, ctypes.c_void_p]
+
+        P.projectm_playlist_add_path.restype  = ctypes.c_uint32
+        P.projectm_playlist_add_path.argtypes = [ctypes.c_void_p,  # playlist
+                                                   ctypes.c_char_p,  # path
+                                                   ctypes.c_bool,    # recurse
+                                                   ctypes.c_bool]    # allow_duplicates
+
+        P.projectm_playlist_size.restype  = ctypes.c_uint32
+        P.projectm_playlist_size.argtypes = [ctypes.c_void_p]
+
+        P.projectm_playlist_item.restype  = ctypes.c_char_p
+        P.projectm_playlist_item.argtypes = [ctypes.c_void_p, ctypes.c_uint32]
+
+        P.projectm_playlist_get_position.restype  = ctypes.c_uint32
+        P.projectm_playlist_get_position.argtypes = [ctypes.c_void_p]
+
+        P.projectm_playlist_set_position.restype  = None
+        P.projectm_playlist_set_position.argtypes = [ctypes.c_void_p,  # playlist
+                                                       ctypes.c_uint32,  # index
+                                                       ctypes.c_bool]    # hard_cut
+
+        P.projectm_playlist_play_next.restype  = None
+        P.projectm_playlist_play_next.argtypes = [ctypes.c_void_p, ctypes.c_bool]
+
+        P.projectm_playlist_play_previous.restype  = None
+        P.projectm_playlist_play_previous.argtypes = [ctypes.c_void_p, ctypes.c_bool]
+
+        P.projectm_playlist_get_shuffle.restype  = ctypes.c_bool
+        P.projectm_playlist_get_shuffle.argtypes = [ctypes.c_void_p]
+
+        P.projectm_playlist_set_shuffle.restype  = None
+        P.projectm_playlist_set_shuffle.argtypes = [ctypes.c_void_p, ctypes.c_bool]
+
+        P.projectm_playlist_clear.restype  = None
+        P.projectm_playlist_clear.argtypes = [ctypes.c_void_p]
+
+    # ── Public API ────────────────────────────────────────────────────────
+
+    def create(self, width: int, height: int, fps: int = 60):
+        self._pm = self._core.projectm_create()
+        if not self._pm:
+            raise RuntimeError("projectm_create() returned NULL")
+
+        self._core.projectm_set_window_size(self._pm, width, height)
+        self._core.projectm_set_fps(self._pm, fps)
+
+        if self._playlist:
+            self._pl = self._playlist.projectm_playlist_create()
+            if not self._pl:
+                raise RuntimeError("projectm_playlist_create() returned NULL")
+            self._playlist.projectm_playlist_connect(self._pl, self._pm)
+        else:
+            print("[projectm_wrapper] No playlist .so — using direct file loading fallback")
+
+    def destroy(self):
+        if self._pl and self._playlist:
+            self._playlist.projectm_playlist_destroy(self._pl)
+            self._pl = None
+        if self._pm:
+            self._core.projectm_destroy(self._pm)
+            self._pm = None
+
+    def load_preset_dir(self, path: str) -> int:
+        if self._pl and self._playlist:
+            count = self._playlist.projectm_playlist_add_path(
+                self._pl, path.encode(), False, False
+            )
+            self._playlist.projectm_playlist_set_shuffle(self._pl, True)
+            return count
+        else:
+            # Fallback: collect files ourselves, load first one directly
+            self._preset_files = sorted(
+                str(p) for p in Path(path).glob("*.milk")
+            )
+            random.shuffle(self._preset_files)
+            if self._preset_files:
+                self._preset_index = 0
+                self._load_preset_direct(self._preset_index)
+            return len(self._preset_files)
+
+    def _load_preset_direct(self, index: int):
+        if 0 <= index < len(self._preset_files):
+            path = self._preset_files[index].encode()
+            self._core.projectm_load_preset_file(self._pm, path, True)
+
+    def render_frame(self):
+        self._core.projectm_opengl_render_frame(self._pm)
+
+    def add_pcm_float(self, samples, count: int, channels: int = 2):
+        arr = (ctypes.c_float * len(samples))(*samples)
+        self._core.projectm_pcm_add_float(self._pm, arr, count, channels)
+
+    def set_window_size(self, w: int, h: int):
+        self._core.projectm_set_window_size(self._pm, w, h)
+
+    def next_preset(self, hard_cut: bool = True):
+        if self._locked:
+            return
+        if self._pl and self._playlist:
+            self._playlist.projectm_playlist_play_next(self._pl, hard_cut)
+        else:
+            self._preset_index = (self._preset_index + 1) % max(1, len(self._preset_files))
+            self._load_preset_direct(self._preset_index)
+
+    def prev_preset(self, hard_cut: bool = True):
+        if self._locked:
+            return
+        if self._pl and self._playlist:
+            self._playlist.projectm_playlist_play_previous(self._pl, hard_cut)
+        else:
+            self._preset_index = (self._preset_index - 1) % max(1, len(self._preset_files))
+            self._load_preset_direct(self._preset_index)
+
+    def set_locked(self, locked: bool):
+        self._locked = locked
+        self._core.projectm_set_preset_locked(self._pm, locked)
+
+    def get_locked(self) -> bool:
+        return bool(self._core.projectm_get_preset_locked(self._pm))
+
+    def current_preset_name(self) -> str:
+        try:
+            if self._pl and self._playlist:
+                pos = self._playlist.projectm_playlist_get_position(self._pl)
+                raw = self._playlist.projectm_playlist_item(self._pl, pos)
+                if raw:
+                    return Path(raw.decode(errors="replace")).stem
+            elif self._preset_files:
+                return Path(self._preset_files[self._preset_index]).stem
+        except Exception:
+            pass
+        return "Unknown"
+
+    def playlist_size(self) -> int:
+        if self._pl and self._playlist:
+            return self._playlist.projectm_playlist_size(self._pl)
+        return len(self._preset_files)
+
+    def set_beat_sensitivity(self, v: float):
+        self._core.projectm_set_beat_sensitivity(self._pm, v)
+
+    def set_fps(self, fps: int):
+        self._core.projectm_set_fps(self._pm, fps)
+
+    def set_mesh_size(self, x: int, y: int):
+        self._core.projectm_set_mesh_size(self._pm, x, y)
+
+    def set_hard_cut_enabled(self, enabled: bool):
+        self._core.projectm_set_hard_cut_enabled(self._pm, enabled)
+
+    def set_hard_cut_sensitivity(self, v: float):
+        self._core.projectm_set_hard_cut_sensitivity(self._pm, v)
+
+    def set_preset_duration(self, seconds: float):
+        # projectM manages its own timer; we also manage ours in visualizer.py
+        # but setting this keeps projectM's internal state consistent
+        self._core.projectm_set_preset_duration(self._pm, seconds)
+
+    def set_soft_cut_duration(self, seconds: float):
+        self._core.projectm_set_soft_cut_duration(self._pm, seconds)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+#  Factory
+# ─────────────────────────────────────────────────────────────────────────────
+
+def load_projectm() -> ProjectM4:
+    """
+    Load libprojectM-4.so and (optionally) libprojectM-4-playlist.so.
+    Returns a ProjectM4 instance. Call .create(w, h, fps) after this.
+    """
+    core, playlist = _load_libraries()
+    print(f"[projectm_wrapper] Core:     {core._name}")
+    if playlist:
+        print(f"[projectm_wrapper] Playlist: {playlist._name}")
+    else:
+        print("[projectm_wrapper] Playlist .so not found — using direct load fallback")
+    return ProjectM4(core, playlist)
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  ./renderer.py
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+"""
+renderer.py
+-----------
+SDL2 window + OpenGL context + projectM render loop.
+Handles all keyboard and mouse input using the loaded keymap.
+No Qt overlay — right-click pops a Qt context menu via the Bridge.
+"""
+
+import ctypes
+import os
+import random
+import time
+import threading
+
+os.environ.setdefault("SDL_VIDEODRIVER", "x11")
+os.environ["PYSDL2_DLL_PATH"] = "/usr/lib/x86_64-linux-gnu"
+
+import sdl2
+import sdl2.ext
+from sdl2 import (
+    SDL_GL_CONTEXT_MAJOR_VERSION,
+    SDL_GL_CONTEXT_MINOR_VERSION,
+)
+from OpenGL.GL import glViewport, glClear, GL_COLOR_BUFFER_BIT
+
+from config import (
+    QUALITY_MESH, save_config, save_ratings, set_preset_rating,
+    get_preset_rating, is_excluded, load_keymaps
+)
+from audio import AudioCapture
+from projectm_wrapper import load_projectm
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+#  SDL2 key token → (sym, scancode) lookup
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _build_key_lookup() -> dict[str, tuple[int | None, int | None]]:
+    """
+    Map a keymap token string to (sdl_sym, sdl_scancode).
+    Returns (sym, None) for regular keys, (None, scancode) for special ones
+    that are better identified by scancode (e.g. SCROLLLOCK).
+    """
+    sym_map = {
+        "ESCAPE":    sdl2.SDLK_ESCAPE,
+        "SPACE":     sdl2.SDLK_SPACE,
+        "RETURN":    sdl2.SDLK_RETURN,
+        "TAB":       sdl2.SDLK_TAB,
+        "BACKSPACE": sdl2.SDLK_BACKSPACE,
+        "DELETE":    sdl2.SDLK_DELETE,
+        "LEFT":      sdl2.SDLK_LEFT,
+        "RIGHT":     sdl2.SDLK_RIGHT,
+        "UP":        sdl2.SDLK_UP,
+        "DOWN":      sdl2.SDLK_DOWN,
+        "HOME":      sdl2.SDLK_HOME,
+        "END":       sdl2.SDLK_END,
+        "PAGEUP":    sdl2.SDLK_PAGEUP,
+        "PAGEDOWN":  sdl2.SDLK_PAGEDOWN,
+        "+":         sdl2.SDLK_PLUS,
+        "=":         sdl2.SDLK_EQUALS,
+        "-":         sdl2.SDLK_MINUS,
+        "F1":  sdl2.SDLK_F1,  "F2":  sdl2.SDLK_F2,
+        "F3":  sdl2.SDLK_F3,  "F4":  sdl2.SDLK_F4,
+        "F5":  sdl2.SDLK_F5,  "F6":  sdl2.SDLK_F6,
+        "F7":  sdl2.SDLK_F7,  "F8":  sdl2.SDLK_F8,
+        "F9":  sdl2.SDLK_F9,  "F10": sdl2.SDLK_F10,
+        "F11": sdl2.SDLK_F11, "F12": sdl2.SDLK_F12,
+    }
+    scancode_map = {
+        "SCROLLLOCK": sdl2.SDL_SCANCODE_SCROLLLOCK,
+    }
+    result: dict[str, tuple[int | None, int | None]] = {}
+    for token, sym in sym_map.items():
+        result[token.upper()] = (sym, None)
+    for token, sc in scancode_map.items():
+        result[token.upper()] = (None, sc)
+    # Single printable characters
+    for c in "abcdefghijklmnopqrstuvwxyz0123456789`[]\\;',./":
+        result[c] = (ord(c), None)
+        result[c.upper()] = (ord(c), None)
+    return result
+
+
+_KEY_LOOKUP = _build_key_lookup()
+
+
+def _token_matches(token: str, sym: int, scancode: int) -> bool:
+    """Return True if the keymap token matches the SDL event."""
+    if not token or token.upper() == "DBLCLICK":
+        return False
+    entry = _KEY_LOOKUP.get(token.upper())
+    if not entry:
+        # Unknown token
+        return False
+    expected_sym, expected_sc = entry
+    if expected_sc is not None:
+        return scancode == expected_sc
+    # For +/= we accept both
+    if token == "+":
+        return sym in (sdl2.SDLK_PLUS, sdl2.SDLK_EQUALS, sdl2.SDLK_KP_PLUS)
+    if token == "-":
+        return sym in (sdl2.SDLK_MINUS, sdl2.SDLK_KP_MINUS)
+    return sym == expected_sym
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+#  Renderer
+# ─────────────────────────────────────────────────────────────────────────────
+
+class Renderer:
+    _instance = None
+
+    @classmethod
+    def instance(cls):
+        return cls._instance
+
+    def __init__(self, cfg: dict, bridge, ratings: dict, keymaps: dict):
+        Renderer._instance = self
+
+        self._cfg      = cfg
+        self._bridge   = bridge
+        self._ratings  = ratings
+        self._keymaps  = keymaps
+
+        # Thread-safe request flags
+        self._lock        = threading.Lock()
+        self._req_next    = False
+        self._req_prev    = False
+        self._req_random  = False
+        self._req_lock    = False
+        self._req_lock_v  = False
+        self._req_context_menu  = False
+        self._req_borderless    = False
+        self._req_settings_updates: dict | None = None
+
+        self._locked     = False
+        self._borderless = False
+        self._shuffle    = True    # True = random, False = sequential
+        self._running    = False
+
+        self._window   = None
+        self._context  = None
+        self._pm       = None
+
+        self._audio    = AudioCapture(cfg.get("audio_device", ""))
+
+        self._preset_start    = 0.0
+        self._preset_duration = 0.0
+        self._last_click      = 0.0   # for double-click detection
+        self._next_duration()
+
+    # ── Duration ──────────────────────────────────────────────────────────
+
+    def _next_duration(self):
+        base  = self._cfg.get("preset_duration", 30)
+        extra = self._cfg.get("preset_random_extra", 15)
+        self._preset_duration = base + random.uniform(0, extra)
+
+    # ── SDL2 / GL init ────────────────────────────────────────────────────
+
+    def _init_sdl(self) -> bool:
+        if sdl2.SDL_Init(sdl2.SDL_INIT_VIDEO) < 0:
+            print(f"[renderer] SDL_Init failed: {sdl2.SDL_GetError()}")
+            return False
+
+        sdl2.SDL_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION, 3)
+        sdl2.SDL_GL_SetAttribute(SDL_GL_CONTEXT_MINOR_VERSION, 3)
+        sdl2.SDL_GL_SetAttribute(sdl2.SDL_GL_DOUBLEBUFFER, 1)
+        sdl2.SDL_GL_SetAttribute(sdl2.SDL_GL_DEPTH_SIZE, 24)
+
+        w = self._cfg.get("width", 1280)
+        h = self._cfg.get("height", 720)
+        flags = (sdl2.SDL_WINDOW_OPENGL |
+                 sdl2.SDL_WINDOW_SHOWN  |
+                 sdl2.SDL_WINDOW_RESIZABLE)
+
+        self._window = sdl2.SDL_CreateWindow(
+            b"MilkDrop Visualizer",
+            sdl2.SDL_WINDOWPOS_CENTERED,
+            sdl2.SDL_WINDOWPOS_CENTERED,
+            w, h, flags
+        )
+        if not self._window:
+            print(f"[renderer] SDL_CreateWindow failed: {sdl2.SDL_GetError()}")
+            return False
+
+        self._context = sdl2.SDL_GL_CreateContext(self._window)
+        if not self._context:
+            print(f"[renderer] SDL_GL_CreateContext failed: {sdl2.SDL_GetError()}")
+            return False
+
+        sdl2.SDL_GL_SetSwapInterval(1)
+        return True
+
+    # ── projectM init ─────────────────────────────────────────────────────
+
+    def _init_projectm(self) -> bool:
+        try:
+            self._pm = load_projectm()
+        except RuntimeError as e:
+            print(f"[renderer] Fatal: {e}")
+            return False
+
+        w   = self._cfg.get("width", 1280)
+        h   = self._cfg.get("height", 720)
+        fps = self._cfg.get("fps", 60)
+
+        try:
+            self._pm.create(w, h, fps)
+        except RuntimeError as e:
+            print(f"[renderer] projectm.create() failed: {e}")
+            return False
+
+        self._apply_pm_settings(self._cfg)
+
+        preset_dir = self._cfg.get("preset_dir", "")
+        if not os.path.isdir(preset_dir):
+            print(f"[renderer] WARNING: preset dir not found: {preset_dir}")
+        else:
+            count = self._pm.load_preset_dir(preset_dir)
+            print(f"[renderer] Loaded {count} presets from {preset_dir}")
+
+        return True
+
+    def _apply_pm_settings(self, cfg: dict):
+        quality = cfg.get("quality", "high")
+        mx, my  = QUALITY_MESH.get(quality, (64, 48))
+        self._pm.set_mesh_size(
+            cfg.get("mesh_x", mx),
+            cfg.get("mesh_y", my)
+        )
+        self._pm.set_beat_sensitivity(cfg.get("beat_sensitivity", 1.0))
+        self._pm.set_hard_cut_enabled(cfg.get("hard_cuts_enabled", True))
+        self._pm.set_hard_cut_sensitivity(cfg.get("hard_cut_sensitivity", 1.0))
+        self._pm.set_soft_cut_duration(cfg.get("soft_cut_duration", 3.0))
+        self._pm.set_fps(cfg.get("fps", 60))
+
+    # ── Public thread-safe requests (from Qt thread or anywhere) ──────────
+
+    def request_next(self):
+        with self._lock: self._req_next = True
+
+    def request_prev(self):
+        with self._lock: self._req_prev = True
+
+    def request_random(self):
+        with self._lock: self._req_random = True
+
+    def request_toggle_lock(self):
+        with self._lock:
+            self._req_lock   = True
+            self._req_lock_v = not self._locked
+
+    def request_toggle_borderless(self):
+        with self._lock:
+            self._req_borderless = True
+
+    def request_context_menu(self):
+        with self._lock: self._req_context_menu = True
+
+    def is_locked(self) -> bool:
+        return self._locked
+
+    def apply_settings(self, updates: dict):
+        with self._lock:
+            self._req_settings_updates = updates
+
+    def update_keymaps(self, new_km: dict):
+        with self._lock:
+            self._keymaps.update(new_km)
+
+    # ── Key matching helpers ──────────────────────────────────────────────
+
+    def _km(self, action: str, sym: int, scancode: int) -> bool:
+        token = self._keymaps.get(action, "")
+        return _token_matches(token, sym, scancode)
+
+    # ── Main render loop ──────────────────────────────────────────────────
+
+    def run(self):
+        if not self._init_sdl():
+            return
+        if not self._init_projectm():
+            return
+
+        self._audio.start()
+        self._running      = True
+        self._preset_start = time.monotonic()
+        fps        = self._cfg.get("fps", 60)
+        frame_time = 1.0 / fps
+        event      = sdl2.SDL_Event()
+
+        self._emit_current_preset()
+
+        while self._running:
+
+            # ── SDL events ────────────────────────────────────────────────
+            while sdl2.SDL_PollEvent(ctypes.byref(event)) != 0:
+                if event.type == sdl2.SDL_QUIT:
+                    self._running = False
+                    break
+
+                elif event.type == sdl2.SDL_KEYDOWN:
+                    sym      = event.key.keysym.sym
+                    scancode = event.key.keysym.scancode
+                    self._handle_key(sym, scancode)
+
+                elif event.type == sdl2.SDL_MOUSEBUTTONDOWN:
+                    btn = event.button.button
+                    if btn == sdl2.SDL_BUTTON_RIGHT:
+                        self.request_context_menu()
+                    elif btn == sdl2.SDL_BUTTON_LEFT:
+                        token = self._keymaps.get("fullscreen_mouse", "DBLCLICK")
+                        if token.upper() == "DBLCLICK":
+                            now = time.monotonic()
+                            if now - self._last_click < 0.35:
+                                self._toggle_fullscreen()
+                                self._last_click = 0.0
+                            else:
+                                self._last_click = now
+
+                elif event.type == sdl2.SDL_WINDOWEVENT:
+                    if event.window.event == sdl2.SDL_WINDOWEVENT_RESIZED:
+                        nw = event.window.data1
+                        nh = event.window.data2
+                        glViewport(0, 0, nw, nh)
+                        self._pm.set_window_size(nw, nh)
+
+            if not self._running:
+                break
+
+            # ── Handle Qt-thread requests ─────────────────────────────────
+            with self._lock:
+                if self._req_next:
+                    self._req_next = False
+                    self._do_next(hard=True)
+                if self._req_prev:
+                    self._req_prev = False
+                    self._do_prev(hard=True)
+                if self._req_random:
+                    self._req_random = False
+                    self._do_random()
+                if self._req_lock:
+                    self._req_lock = False
+                    self._do_set_lock(self._req_lock_v)
+                if self._req_context_menu:
+                    self._req_context_menu = False
+                    self._bridge.show_context_menu.emit()
+                if self._req_borderless:
+                    self._req_borderless = False
+                    self._toggle_borderless()
+                if self._req_settings_updates is not None:
+                    updates = self._req_settings_updates
+                    self._req_settings_updates = None
+                    self._cfg.update(updates)
+                    self._apply_pm_settings(updates)
+                    if "audio_device" in updates:
+                        self._audio.update_device(updates["audio_device"])
+
+            # ── Auto-advance ──────────────────────────────────────────────
+            if not self._locked:
+                elapsed = time.monotonic() - self._preset_start
+                if elapsed >= self._preset_duration:
+                    self._do_next(hard=False)
+
+            # ── Audio ─────────────────────────────────────────────────────
+            chunk = self._audio.get_chunk()
+            if chunk is not None:
+                flat = chunk.flatten().tolist()
+                self._pm.add_pcm_float(flat, len(flat) // 2, 2)
+
+            # ── Render ────────────────────────────────────────────────────
+            t0 = time.monotonic()
+            self._pm.render_frame()
+            sdl2.SDL_GL_SwapWindow(self._window)
+
+            elapsed_frame = time.monotonic() - t0
+            sleep_t = frame_time - elapsed_frame
+            if sleep_t > 0.002:
+                time.sleep(sleep_t)
+
+        # ── Cleanup ───────────────────────────────────────────────────────
+        self._audio.stop()
+        if self._pm:
+            self._pm.destroy()
+        if self._context:
+            sdl2.SDL_GL_DeleteContext(self._context)
+        if self._window:
+            sdl2.SDL_DestroyWindow(self._window)
+        sdl2.SDL_Quit()
+        self._bridge.request_quit.emit()
+
+    # ── Key handler ───────────────────────────────────────────────────────
+
+    def _handle_key(self, sym: int, scancode: int):
+        km = self._km
+
+        if km("quit", sym, scancode):
+            self._running = False
+        elif km("next", sym, scancode):
+            self._do_next(hard=True)
+        elif km("prev", sym, scancode):
+            self._do_prev(hard=True)
+        elif km("hard_cut_next", sym, scancode):
+            self._do_next(hard=True)
+        elif km("random", sym, scancode):
+            self._do_random()
+        elif km("lock", sym, scancode):
+            self._toggle_lock()
+        elif km("toggle_hard_cuts", sym, scancode):
+            self._do_toggle_hard_cuts()
+        elif km("toggle_mode", sym, scancode):
+            self._do_toggle_mode()
+        elif km("fullscreen", sym, scancode) or km("fullscreen_alt", sym, scancode):
+            self._toggle_fullscreen()
+        elif km("rate_up", sym, scancode):
+            self._rate_current(+1)
+        elif km("rate_down", sym, scancode):
+            self._rate_current(-1)
+
+    # ── Preset navigation ─────────────────────────────────────────────────
+
+    def _do_next(self, hard: bool):
+        if self._locked:
+            return
+        self._pm.next_preset(hard_cut=hard)
+        self._next_duration()
+        self._preset_start = time.monotonic()
+        self._emit_current_preset()
+
+    def _do_prev(self, hard: bool):
+        if self._locked:
+            return
+        self._pm.prev_preset(hard_cut=hard)
+        self._next_duration()
+        self._preset_start = time.monotonic()
+        self._emit_current_preset()
+
+    def _do_random(self):
+        if self._locked:
+            return
+
+        # Build a list of non-excluded playlist indices
+        size = self._pm.playlist_size()
+        if size == 0:
+            return
+
+        if self._pm._pl and self._pm._playlist:
+            # Try to pick a random non-excluded preset (up to 20 attempts)
+            for _ in range(20):
+                idx = random.randint(0, size - 1)
+                name = ""
+                try:
+                    raw = self._pm._playlist.projectm_playlist_item(
+                        self._pm._pl, idx
+                    )
+                    if raw:
+                        from pathlib import Path
+                        name = Path(raw.decode(errors="replace")).stem
+                except Exception:
+                    pass
+                if not is_excluded(self._ratings, name):
+                    break
+            self._pm._playlist.projectm_playlist_set_position(
+                self._pm._pl, idx, True
+            )
+        else:
+            # Fallback: iterate the file list
+            candidates = [
+                i for i, p in enumerate(self._pm._preset_files)
+                if not is_excluded(self._ratings,
+                                   __import__("pathlib").Path(p).stem)
+            ]
+            if not candidates:
+                candidates = list(range(len(self._pm._preset_files)))
+            idx = random.choice(candidates)
+            self._pm._preset_index = idx
+            self._pm._load_preset_direct(idx)
+
+        self._next_duration()
+        self._preset_start = time.monotonic()
+        self._emit_current_preset()
+
+    # ── Lock ──────────────────────────────────────────────────────────────
+
+    def _toggle_lock(self):
+        self._do_set_lock(not self._locked)
+
+    def _do_set_lock(self, locked: bool):
+        self._locked = locked
+        self._pm.set_locked(locked)
+        self._bridge.lock_changed.emit(locked)
+        print(f"[renderer] Preset {'locked' if locked else 'unlocked'}")
+
+    # ── Hard cuts toggle ──────────────────────────────────────────────────
+
+    def _do_toggle_hard_cuts(self):
+        new_val = not self._cfg.get("hard_cuts_enabled", True)
+        self._cfg["hard_cuts_enabled"] = new_val
+        self._pm.set_hard_cut_enabled(new_val)
+        save_config(self._cfg)
+        label = "ON" if new_val else "OFF"
+        print(f"[renderer] Hard cuts: {label}")
+        self._bridge.status_message.emit(f"Hard cuts: {label}")
+
+    def _do_toggle_mode(self):
+        self._shuffle = not self._shuffle
+        if self._pm._pl and self._pm._playlist:
+            self._pm._playlist.projectm_playlist_set_shuffle(
+                self._pm._pl, self._shuffle
+            )
+        label = "Random" if self._shuffle else "Sequential"
+        print(f"[renderer] Mode: {label}")
+        self._bridge.status_message.emit(f"Mode: {label}")
+
+    # ── Fullscreen ────────────────────────────────────────────────────────
+
+    def _toggle_fullscreen(self):
+        flags = sdl2.SDL_GetWindowFlags(self._window)
+        if flags & sdl2.SDL_WINDOW_FULLSCREEN_DESKTOP:
+            sdl2.SDL_SetWindowFullscreen(self._window, 0)
+        else:
+            sdl2.SDL_SetWindowFullscreen(
+                self._window, sdl2.SDL_WINDOW_FULLSCREEN_DESKTOP
+            )
+
+    def _toggle_borderless(self):
+        """Toggle window decorations (title bar + border) on/off."""
+        self._borderless = not self._borderless
+        sdl2.SDL_SetWindowBordered(
+            self._window,
+            sdl2.SDL_FALSE if self._borderless else sdl2.SDL_TRUE
+        )
+        label = "ON" if self._borderless else "OFF"
+        print(f"[renderer] Borderless: {label}")
+        self._bridge.status_message.emit(f"Borderless: {label}")
+        self._bridge.borderless_changed.emit(self._borderless)
+
+    def is_borderless(self) -> bool:
+        return self._borderless
+
+    # ── Rating ────────────────────────────────────────────────────────────
+
+    def _rate_current(self, delta: int):
+        name    = self._pm.current_preset_name()
+        current = get_preset_rating(self._ratings, name)
+        new_r   = set_preset_rating(self._ratings, name, current + delta)
+        status  = f"Rated '{name}': {new_r}/10"
+        if new_r == 0:
+            status += "  (excluded from random)"
+        print(f"[renderer] {status}")
+        self._bridge.preset_changed.emit(name, new_r)
+
+    # ── Emit helpers ──────────────────────────────────────────────────────
+
+    def _emit_current_preset(self):
+        name   = self._pm.current_preset_name()
+        rating = get_preset_rating(self._ratings, name)
+        excluded = is_excluded(self._ratings, name)
+        tag = " [excluded]" if excluded else ""
+        print(f"[renderer] Now playing: {name}  ★{rating}/10{tag}")
+        self._bridge.preset_changed.emit(name, rating)
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  ./ui.py
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+"""
+ui.py
+-----
+PyQt6 UI components:
+  - Bridge       : Qt signals connecting render thread → UI thread
+  - ContextMenu  : right-click menu (spawned directly, no overlay window)
+  - SettingsDialog
+  - KeymapDialog
+"""
+
+import json
+from pathlib import Path
+
+from PyQt6.QtWidgets import (
+    QApplication, QMenu, QDialog, QFormLayout, QVBoxLayout, QHBoxLayout,
+    QPushButton, QLabel, QSpinBox, QDoubleSpinBox, QComboBox,
+    QDialogButtonBox, QCheckBox, QFrame, QTableWidget, QTableWidgetItem,
+    QHeaderView, QLineEdit, QSizePolicy, QMessageBox
+)
+from PyQt6.QtCore import Qt, QObject, pyqtSignal, QPoint
+from PyQt6.QtGui import QKeySequence, QFont, QCursor
+
+try:
+    import sounddevice as sd
+    _SD_AVAILABLE = True
+except ImportError:
+    _SD_AVAILABLE = False
+
+from config import (
+    QUALITY_MESH, DEFAULT_KEYMAPS, save_config, save_keymaps,
+    load_keymaps
+)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+#  Bridge  (render thread → Qt UI thread signals)
+# ─────────────────────────────────────────────────────────────────────────────
+
+class Bridge(QObject):
+    preset_changed    = pyqtSignal(str, int)   # (preset_name, rating)
+    lock_changed      = pyqtSignal(bool)
+    borderless_changed = pyqtSignal(bool)
+    status_message    = pyqtSignal(str)        # transient status (e.g. "Hard cuts: ON")
+    request_quit      = pyqtSignal()
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+#  Settings dialog
+# ─────────────────────────────────────────────────────────────────────────────
+
+class SettingsDialog(QDialog):
+    def __init__(self, cfg: dict, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Visualizer Settings")
+        self.setMinimumWidth(400)
+
+        layout = QFormLayout(self)
+        layout.setSpacing(10)
+        layout.setContentsMargins(16, 16, 16, 16)
+
+        # Preset dir
+        self._preset_dir = QLineEdit(cfg.get("preset_dir", ""))
+        layout.addRow("Preset directory:", self._preset_dir)
+
+        # Duration
+        self._dur = QSpinBox()
+        self._dur.setRange(5, 600)
+        self._dur.setValue(cfg.get("preset_duration", 30))
+        self._dur.setSuffix("  sec")
+        layout.addRow("Preset duration:", self._dur)
+
+        # Random extra
+        self._rnd = QSpinBox()
+        self._rnd.setRange(0, 300)
+        self._rnd.setValue(cfg.get("preset_random_extra", 15))
+        self._rnd.setSuffix("  sec extra")
+        layout.addRow("Random extra:", self._rnd)
+
+        # FPS
+        self._fps = QSpinBox()
+        self._fps.setRange(15, 120)
+        self._fps.setValue(cfg.get("fps", 60))
+        self._fps.setSuffix("  fps")
+        layout.addRow("FPS:", self._fps)
+
+        # Quality
+        self._quality = QComboBox()
+        for q in ["low", "medium", "high", "ultra"]:
+            self._quality.addItem(q.capitalize(), q)
+        idx = self._quality.findData(cfg.get("quality", "high"))
+        if idx >= 0:
+            self._quality.setCurrentIndex(idx)
+        layout.addRow("Quality:", self._quality)
+
+        # Soft cut duration
+        self._soft_cut = QDoubleSpinBox()
+        self._soft_cut.setRange(0.5, 10.0)
+        self._soft_cut.setSingleStep(0.5)
+        self._soft_cut.setDecimals(1)
+        self._soft_cut.setValue(cfg.get("soft_cut_duration", 3.0))
+        self._soft_cut.setSuffix("  sec")
+        layout.addRow("Blend duration:", self._soft_cut)
+
+        # Beat sensitivity
+        self._beat = QDoubleSpinBox()
+        self._beat.setRange(0.1, 4.0)
+        self._beat.setSingleStep(0.1)
+        self._beat.setDecimals(1)
+        self._beat.setValue(cfg.get("beat_sensitivity", 1.0))
+        layout.addRow("Beat sensitivity:", self._beat)
+
+        # Hard cuts
+        self._hard_cuts = QCheckBox("Enable hard cuts on beats")
+        self._hard_cuts.setChecked(cfg.get("hard_cuts_enabled", True))
+        layout.addRow("Hard cuts:", self._hard_cuts)
+
+        # Hard cut sensitivity
+        self._hcs = QDoubleSpinBox()
+        self._hcs.setRange(0.1, 4.0)
+        self._hcs.setSingleStep(0.1)
+        self._hcs.setDecimals(1)
+        self._hcs.setValue(cfg.get("hard_cut_sensitivity", 1.0))
+        layout.addRow("Hard cut sensitivity:", self._hcs)
+
+        # Audio device
+        self._audio_dev = QComboBox()
+        self._audio_dev.setEditable(True)
+        self._audio_dev.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        if _SD_AVAILABLE:
+            try:
+                for d in sd.query_devices():
+                    if d["max_input_channels"] > 0:
+                        self._audio_dev.addItem(d["name"])
+            except Exception:
+                pass
+        self._audio_dev.setCurrentText(cfg.get("audio_device", ""))
+        layout.addRow("Audio device:", self._audio_dev)
+
+        # Buttons
+        sep = QFrame()
+        sep.setFrameShape(QFrame.Shape.HLine)
+        layout.addRow(sep)
+
+        btns = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Ok |
+            QDialogButtonBox.StandardButton.Cancel
+        )
+        btns.accepted.connect(self.accept)
+        btns.rejected.connect(self.reject)
+        layout.addRow(btns)
+
+    def get_config(self) -> dict:
+        quality = self._quality.currentData()
+        mx, my = QUALITY_MESH.get(quality, (64, 48))
+        return {
+            "preset_dir":           self._preset_dir.text().strip(),
+            "preset_duration":      self._dur.value(),
+            "preset_random_extra":  self._rnd.value(),
+            "fps":                  self._fps.value(),
+            "quality":              quality,
+            "mesh_x":               mx,
+            "mesh_y":               my,
+            "soft_cut_duration":    round(self._soft_cut.value(), 1),
+            "beat_sensitivity":     round(self._beat.value(), 1),
+            "hard_cuts_enabled":    self._hard_cuts.isChecked(),
+            "hard_cut_sensitivity": round(self._hcs.value(), 1),
+            "audio_device":         self._audio_dev.currentText(),
+        }
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+#  Keymap editor dialog
+# ─────────────────────────────────────────────────────────────────────────────
+
+# Human-readable labels for each action
+ACTION_LABELS = {
+    "next":             "Next visual",
+    "prev":             "Previous visual",
+    "hard_cut_next":    "Hard cut to next visual",
+    "random":           "Jump to random visual",
+    "lock":             "Lock / unlock current visual",
+    "toggle_hard_cuts": "Toggle hard cuts on/off",
+    "fullscreen":       "Toggle fullscreen",
+    "fullscreen_alt":   "Toggle fullscreen (alt key)",
+    "rate_up":          "Rate up  (+1)",
+    "rate_down":        "Rate down (−1)",
+    "quit":             "Quit",
+    "toggle_mode":      "Toggle random / sequential mode",
+    "fullscreen_mouse": "Toggle fullscreen (mouse)",
+}
+
+ACTION_NOTES = {
+    "fullscreen_mouse": "Value must be DBLCLICK",
+    "lock":             "SCROLLLOCK uses the Scroll Lock key",
+    "rate_down":        "Rating 0 excludes preset from random rotation",
+}
+
+
+class KeymapDialog(QDialog):
+    def __init__(self, keymaps: dict, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Keyboard Mapping")
+        self.setMinimumWidth(560)
+        self.setMinimumHeight(480)
+        self._keymaps = dict(keymaps)
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(16, 16, 16, 16)
+        layout.setSpacing(10)
+
+        # Info label
+        info = QLabel(
+            "Click a key cell and press a key to rebind.\n"
+            "Special values: SCROLLLOCK · F1–F12 · SPACE · ESCAPE · DBLCLICK (mouse)\n"
+            "Rating 0 = preset excluded from random rotation."
+        )
+        info.setWordWrap(True)
+        info.setStyleSheet("color: palette(mid); font-size: 12px;")
+        layout.addWidget(info)
+
+        # Table
+        self._table = QTableWidget(len(ACTION_LABELS), 3)
+        self._table.setHorizontalHeaderLabels(["Action", "Key", "Notes"])
+        self._table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
+        self._table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.Fixed)
+        self._table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeMode.Stretch)
+        self._table.setColumnWidth(1, 130)
+        self._table.verticalHeader().setVisible(False)
+        self._table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectItems)
+        self._table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
+
+        for row, (action, label) in enumerate(ACTION_LABELS.items()):
+            # Action label (read-only)
+            lbl_item = QTableWidgetItem(label)
+            lbl_item.setFlags(Qt.ItemFlag.ItemIsEnabled)
+            self._table.setItem(row, 0, lbl_item)
+
+            # Key value (editable via keypress)
+            key_val = keymaps.get(action, DEFAULT_KEYMAPS.get(action, ""))
+            key_item = QTableWidgetItem(key_val)
+            key_item.setData(Qt.ItemDataRole.UserRole, action)
+            key_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+            self._table.setItem(row, 1, key_item)
+
+            # Notes
+            note = ACTION_NOTES.get(action, "")
+            note_item = QTableWidgetItem(note)
+            note_item.setFlags(Qt.ItemFlag.ItemIsEnabled)
+            note_item.setForeground(self.palette().mid())
+            self._table.setItem(row, 2, note_item)
+
+        self._table.installEventFilter(self)
+        layout.addWidget(self._table)
+
+        # Reset to defaults button
+        btn_row = QHBoxLayout()
+        reset_btn = QPushButton("Reset to defaults")
+        reset_btn.clicked.connect(self._reset_defaults)
+        btn_row.addWidget(reset_btn)
+        btn_row.addStretch()
+        layout.addLayout(btn_row)
+
+        # Dialog buttons
+        btns = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Ok |
+            QDialogButtonBox.StandardButton.Cancel
+        )
+        btns.accepted.connect(self.accept)
+        btns.rejected.connect(self.reject)
+        layout.addWidget(btns)
+
+    def eventFilter(self, obj, event):
+        from PyQt6.QtCore import QEvent
+        if obj is self._table and event.type() == QEvent.Type.KeyPress:
+            current = self._table.currentItem()
+            if current and current.column() == 1:
+                key = event.key()
+                # Translate Qt key to a string token our renderer understands
+                key_str = self._qt_key_to_token(key, event.text())
+                if key_str:
+                    current.setText(key_str)
+                    action = current.data(Qt.ItemDataRole.UserRole)
+                    self._keymaps[action] = key_str
+                    return True
+        return super().eventFilter(obj, event)
+
+    def _qt_key_to_token(self, qt_key: int, text: str) -> str:
+        """Convert a Qt key code to the string token used in keymaps.json."""
+        from PyQt6.QtCore import Qt as _Qt
+        special = {
+            _Qt.Key.Key_Return:    "RETURN",
+            _Qt.Key.Key_Enter:     "RETURN",
+            _Qt.Key.Key_Escape:    "ESCAPE",
+            _Qt.Key.Key_Space:     "SPACE",
+            _Qt.Key.Key_Tab:       "TAB",
+            _Qt.Key.Key_Backspace: "BACKSPACE",
+            _Qt.Key.Key_Delete:    "DELETE",
+            _Qt.Key.Key_Left:      "LEFT",
+            _Qt.Key.Key_Right:     "RIGHT",
+            _Qt.Key.Key_Up:        "UP",
+            _Qt.Key.Key_Down:      "DOWN",
+            _Qt.Key.Key_Home:      "HOME",
+            _Qt.Key.Key_End:       "END",
+            _Qt.Key.Key_PageUp:    "PAGEUP",
+            _Qt.Key.Key_PageDown:  "PAGEDOWN",
+            _Qt.Key.Key_ScrollLock: "SCROLLLOCK",
+            _Qt.Key.Key_F1:  "F1",  _Qt.Key.Key_F2:  "F2",
+            _Qt.Key.Key_F3:  "F3",  _Qt.Key.Key_F4:  "F4",
+            _Qt.Key.Key_F5:  "F5",  _Qt.Key.Key_F6:  "F6",
+            _Qt.Key.Key_F7:  "F7",  _Qt.Key.Key_F8:  "F8",
+            _Qt.Key.Key_F9:  "F9",  _Qt.Key.Key_F10: "F10",
+            _Qt.Key.Key_F11: "F11", _Qt.Key.Key_F12: "F12",
+        }
+        if qt_key in special:
+            return special[qt_key]
+        # Printable single character
+        if text and len(text) == 1 and text.isprintable():
+            return text
+        return ""
+
+    def _reset_defaults(self):
+        self._keymaps = dict(DEFAULT_KEYMAPS)
+        for row, action in enumerate(ACTION_LABELS):
+            item = self._table.item(row, 1)
+            if item:
+                item.setText(DEFAULT_KEYMAPS.get(action, ""))
+
+    def get_keymaps(self) -> dict:
+        return dict(self._keymaps)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+#  Context menu  (spawned at cursor position, no overlay window)
+# ─────────────────────────────────────────────────────────────────────────────
+
+class ContextMenu(QMenu):
+    """
+    Right-click menu. Spawned by the renderer when it detects a right-click
+    on the SDL2 window. Because there's no persistent overlay window, we
+    temporarily create a hidden QWidget as parent so the menu has a valid
+    native parent.
+    """
+
+    def __init__(self, renderer, cfg: dict, ratings: dict, keymaps: dict):
+        # Need a real widget parent for proper theming
+        from PyQt6.QtWidgets import QWidget
+        self._tmp_parent = QWidget()
+        self._tmp_parent.setWindowFlags(
+            Qt.WindowType.Tool | Qt.WindowType.FramelessWindowHint
+        )
+        super().__init__(self._tmp_parent)
+        self._renderer = renderer
+        self._cfg      = cfg
+        self._ratings  = ratings
+        self._keymaps  = keymaps
+
+        self.setStyleSheet("""
+            QMenu {
+                background: rgba(18, 18, 18, 235);
+                color: #e8e8e8;
+                border: 1px solid rgba(255,255,255,55);
+                border-radius: 6px;
+                padding: 5px 3px;
+                font-size: 13px;
+            }
+            QMenu::item { padding: 7px 24px; border-radius: 4px; min-width: 180px; }
+            QMenu::item:selected { background: rgba(255,255,255,22); }
+            QMenu::separator { background: rgba(255,255,255,25); height: 1px; margin: 4px 10px; }
+        """)
+
+        self._build()
+
+    def _build(self):
+        locked = self._renderer.is_locked()
+
+        self.addAction("▶   Next visual",      lambda: self._renderer.request_next())
+        self.addAction("◀   Previous visual",  lambda: self._renderer.request_prev())
+        self.addAction("⟳   Random visual",    lambda: self._renderer.request_random())
+        self.addSeparator()
+
+        lock_text = "🔒  Unlock visual" if locked else "🔓  Lock visual"
+        self.addAction(lock_text, lambda: self._renderer.request_toggle_lock())
+        self.addSeparator()
+
+        borderless = self._renderer.is_borderless()
+        border_text = "☐   Show window border" if borderless else "▣   Borderless window"
+        self.addAction(border_text, lambda: self._renderer.request_toggle_borderless())
+        self.addSeparator()
+
+        self.addAction("⌨   Key bindings…",   self._open_keymaps)
+        self.addAction("⚙   Settings…",        self._open_settings)
+        self.addSeparator()
+
+        self.addAction("✕   Quit",             QApplication.quit)
+
+    def _open_settings(self):
+        dlg = SettingsDialog(self._cfg)
+        if dlg.exec() == QDialog.DialogCode.Accepted:
+            updates = dlg.get_config()
+            self._cfg.update(updates)
+            save_config(self._cfg)
+            self._renderer.apply_settings(updates)
+
+    def _open_keymaps(self):
+        dlg = KeymapDialog(self._keymaps)
+        if dlg.exec() == QDialog.DialogCode.Accepted:
+            new_km = dlg.get_keymaps()
+            self._keymaps.update(new_km)
+            save_keymaps(new_km)
+            self._renderer.update_keymaps(new_km)
+
+    def popup_at_cursor(self):
+        self.exec(QCursor.pos())
+        self._tmp_parent.deleteLater()
+
+    def __del__(self):
+        try:
+            self._tmp_parent.deleteLater()
+        except Exception:
+            pass
+
