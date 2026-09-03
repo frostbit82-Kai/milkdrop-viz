@@ -28,40 +28,56 @@ Done, on Linux, verified:
 - [x] Embedded-host handle emits an HWND on Windows instead of reading the X11 union
 - [x] `requirements.txt`
 
+Done, on Windows, verified:
+
+- [x] Toolchain: VS 2022 Build Tools 17.14.39 (MSVC 14.44, Windows SDK 10.0.26100),
+      vcpkg, Python 3.14.7 x64
+- [x] **libprojectM 4.1.0 built with `ENABLE_PLAYLIST=ON`** — `projectM-4.dll` and
+      `projectM-4-playlist.dll`, Release, x64, dynamic CRT
+- [x] Both DLLs load under `ctypes` and all 38 `projectm_*` symbols the app binds
+      resolve; the app's own candidate-name lookup finds both
+- [x] `setup_windows.ps1` — the Windows counterpart to `setup.sh`
+- [x] Playlist DLL name fix (see Traps in `CLAUDE.md`)
+
 Not started:
 
-- [ ] **`libprojectM-4.dll` built on Windows — this gates everything below**
 - [ ] Audio capture: WASAPI loopback
 - [ ] Run it end to end on Windows
 - [ ] PyInstaller packaging, then code signing
 - [ ] Converge the two `viz_common.py` copies
 - [ ] Steam page
 
-## First session on Windows
+## Building libprojectM on Windows
 
-Read `CLAUDE.md` first. Then, in order — **do not skip step 2, and stop if it fails.**
+`setup_windows.ps1` does all of this. What follows is why it does it that way.
 
-**1. Toolchain.** Git for Windows, Python 3.14 (fall back to 3.13 if any wheel in
-`requirements.txt` has no 3.14 build), CMake, and Visual Studio 2022 Build Tools with
-the "Desktop development with C++" workload.
+**Dependencies are almost all vendored.** `glm`, `SOIL2`, `hlslparser` and
+`projectm-eval` ship inside the source tree; bison and flex are optional because
+the generated parsers are committed. On Windows the only `find_package(... REQUIRED)`
+the Windows SDK does not already satisfy is **GLEW**. That is the single thing vcpkg
+supplies.
 
-```
-python -m venv .venv
-.venv\Scripts\pip install -r requirements.txt
-```
+**The manifest is trimmed.** projectM's `vcpkg.json` lists `glew`, `gtest` and `sdl2`,
+because upstream CI builds the test suite and the SDL developer UI. We build neither
+(`BUILD_TESTING=OFF`, `ENABLE_SDL_UI=OFF`), so the script rewrites the manifest to
+`glew` alone and keeps the original as `vcpkg.json.upstream`. sdl2 in particular drags
+in an msys2 runtime download for no benefit here.
 
-**2. Build projectM 4.1.0.** The Linux recipe is in `setup.sh`; the Windows equivalent
-is the same CMake invocation with vcpkg supplying the dependencies. `-DENABLE_PLAYLIST=ON`
-is required — the app binds `libprojectM-4-playlist` as well as the core library.
+**The build matches upstream CI otherwise** — `Visual Studio 17 2022` / `x64`, the vcpkg
+toolchain file, triplet `x64-windows`, `BUILD_SHARED_LIBS=ON`, and the dynamic
+(`MD`) MSVC runtime.
 
-Success is `libprojectM-4.dll` and `libprojectM-4-playlist.dll` somewhere on PATH or
-beside the app. `viz_common.py` already looks for exactly those names on win32.
+**Three DLLs have to travel together**: `projectM-4.dll`, `projectM-4-playlist.dll` and
+`glew32.dll`, which the core links. Everything else they need is the VC++ redistributable
+and the OS's own `OPENGL32.dll` and Universal CRT. `setup_windows.ps1` gathers the three
+into `C:\dev\projectm-deploy`; put that on PATH or copy them beside the app.
 
-**This step is the whole risk.** If projectM will not build or run on Windows, the
-product does not exist, and no amount of Python work changes that. Prove it before
-touching anything else.
+**If downloads fail with "Could not resolve hostname", it is IPv6, not the network.**
+See the trap in `CLAUDE.md`. The script already works around it.
 
-**3. Audio.** The current capture is PulseAudio three ways over: a `parec` subprocess,
+## Next
+
+**Audio.** The current capture is PulseAudio three ways over: a `parec` subprocess,
 `pactl move-source-output` for routing, and PortAudio's `pulse` device. All of it is
 in `AudioCapture` in `viz_common.py`.
 
@@ -74,8 +90,15 @@ branching inside the existing methods. Note the device picker changes meaning:
 Windows loopback enumerates **render** endpoints, not monitor sources, so the settings
 UI wording and the enumeration both need revisiting.
 
-**4. Run it.** Presets and textures are not in the repo — download a pack, point the
-two settings at it, confirm texture-sampling presets are not rendering white.
+**Run it.** Presets and textures are not in the repo — download a pack, point the
+two settings at it, confirm texture-sampling presets are not rendering white. The
+render loop and live audio have never been exercised on Windows; building the DLL
+proves the binding, not the GL path.
+
+**Where the repo lives.** It currently sits on an ext4 drive that only WSL mounts, so
+Windows reaches it over `\\wsl.localhost\...`. That is fine for editing and was fine
+for the build (which happens in `C:\dev`), but before running the GL loop or packaging,
+move or clone the repo to a native Windows path.
 
 ## Notes
 

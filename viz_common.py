@@ -485,7 +485,10 @@ except Exception:
 
     def get_projectm_playlist_candidates():
         if sys.platform == "win32":
-            return ["libprojectM-4-playlist.dll"]
+            # MSVC emits no "lib" prefix (CMake OUTPUT_NAME is projectM-4-playlist),
+            # so the unprefixed name is what a Visual Studio build actually produces.
+            # The prefixed name is kept for MinGW/MSYS2 builds, matching the core list.
+            return ["libprojectM-4-playlist.dll", "projectM-4-playlist.dll"]
         elif sys.platform == "darwin":
             return ["/usr/local/lib/libprojectM-4-playlist.dylib"]
         else:

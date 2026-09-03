@@ -50,5 +50,20 @@ There is no display in an agent shell and SDL needs one, so:
   `PyAudioWPatch` or `soundcard`.
 - Env vars naming X11/PulseAudio drivers or ELF loader paths are Linux-only and are
   gated on `sys.platform`. Adding an ungated one breaks Windows at startup.
+- **MSVC emits no `lib` prefix.** projectM's CMake sets `OUTPUT_NAME` to `projectM-4`
+  and `projectM-4-playlist`, so a Visual Studio build produces `projectM-4.dll`, not
+  `libprojectM-4.dll`. The core candidate list happened to carry both spellings; the
+  playlist list only had the prefixed one, so the playlist library silently failed to
+  load and the app fell back to direct file loading — losing the playlist features
+  with no error. Both spellings are now listed. MinGW/MSYS2 does emit the prefix, so
+  keep both.
+- **"Could not resolve hostname" on Windows is usually broken IPv6, not the network.**
+  A host can advertise IPv6 without it working; `getaddrinfo` then returns AAAA records
+  that never connect and `curl`/`git` fail most of the time with a DNS-shaped error.
+  Split the two before believing it is flaky wifi: `curl -4` vs `curl -6`. `.NET`'s
+  resolver caches, so PowerShell's `Resolve-DnsName` will report success and mislead
+  you. `setup_windows.ps1` forces IPv4 via `CURL_HOME`, plus `VCPKG_KEEP_ENV_VARS`
+  because vcpkg sanitises the environment for port builds. `git.exe` uses libcurl and
+  ignores `_curlrc`, so clone in WSL and copy the tree across if a submodule fetch fails.
 
 See PORTING.md for port status and the Windows setup recipe.
