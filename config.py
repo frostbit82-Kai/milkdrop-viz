@@ -28,8 +28,11 @@ CONFIG_PATH  = BASE_DIR / "config.json"
 RATINGS_PATH = BASE_DIR / "ratings.json"
 KEYMAPS_PATH = BASE_DIR / "keymaps.json"
 
+# Presets and textures are not bundled — they are other people's work and are
+# downloaded separately — so both default to empty and the settings dialog asks.
 DEFAULT_CONFIG = {
-    "preset_dir":           "/home/fr0st/projectm-presets",
+    "preset_dir":           "",
+    "texture_dir":          "",
     "audio_device":         "",  # Empty = auto-detect at runtime
     "preset_duration":      30,
     "preset_random_extra":  15,

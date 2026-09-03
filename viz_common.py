@@ -982,7 +982,7 @@ from PyQt6.QtWidgets import (
     QApplication, QMenu, QDialog, QFormLayout, QVBoxLayout, QHBoxLayout,
     QPushButton, QLabel, QSpinBox, QDoubleSpinBox, QComboBox,
     QDialogButtonBox, QCheckBox, QFrame, QTableWidget, QTableWidgetItem,
-    QHeaderView, QLineEdit, QSizePolicy, QMessageBox
+    QHeaderView, QLineEdit, QSizePolicy, QMessageBox, QFileDialog
 )
 from PyQt6.QtCore import Qt, QObject, pyqtSignal, QPoint, QTimer
 from PyQt6.QtGui import QKeySequence, QFont, QCursor
@@ -1064,9 +1064,15 @@ class SettingsDialog(QDialog):
         layout.setSpacing(10)
         layout.setContentsMargins(16, 16, 16, 16)
 
-        # Preset dir
-        self._preset_dir = QLineEdit(cfg.get("preset_dir", ""))
-        layout.addRow("Preset directory:", self._preset_dir)
+        # Preset and texture directories. Neither ships with the app — presets
+        # and textures are other people's work, downloaded separately — so
+        # these two rows are the first thing a new install has to answer.
+        self._preset_dir = self._dir_row(
+            layout, "Preset directory:", cfg.get("preset_dir", ""),
+            "Choose the folder holding your .milk presets")
+        self._texture_dir = self._dir_row(
+            layout, "Texture directory:", cfg.get("texture_dir", ""),
+            "Choose the folder holding your preset textures")
 
         # Duration
         self._dur = QSpinBox()
@@ -1156,11 +1162,33 @@ class SettingsDialog(QDialog):
         btns.rejected.connect(self.reject)
         layout.addRow(btns)
 
+    def _dir_row(self, layout, label: str, value: str, caption: str) -> QLineEdit:
+        """A path field with a Browse button. Returns the field itself, so the
+        caller keeps reading .text() exactly as it did before."""
+        field = QLineEdit(value)
+        browse = QPushButton("Browse\u2026")
+        browse.setAutoDefault(False)          # or Enter in the field opens the picker
+
+        def pick():
+            start = field.text().strip() or os.path.expanduser("~")
+            chosen = QFileDialog.getExistingDirectory(self, caption, start)
+            if chosen:
+                field.setText(chosen)
+
+        browse.clicked.connect(pick)
+        row = QHBoxLayout()
+        row.setContentsMargins(0, 0, 0, 0)
+        row.addWidget(field, 1)
+        row.addWidget(browse)
+        layout.addRow(label, row)
+        return field
+
     def get_config(self) -> dict:
         quality = self._quality.currentData()
         mx, my = QUALITY_MESH.get(quality, (64, 48))
         return {
             "preset_dir":           self._preset_dir.text().strip(),
+            "texture_dir":          self._texture_dir.text().strip(),
             "preset_duration":      self._dur.value(),
             "preset_random_extra":  self._rnd.value(),
             "fps":                  self._fps.value(),
@@ -1759,12 +1787,17 @@ class Renderer:
 
         # Texture search paths — texture-sampling presets render white
         # without these
+        # The configured directory comes first and the rest are guesses kept for
+        # installs that never set one. Nothing is bundled, so an empty setting
+        # and no lucky guess means texture-sampling presets render white — which
+        # is why the settings dialog asks for this up front.
         tex_paths = [p for p in (
+            self._cfg.get("texture_dir", "").strip(),
             os.path.join(os.path.dirname(__file__), "textures"),
             os.path.join(preset_dir, "textures"),
             os.path.expanduser("~/projectm-textures"),
             preset_dir,
-        ) if os.path.isdir(p)]
+        ) if p and os.path.isdir(p)]
         if tex_paths and hasattr(self._pm, "set_texture_search_paths"):
             self._pm.set_texture_search_paths(tex_paths)
 
