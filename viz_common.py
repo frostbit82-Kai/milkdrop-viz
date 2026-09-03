@@ -1500,8 +1500,19 @@ import random as _random
 import time as _time
 import subprocess as _subprocess
 
-os.environ.setdefault("SDL_VIDEODRIVER", "x11")
-os.environ["PYSDL2_DLL_PATH"] = "/usr/lib/x86_64-linux-gnu"
+# PySDL2 reads PYSDL2_DLL_PATH once, at its own import, so this has to run
+# first. Both variables are Linux-only: SDL_VIDEODRIVER=x11 is meaningless on
+# Windows, and pointing PYSDL2_DLL_PATH at an ELF directory stops PySDL2 finding
+# any SDL2 at all. renderer.py sets the same pair correctly before importing
+# this module, so use setdefault and do not clobber what it chose.
+if sys.platform.startswith("linux"):
+    os.environ.setdefault("SDL_VIDEODRIVER", "x11")
+    os.environ.setdefault("PYSDL2_DLL_PATH", "/usr/lib/x86_64-linux-gnu")
+elif getattr(sys, "frozen", False):
+    # Frozen build only: SDL2.dll sits beside the executable. NOT for a normal
+    # install — the pysdl2-dll wheel points PySDL2 at its own bundled binaries,
+    # but only while PYSDL2_DLL_PATH is still unset.
+    os.environ.setdefault("PYSDL2_DLL_PATH", str(Path(sys.executable).parent))
 
 import sdl2
 import sdl2.ext
