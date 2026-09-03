@@ -21,13 +21,17 @@ import signal
 import threading
 import argparse
 
-os.environ.setdefault("SDL_VIDEODRIVER", "x11")
-os.environ.setdefault("SDL_AUDIODRIVER", "pulse")
-# Force Qt onto X11/xcb (not Wayland). The SDL window is an X11 surface, and
-# Wayland refuses to grab the right-click popup ("Failed to create grabbing
-# popup") because it can't anchor to a foreign surface. xcb runs on XWayland.
-os.environ.setdefault("QT_QPA_PLATFORM", "xcb")
-os.environ["LD_LIBRARY_PATH"] = "/usr/local/lib:" + os.environ.get("LD_LIBRARY_PATH", "")
+# All Linux-only. Every name here is either an X11/PulseAudio driver or an ELF
+# loader path, and setting any of them on Windows or macOS stops SDL or Qt from
+# starting at all — so the whole block is gated rather than each line guarded.
+if sys.platform.startswith("linux"):
+    os.environ.setdefault("SDL_VIDEODRIVER", "x11")
+    os.environ.setdefault("SDL_AUDIODRIVER", "pulse")
+    # Force Qt onto X11/xcb (not Wayland). The SDL window is an X11 surface, and
+    # Wayland refuses to grab the right-click popup ("Failed to create grabbing
+    # popup") because it can't anchor to a foreign surface. xcb runs on XWayland.
+    os.environ.setdefault("QT_QPA_PLATFORM", "xcb")
+    os.environ["LD_LIBRARY_PATH"] = "/usr/local/lib:" + os.environ.get("LD_LIBRARY_PATH", "")
 
 from PyQt6.QtWidgets import QApplication
 from PyQt6.QtCore import pyqtSignal

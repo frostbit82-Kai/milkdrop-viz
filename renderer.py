@@ -8,7 +8,18 @@ import sys, os
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
-from viz_common import Renderer as _BaseRenderer, load_projectm, _build_key_lookup, _token_matches, _xdotool_move
+
+# Before importing viz_common, which imports sdl2: PySDL2 reads PYSDL2_DLL_PATH
+# once, at ITS import, so setting it afterwards did nothing. Harmless on Linux,
+# where the loader finds libSDL2 on its own, and a hard failure on Windows where
+# the DLL sits beside the executable and there is no system path to fall back on.
+if sys.platform.startswith("linux"):
+    os.environ.setdefault("SDL_VIDEODRIVER", "x11")
+    os.environ.setdefault("PYSDL2_DLL_PATH", "/usr/lib/x86_64-linux-gnu")
+elif sys.platform == "win32":
+    os.environ.setdefault("PYSDL2_DLL_PATH", str(Path(__file__).parent))
+
+from viz_common import Renderer as _BaseRenderer, load_projectm, _build_key_lookup, _token_matches
 
 # Import local config helpers so callers can do: from renderer import ...
 from config import (
@@ -16,9 +27,6 @@ from config import (
     set_preset_rating, get_preset_rating, is_excluded, load_keymaps,
     CONFIG_PATH, RATINGS_PATH, KEYMAPS_PATH,
 )
-
-os.environ.setdefault("SDL_VIDEODRIVER", "x11")
-os.environ["PYSDL2_DLL_PATH"] = "/usr/lib/x86_64-linux-gnu"
 
 _CONFIG_DIR = Path(__file__).parent
 

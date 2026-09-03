@@ -6,7 +6,7 @@ Exports:
   AudioCapture       — from audio.py (identical in both)
   IPCReader          — from ipc_reader.py (identical in both)
   Bridge, ToastLabel, SettingsDialog, KeymapDialog, ContextMenu  — from ui.py (identical in both)
-  Renderer, _build_key_lookup, _token_matches, _xdotool_move     — from renderer.py (identical in both)
+  Renderer, _build_key_lookup, _token_matches                    — from renderer.py (identical in both)
   ProjectM4, load_projectm                                        — projectm_wrapper (milkdrop-viz is superset)
   QUALITY_MESH, DEFAULT_KEYMAPS, common config helpers            — from config.py (shared logic)
 """
@@ -1572,39 +1572,6 @@ def _token_matches(token: str, sym: int, scancode: int) -> bool:
     return sym == expected_sym
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-#  xdotool helper
-# ─────────────────────────────────────────────────────────────────────────────
-
-def _xdotool_move(window, x: int, y: int):
-    """
-    Move the SDL2 window using xdotool with the X11 window ID from SDL2.
-
-    On this compositor (Mutter/GNOME under XWayland), any non-zero position
-    is ADDED to the compositor's natural placement, doubling the offset.
-    The compositor places the window correctly on its own at 0,0 relative
-    to the Qt window — so we always pass 0,0 to xdotool regardless of
-    what x,y we received. The size is handled by SDL_SetWindowSize separately.
-    """
-    try:
-        wm_info = sdl2.SDL_SysWMinfo()
-        sdl2.SDL_VERSION(wm_info.version)
-        if sdl2.SDL_GetWindowWMInfo(window, _ctypes.byref(wm_info)):
-            x11_wid = wm_info.info.x11.window
-            if x11_wid:
-                _subprocess.Popen(
-                    ["xdotool", "windowmove", "--sync",
-                     str(x11_wid), "0", "0"],
-                    stderr=_subprocess.DEVNULL,
-                    stdout=_subprocess.DEVNULL,
-                )
-                print(f"[renderer] xdotool move wid={x11_wid} → 0,0 "
-                      f"(requested {x},{y})")
-                return
-        print(f"[renderer] SDL_GetWindowWMInfo failed: {sdl2.SDL_GetError()}")
-    except Exception as e:
-        print(f"[renderer] _xdotool_move error: {e}")
-
 
 # ─────────────────────────────────────────────────────────────────────────────
 #  Renderer
@@ -1649,7 +1616,6 @@ class Renderer:
         self._borderless_on_start = False   # set by main.py --borderless flag
         self._shuffle             = True
         self._running             = False
-        self._target_x            = None   # desired screen X (xdotool enforcement)
         self._target_y            = None
 
         self._window  = None
@@ -1751,8 +1717,13 @@ class Renderer:
             wm_info = sdl2.SDL_SysWMinfo()
             sdl2.SDL_VERSION(wm_info.version)
             if sdl2.SDL_GetWindowWMInfo(self._window, _ctypes.byref(wm_info)):
-                x11_wid = wm_info.info.x11.window
-                print(f"XID={x11_wid}", flush=True)
+                # The key stays XID= on every platform because the embedding host
+                # parses that literal; only the handle behind it changes.
+                if sys.platform == "win32":
+                    handle = wm_info.info.win.window          # HWND
+                else:
+                    handle = wm_info.info.x11.window
+                print(f"XID={handle}", flush=True)
         except Exception as e:
             print(f"[renderer] Could not get XID: {e}", flush=True)
 
