@@ -1002,9 +1002,16 @@ class ProjectM4:
     def _setup_playlist_signatures(self):
         P = self._playlist
 
-        # projectm_playlist_create takes NO arguments (unlike what I assumed before)
+        # Takes the projectM instance:
+        #   projectm_playlist_handle projectm_playlist_create(projectm_handle)
+        # Declaring it as no-args left the first argument register holding
+        # whatever happened to be there. On the SysV ABI (RDI) that was benign
+        # often enough to look correct on Linux, helped by the explicit
+        # projectm_playlist_connect() below doing the real wiring. On Windows
+        # x64 the argument is RCX, and projectM wrote through the garbage:
+        # "access violation writing 0x00000000000036C8".
         P.projectm_playlist_create.restype  = ctypes.c_void_p
-        P.projectm_playlist_create.argtypes = []
+        P.projectm_playlist_create.argtypes = [ctypes.c_void_p]
 
         P.projectm_playlist_destroy.restype  = None
         P.projectm_playlist_destroy.argtypes = [ctypes.c_void_p]
@@ -1072,7 +1079,7 @@ class ProjectM4:
         self._core.projectm_set_fps(self._pm, fps)
 
         if self._playlist:
-            self._pl = self._playlist.projectm_playlist_create()
+            self._pl = self._playlist.projectm_playlist_create(self._pm)
             if not self._pl:
                 raise RuntimeError("projectm_playlist_create() returned NULL")
             self._playlist.projectm_playlist_connect(self._pl, self._pm)
