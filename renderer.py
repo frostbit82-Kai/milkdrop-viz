@@ -16,8 +16,12 @@ sys.path.insert(0, str(Path(__file__).parent))
 if sys.platform.startswith("linux"):
     os.environ.setdefault("SDL_VIDEODRIVER", "x11")
     os.environ.setdefault("PYSDL2_DLL_PATH", "/usr/lib/x86_64-linux-gnu")
-elif sys.platform == "win32":
-    os.environ.setdefault("PYSDL2_DLL_PATH", str(Path(__file__).parent))
+elif getattr(sys, "frozen", False):
+    # Frozen build only: SDL2.dll sits beside the executable. NOT for a normal
+    # install — the pysdl2-dll wheel points PySDL2 at its own bundled binaries,
+    # but only while PYSDL2_DLL_PATH is still unset, so setting it here would
+    # suppress the wheel and leave Windows with no SDL2 at all.
+    os.environ.setdefault("PYSDL2_DLL_PATH", str(Path(sys.executable).parent))
 
 from viz_common import Renderer as _BaseRenderer, load_projectm, _build_key_lookup, _token_matches
 
