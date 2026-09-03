@@ -41,7 +41,12 @@ Done, on Windows, verified:
 
 Not started:
 
-- [ ] Audio capture: WASAPI loopback
+- [~] Audio capture: WASAPI loopback — **written, never executed.** `_start_wasapi`
+      in `viz_common.py` uses `soundcard` to open the render endpoint in loopback
+      mode, and `start()` tries it after parec (each no-ops on the other platform).
+      `capture_devices()` now feeds the settings picker per platform: input devices
+      on Linux, loopback-capable speakers on Windows. Verify this first on Windows
+      — it is the one piece of the port nobody has run.
 - [ ] Run it end to end on Windows
 - [ ] PyInstaller packaging, then code signing
 - [ ] Converge the two `viz_common.py` copies
@@ -85,10 +90,16 @@ Windows needs WASAPI loopback, and `sounddevice` 0.5.5 cannot do it (checked —
 `loopback` parameter on `WasapiSettings`, no occurrence of the word in the module).
 Use `PyAudioWPatch` or `soundcard`.
 
-Shape it as a backend interface with a Linux and a Windows implementation rather than
-branching inside the existing methods. Note the device picker changes meaning:
-Windows loopback enumerates **render** endpoints, not monitor sources, so the settings
-UI wording and the enumeration both need revisiting.
+This is now written but unrun. `_start_wasapi()` sits beside `_start_parec()` and
+`start()` tries both; each returns False on the other platform, so no branching was
+needed in the existing methods. If the loopback backend fails, the sounddevice path
+still runs — on Windows that opens a microphone rather than the system output, which
+is worth knowing when the visualiser reacts to the room instead of the music.
+
+What to check when you run it, in order: that `soundcard` installed at all; that the
+picker lists speakers rather than microphones; and that chunks arrive as float32 of
+shape (frames, 2), which is the contract the parec reader established and the rest of
+the app assumes.
 
 **Run it.** Presets and textures are not in the repo — download a pack, point the
 two settings at it, confirm texture-sampling presets are not rendering white. The

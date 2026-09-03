@@ -38,6 +38,29 @@ except ImportError:
     print("[audio] sounddevice not installed — visualization will run silent")
 
 
+def capture_devices() -> list:
+    """Names for the audio-source picker, for whichever platform we are on.
+
+    Linux lists PortAudio input devices, which includes the monitor sources that
+    carry what the speakers are playing. Windows has no such thing: the way to
+    hear the system there is WASAPI loopback on a RENDER endpoint, so the list
+    is speakers, not microphones. Same picker, different meaning behind it.
+    """
+    if sys.platform == "win32":
+        try:
+            import soundcard as sc
+            return [m.name for m in sc.all_microphones(include_loopback=True)]
+        except Exception as e:
+            _log(f"[audio] soundcard unavailable, falling back to inputs: {e}")
+    if _SD_AVAILABLE:
+        try:
+            return [d["name"] for d in sd.query_devices()
+                    if d["max_input_channels"] > 0]
+        except Exception:
+            pass
+    return []
+
+
 class AudioCapture:
     CHUNK = 512
 
@@ -46,6 +69,7 @@ class AudioCapture:
         self._buffer: deque = deque(maxlen=8)  # Keep last 8 audio chunks
         self._lock = threading.Lock()
         self._stream = None          # sounddevice backend
+        self._wasapi_live = False    # soundcard loopback backend (Windows)
         self._proc = None            # parec backend
         self._reader = None
         self._stop_flag = False
@@ -100,6 +124,88 @@ class AudioCapture:
         self._reader = threading.Thread(target=reader, daemon=True)
         self._reader.start()
         _log(f"[audio] parec capture started ← {self._device_name}")
+        return True
+
+    # ── WASAPI loopback backend (Windows) ───────────────────────────────
+    def _start_wasapi(self) -> bool:
+        """Capture what the speakers are playing, on Windows.
+
+        There is no monitor source to open the way PulseAudio has one, so this
+        opens the render endpoint itself in loopback mode. `soundcard` is used
+        rather than `sounddevice` because the bundled PortAudio build exposes no
+        loopback flag at all — WasapiSettings takes exclusive, auto_convert and
+        explicit_sample_format, and nothing else.
+
+        UNVERIFIED: written on Linux and never executed. The contract it has to
+        honour is the one the parec reader honours — float32, shape (frames, 2),
+        appended under the lock — so if the audio is wrong, that is the shape to
+        check first. soundcard's own documentation warns that WASAPI sometimes
+        ignores blocksize and can underrun its buffers, so stuttering or a
+        visibly lagging render is a known thing to look for rather than a
+        mystery; the deque is capped at 8 chunks and drops the oldest, which
+        keeps a slow reader from growing memory but does not fix an underrun. Failing here is not fatal: start() falls through to the
+        sounddevice path, which on Windows gets a microphone rather than the
+        system output.
+        """
+        if sys.platform != "win32":
+            return False
+        try:
+            import soundcard as sc
+        except ImportError:
+            _log("[audio] soundcard not installed — no system-audio capture on "
+                 "Windows. pip install soundcard")
+            return False
+
+        try:
+            if self._device_name:
+                mic = next((m for m in sc.all_microphones(include_loopback=True)
+                            if m.name == self._device_name), None)
+                if mic is None:
+                    _log(f"[audio] No loopback device named "
+                         f"'{self._device_name}', using the default speaker")
+            else:
+                mic = None
+            if mic is None:
+                mic = sc.get_microphone(sc.default_speaker().name,
+                                        include_loopback=True)
+        except Exception as e:
+            _log(f"[audio] Could not open a loopback device: {e}")
+            return False
+
+        self._stop_flag = False
+
+        def reader():
+            try:
+                with mic.recorder(samplerate=44100, channels=2,
+                                  blocksize=self.CHUNK) as rec:
+                    self._wasapi_live = True
+                    while not self._stop_flag:
+                        chunk = rec.record(numframes=self.CHUNK)
+                        if chunk is None or not len(chunk):
+                            continue
+                        # soundcard hands back float32 (frames, channels); the
+                        # rest of the app assumes two channels.
+                        if chunk.ndim == 1:
+                            chunk = np.repeat(chunk[:, None], 2, axis=1)
+                        elif chunk.shape[1] == 1:
+                            chunk = np.repeat(chunk, 2, axis=1)
+                        elif chunk.shape[1] > 2:
+                            chunk = chunk[:, :2]
+                        with self._lock:
+                            self._buffer.append(np.ascontiguousarray(
+                                chunk, dtype=np.float32))
+            except Exception as e:
+                _log(f"[audio] WASAPI loopback stopped: {e}")
+            finally:
+                self._wasapi_live = False
+
+        self._reader = threading.Thread(target=reader, daemon=True)
+        self._reader.start()
+        time.sleep(0.2)
+        if not self._wasapi_live:
+            _log("[audio] WASAPI loopback did not start")
+            return False
+        _log(f"[audio] WASAPI loopback started \u2190 {mic.name}")
         return True
 
     def _pulse_device(self) -> "int | None":
@@ -178,8 +284,13 @@ class AudioCapture:
         return sd.default.device[0]
 
     def start(self):
-        # Preferred: parec talks to the sound server directly
+        # Preferred per platform: whichever backend can hear the system output.
+        # parec talks to the sound server directly; WASAPI loopback is the only
+        # way to the same thing on Windows. Both no-op on the other platform, so
+        # trying them in order costs nothing.
         if self._start_parec():
+            return
+        if self._start_wasapi():
             return
         if not _SD_AVAILABLE:
             _log("[audio] No capture backend available (no parec, "
@@ -256,7 +367,7 @@ class AudioCapture:
         """True if a capture backend is currently delivering (or able to)."""
         if self._proc is not None and self._proc.poll() is None:
             return True
-        return self._stream is not None
+        return self._stream is not None or self._wasapi_live
 
     def get_chunk(self) -> "np.ndarray | None":
         with self._lock:
@@ -266,7 +377,8 @@ class AudioCapture:
 
     def update_device(self, device_name: str):
         """Hot-swap audio device (Audio Source menu / settings dialog)."""
-        was_running = self._stream is not None or self._proc is not None
+        was_running = (self._stream is not None or self._proc is not None
+                       or self._wasapi_live)
         self.stop()
         self._device_name = device_name
         if was_running:
@@ -1142,15 +1254,13 @@ class SettingsDialog(QDialog):
         self._audio_dev = QComboBox()
         self._audio_dev.setEditable(True)
         self._audio_dev.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
-        if _SD_AVAILABLE:
-            try:
-                for d in sd.query_devices():
-                    if d["max_input_channels"] > 0:
-                        self._audio_dev.addItem(d["name"])
-            except Exception:
-                pass
+        for name in capture_devices():
+            self._audio_dev.addItem(name)
         self._audio_dev.setCurrentText(cfg.get("audio_device", ""))
-        layout.addRow("Audio device:", self._audio_dev)
+        # "Audio device" is the wrong noun on Windows, where the thing being
+        # opened is a speaker played back through loopback.
+        layout.addRow("Audio source:" if sys.platform == "win32"
+                      else "Audio device:", self._audio_dev)
 
         # Buttons
         sep = QFrame()
