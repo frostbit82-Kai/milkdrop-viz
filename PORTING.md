@@ -28,54 +28,94 @@ Done, on Linux, verified:
 - [x] Embedded-host handle emits an HWND on Windows instead of reading the X11 union
 - [x] `requirements.txt`
 
+Done, on Windows, verified:
+
+- [x] Toolchain: VS 2022 Build Tools 17.14.39 (MSVC 14.44, Windows SDK 10.0.26100),
+      vcpkg, Python 3.14.7 x64
+- [x] **libprojectM 4.1.0 built with `ENABLE_PLAYLIST=ON`** — `projectM-4.dll` and
+      `projectM-4-playlist.dll`, Release, x64, dynamic CRT
+- [x] Both DLLs load under `ctypes` and all 38 `projectm_*` symbols the app binds
+      resolve; the app's own candidate-name lookup finds both
+- [x] `setup_windows.ps1` — the Windows counterpart to `setup.sh`
+- [x] Playlist DLL name fix (see Traps in `CLAUDE.md`)
+- [x] Repo lives at `C:\Projects\milkdrop-viz`; venv on Python 3.14.7 — every pin
+      in `requirements.txt` has a cp314 wheel, so no fall back to 3.13 was needed
+- [x] Two ungated Linux env vars removed from `viz_common.py` (`SDL_VIDEODRIVER`,
+      `PYSDL2_DLL_PATH`) — they broke `import sdl2` on Windows outright
+- [x] **Audio capture: WASAPI loopback**, via `PyAudioWPatch`. `AudioCapture` is now
+      a backend interface (`parec` / `sounddevice` / `wasapi-loopback`); capture
+      verified against a generated tone — captured peak 0.2500 and RMS 0.1767 against
+      an emitted amplitude of 0.25, i.e. the actual signal, not a noise floor
+
 Not started:
 
-- [ ] **`libprojectM-4.dll` built on Windows — this gates everything below**
-- [ ] Audio capture: WASAPI loopback
 - [ ] Run it end to end on Windows
 - [ ] PyInstaller packaging, then code signing
 - [ ] Converge the two `viz_common.py` copies
 - [ ] Steam page
 
-## First session on Windows
+## Building libprojectM on Windows
 
-Read `CLAUDE.md` first. Then, in order — **do not skip step 2, and stop if it fails.**
+`setup_windows.ps1` does all of this. What follows is why it does it that way.
 
-**1. Toolchain.** Git for Windows, Python 3.14 (fall back to 3.13 if any wheel in
-`requirements.txt` has no 3.14 build), CMake, and Visual Studio 2022 Build Tools with
-the "Desktop development with C++" workload.
+**Dependencies are almost all vendored.** `glm`, `SOIL2`, `hlslparser` and
+`projectm-eval` ship inside the source tree; bison and flex are optional because
+the generated parsers are committed. On Windows the only `find_package(... REQUIRED)`
+the Windows SDK does not already satisfy is **GLEW**. That is the single thing vcpkg
+supplies.
 
-```
-python -m venv .venv
-.venv\Scripts\pip install -r requirements.txt
-```
+**The manifest is trimmed.** projectM's `vcpkg.json` lists `glew`, `gtest` and `sdl2`,
+because upstream CI builds the test suite and the SDL developer UI. We build neither
+(`BUILD_TESTING=OFF`, `ENABLE_SDL_UI=OFF`), so the script rewrites the manifest to
+`glew` alone and keeps the original as `vcpkg.json.upstream`. sdl2 in particular drags
+in an msys2 runtime download for no benefit here.
 
-**2. Build projectM 4.1.0.** The Linux recipe is in `setup.sh`; the Windows equivalent
-is the same CMake invocation with vcpkg supplying the dependencies. `-DENABLE_PLAYLIST=ON`
-is required — the app binds `libprojectM-4-playlist` as well as the core library.
+**The build matches upstream CI otherwise** — `Visual Studio 17 2022` / `x64`, the vcpkg
+toolchain file, triplet `x64-windows`, `BUILD_SHARED_LIBS=ON`, and the dynamic
+(`MD`) MSVC runtime.
 
-Success is `libprojectM-4.dll` and `libprojectM-4-playlist.dll` somewhere on PATH or
-beside the app. `viz_common.py` already looks for exactly those names on win32.
+**Three DLLs have to travel together**: `projectM-4.dll`, `projectM-4-playlist.dll` and
+`glew32.dll`, which the core links. Everything else they need is the VC++ redistributable
+and the OS's own `OPENGL32.dll` and Universal CRT. `setup_windows.ps1` gathers the three
+into `C:\dev\projectm-deploy`; put that on PATH or copy them beside the app.
 
-**This step is the whole risk.** If projectM will not build or run on Windows, the
-product does not exist, and no amount of Python work changes that. Prove it before
-touching anything else.
+**If downloads fail with "Could not resolve hostname", it is IPv6, not the network.**
+See the trap in `CLAUDE.md`. The script already works around it.
 
-**3. Audio.** The current capture is PulseAudio three ways over: a `parec` subprocess,
-`pactl move-source-output` for routing, and PortAudio's `pulse` device. All of it is
-in `AudioCapture` in `viz_common.py`.
+## Next
 
-Windows needs WASAPI loopback, and `sounddevice` 0.5.5 cannot do it (checked — no
-`loopback` parameter on `WasapiSettings`, no occurrence of the word in the module).
-Use `PyAudioWPatch` or `soundcard`.
+**Audio — done, but only the capture half is proven.** `AudioCapture` keeps its
+public API (`start`/`stop`/`is_alive`/`get_chunk`/`update_device`) and delegates to a
+backend chosen per platform: `parec` then `sounddevice` on Linux, `wasapi-loopback`
+then `sounddevice` on Windows. Backends emit `(frames, 2)` float32 and `AudioCapture`
+owns the ring buffer, so nothing above the capture layer changed.
 
-Shape it as a backend interface with a Linux and a Windows implementation rather than
-branching inside the existing methods. Note the device picker changes meaning:
-Windows loopback enumerates **render** endpoints, not monitor sources, so the settings
-UI wording and the enumeration both need revisiting.
+The device picker changes meaning on Windows and the UI follows it: PulseAudio exposes
+a monitor **source** per sink, WASAPI has no such object and loopback attaches to a
+**render** endpoint instead. So the settings dialog asks the capture layer
+(`AudioCapture.list_devices()`) rather than sounddevice, and the row is captioned
+"Output to capture:" on Windows and "Audio device:" on Linux
+(`AudioCapture.device_label()`).
 
-**4. Run it.** Presets and textures are not in the repo — download a pack, point the
-two settings at it, confirm texture-sampling presets are not rendering white.
+Loopback runs at the endpoint's native rate (48 kHz here) rather than resampling to the
+44.1 kHz the Linux path requests. projectM is fed PCM either way; if beat detection ever
+looks off on Windows, that is the first thing to check.
+
+Still unproven: audio has never been fed into a running projectM on Windows. Capture is
+verified in isolation, not through the render loop.
+
+**Run it.** Presets and textures are not in the repo — download a pack, point the
+two settings at it, confirm texture-sampling presets are not rendering white. The
+render loop and live audio have never been exercised on Windows; building the DLL
+proves the binding, not the GL path.
+
+**Presets and textures still live on the WSL drive.** The repo moved to
+`C:\Projects\milkdrop-viz`, but the asset directories did not: 2.5 GB of textures
+(8,414 files) and 143 MB of presets (11,223 files) are still under
+`\\wsl.localhost\Ubuntu\mnt\wsl\PHYSICALDRIVE1p2\home\fr0st\Projects\milkdrop-viz\`.
+They are gitignored and never ship, so where they sit is purely a performance question,
+but textures are read while presets load and that path is a network redirector. Copy
+them to a native Windows drive before judging load times.
 
 ## Notes
 
