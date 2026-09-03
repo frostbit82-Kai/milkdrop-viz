@@ -7,3 +7,7 @@ PyQt6_sip==13.11.1
 PySDL2==0.9.17
 pysdl2-dll==2.32.10
 sounddevice==0.5.5
+
+# Windows-only: WASAPI loopback capture. sounddevice 0.5.5 cannot do
+# loopback, and this is the backend AudioCapture uses on win32.
+PyAudioWPatch==0.2.12.8; sys_platform == "win32"
