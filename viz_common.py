@@ -526,6 +526,12 @@ def _backend_chain() -> list:
 class AudioCapture:
     CHUNK = 512
 
+    #: main.py's --no-audio sets the device name to this. Nothing used to check
+    #: for it, so the flag documented as "skip audio capture" opened a stream
+    #: anyway -- on Windows it failed to match a loopback endpoint and fell back
+    #: to the default output, capturing exactly what it was told not to.
+    DISABLED = "__disabled__"
+
     def __init__(self, device_name: str):
         self._device_name = device_name
         self._buffer: deque = deque(maxlen=8)  # Keep last 8 audio chunks
@@ -560,6 +566,10 @@ class AudioCapture:
             self._buffer.append(chunk)
 
     def start(self):
+        if self._device_name == self.DISABLED:
+            _log("[audio] Capture disabled (--no-audio)")
+            self._backend = None
+            return
         for cls in _backend_chain():
             if not cls.available():
                 continue
