@@ -47,9 +47,15 @@ Done, on Windows, verified:
       verified against a generated tone — captured peak 0.2500 and RMS 0.1767 against
       an emitted amplitude of 0.25, i.e. the actual signal, not a noise floor
 
+- [x] **Runs end to end on Windows.** 11,223 presets loaded, WASAPI loopback
+      capturing, presets rendering and switching with textures resolving — not the
+      white that a missing texture path gives. Four Windows-only bugs had to be
+      fixed to get there; all four are commits on this branch
+- [ ] Confirm a texture-heavy preset specifically, and check beat response at
+      48 kHz — the render loop is proven, per-preset fidelity is not
+
 Not started:
 
-- [ ] Run it end to end on Windows
 - [ ] PyInstaller packaging, then code signing
 - [ ] Converge the two `viz_common.py` copies
 - [ ] Steam page
@@ -104,10 +110,22 @@ looks off on Windows, that is the first thing to check.
 Still unproven: audio has never been fed into a running projectM on Windows. Capture is
 verified in isolation, not through the render loop.
 
-**Run it.** Presets and textures are not in the repo — download a pack, point the
-two settings at it, confirm texture-sampling presets are not rendering white. The
-render loop and live audio have never been exercised on Windows; building the DLL
-proves the binding, not the GL path.
+**It runs.** `main.py` launches, projectM renders, presets switch and system audio
+is captured. Getting there took four fixes that Linux never needed, each of which
+failed in a way that pointed somewhere unhelpful:
+
+- libprojectM links GLEW on Windows but never calls `glewInit()` — upstream only
+  does it in the SDL developer UI we do not build. Every GL pointer was NULL, so
+  `projectm_create()` wrote to address 0. The host has to do it, and it only works
+  because we build against the *shared* glew32.dll.
+- `projectm_playlist_create` takes the projectM instance; it was declared and
+  called with no arguments. Benign on the SysV ABI, fatal on Windows x64.
+- cp1252 console encoding turned every `★`/`←` into a thread-killing exception,
+  once disguised as a failed audio backend.
+- Two SDL hints naming X11 were set unconditionally.
+
+To run it: put `C:\dev\projectm-deploy` on PATH and launch with the venv python.
+`--geometry WxH+X+Y` keeps it windowed.
 
 **Presets and textures still live on the WSL drive.** The repo moved to
 `C:\Projects\milkdrop-viz`, but the asset directories did not: 2.5 GB of textures

@@ -63,6 +63,17 @@ There is no display in an agent shell and SDL needs one, so:
   line took it down. `_log()` now degrades unprintable characters instead of raising.
   Do not wrap a backend's whole `start()` in `try/except` and infer failure from it —
   an exception there may be about the logging, not the audio.
+- **libprojectM does not call `glewInit()`.** On Windows it links GLEW but only
+  ever initialises it in the SDL developer UI, which this build excludes. The host
+  must call `glewInit()` itself, with a current GL context, before the first
+  projectM call — otherwise every GL pointer is NULL and `projectm_create()` writes
+  to address 0. This depends on projectM being built against the *shared*
+  glew32.dll so both share one pointer table; a static GLEW would break it silently.
+- **A wrong ctypes `argtypes` can work on Linux and crash on Windows.** The ABIs
+  pass the first argument in different registers (RDI vs RCX), so a missing
+  argument picks up different garbage. `projectm_playlist_create` was declared
+  no-args for exactly this reason. When a `ctypes` call faults on Windows, check
+  the declaration against the installed headers before suspecting the library.
 - **"Could not resolve hostname" on Windows is usually broken IPv6, not the network.**
   A host can advertise IPv6 without it working; `getaddrinfo` then returns AAAA records
   that never connect and `curl`/`git` fail most of the time with a DNS-shaped error.
