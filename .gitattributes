@@ -1,0 +1,20 @@
+# One repository, two operating systems. Git for Windows defaults to
+# core.autocrlf=true, which would rewrite every line on checkout and hand the
+# Linux side a diff of the entire tree on the way back. Normalise to LF in the
+# repository and check out LF everywhere; Python, Qt and MSVC all read it fine.
+* text=auto eol=lf
+
+# Shell scripts must keep LF or bash refuses them outright.
+*.sh text eol=lf
+
+# Windows-native scripts are the one exception.
+*.bat text eol=crlf
+*.ps1 text eol=crlf
+
+# Never touch binaries.
+*.png binary
+*.jpg binary
+*.dds binary
+*.dll binary
+*.so binary
+*.bundle binary
