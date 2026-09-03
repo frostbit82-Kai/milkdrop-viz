@@ -51,13 +51,20 @@ Done, on Windows, verified:
       capturing, presets rendering and switching with textures resolving — not the
       white that a missing texture path gives. Four Windows-only bugs had to be
       fixed to get there; all four are commits on this branch
-- [ ] Confirm a texture-heavy preset specifically, and check beat response at
-      48 kHz — the render loop is proven, per-preset fidelity is not
+- [x] **Texture fidelity confirmed.** Tested against 8 presets each sampling a
+      different real texture file (the library references 63 across 11,223 presets).
+      Texture sprites render correctly; pure-white coverage was 0.02–0.27%, i.e. no
+      white-out
+- [x] **Beat response confirmed.** Same preset, audio off vs real music: 2.53x more
+      hot pixels and brightness variance rising 14.3 → 31.2, i.e. the image pulsing.
+      Aggregate inter-frame motion does *not* show this — both states animate hard —
+      so measure energy and its variance, not frame difference
+- [x] Converged the two `viz_common.py` copies (they are byte-identical; see
+      `CLAUDE.md` for what keeps them working)
 
 Not started:
 
 - [ ] PyInstaller packaging, then code signing
-- [ ] Converge the two `viz_common.py` copies
 - [ ] Steam page
 
 ## Building libprojectM on Windows

@@ -15,9 +15,16 @@ must stay that way. Do not propose bundling them "just for the demo".
 directories. A `/home/<name>/...` or `C:\Users\<name>\...` default is a bug.
 
 **`viz_common.py` exists twice.** This copy and `Bomsai Player/visualizer/viz_common.py`
-have drifted ~372 lines apart; this one is ahead (preset browser, sort, delete-0★,
-reset-ratings, uncapped FPS). Changing one does not change the other. Converge them
-before porting anything shared, or the work gets done twice.
+are currently **byte-identical** — they were converged after drifting 730 lines apart,
+with this copy ahead on every axis. Nothing keeps them in step: they are still two
+files, and changing one does not change the other, so they will drift again. When you
+change this one, copy it across and re-check the two things that made convergence
+non-trivial:
+
+- The player relies on `cfg["embedded"]` to park the SDL window off-screen; its
+  `DEFAULT_CONFIG` sets it. Standalone leaves it unset and stays visible.
+- The player's shims import a fixed set of names from `viz_common`. Removing a
+  public name breaks them silently until import time.
 
 ## Layout
 
