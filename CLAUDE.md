@@ -15,9 +15,16 @@ must stay that way. Do not propose bundling them "just for the demo".
 directories. A `/home/<name>/...` or `C:\Users\<name>\...` default is a bug.
 
 **`viz_common.py` exists twice.** This copy and `Bomsai Player/visualizer/viz_common.py`
-have drifted ~372 lines apart; this one is ahead (preset browser, sort, delete-0★,
-reset-ratings, uncapped FPS). Changing one does not change the other. Converge them
-before porting anything shared, or the work gets done twice.
+are currently **byte-identical** — they were converged after drifting 730 lines apart,
+with this copy ahead on every axis. Nothing keeps them in step: they are still two
+files, and changing one does not change the other, so they will drift again. When you
+change this one, copy it across and re-check the two things that made convergence
+non-trivial:
+
+- The player relies on `cfg["embedded"]` to park the SDL window off-screen; its
+  `DEFAULT_CONFIG` sets it. Standalone leaves it unset and stays visible.
+- The player's shims import a fixed set of names from `viz_common`. Removing a
+  public name breaks them silently until import time.
 
 ## Layout
 
@@ -57,6 +64,23 @@ There is no display in an agent shell and SDL needs one, so:
   load and the app fell back to direct file loading — losing the playlist features
   with no error. Both spellings are now listed. MinGW/MSYS2 does emit the prefix, so
   keep both.
+- **The Windows console is cp1252, and these log messages are full of `←`, `→` and
+  `—`.** `print()` raises `UnicodeEncodeError` on them, which is how a *working* WASAPI
+  backend got misreported as a failed one: the capture had already started and the log
+  line took it down. `_log()` now degrades unprintable characters instead of raising.
+  Do not wrap a backend's whole `start()` in `try/except` and infer failure from it —
+  an exception there may be about the logging, not the audio.
+- **libprojectM does not call `glewInit()`.** On Windows it links GLEW but only
+  ever initialises it in the SDL developer UI, which this build excludes. The host
+  must call `glewInit()` itself, with a current GL context, before the first
+  projectM call — otherwise every GL pointer is NULL and `projectm_create()` writes
+  to address 0. This depends on projectM being built against the *shared*
+  glew32.dll so both share one pointer table; a static GLEW would break it silently.
+- **A wrong ctypes `argtypes` can work on Linux and crash on Windows.** The ABIs
+  pass the first argument in different registers (RDI vs RCX), so a missing
+  argument picks up different garbage. `projectm_playlist_create` was declared
+  no-args for exactly this reason. When a `ctypes` call faults on Windows, check
+  the declaration against the installed headers before suspecting the library.
 - **"Could not resolve hostname" on Windows is usually broken IPv6, not the network.**
   A host can advertise IPv6 without it working; `getaddrinfo` then returns AAAA records
   that never connect and `curl`/`git` fail most of the time with a DNS-shaped error.
@@ -65,5 +89,22 @@ There is no display in an agent shell and SDL needs one, so:
   you. `setup_windows.ps1` forces IPv4 via `CURL_HOME`, plus `VCPKG_KEEP_ENV_VARS`
   because vcpkg sanitises the environment for port builds. `git.exe` uses libcurl and
   ignores `_curlrc`, so clone in WSL and copy the tree across if a submodule fetch fails.
+
+- **An empty `audio_device` means "follow the system default", not "no audio".**
+  `AudioCapture` runs a 4 s watchdog thread that reopens capture when the stream
+  dies and, in follow mode only, when the default output changes. It runs off the
+  render thread deliberately: enumeration is a `pactl` subprocess on Linux and a
+  fresh `PyAudio()` on Windows, tens of milliseconds either way, and at 120 fps
+  that is a visible stutter.
+- **Detecting the default and picking the endpoint are two separate queries, so
+  they can disagree.** If `default_device_name()` names an endpoint that
+  `_pick_device()` will not actually open, the watchdog would reopen every tick
+  forever. `_follow_target` caps it at one attempt per distinct target. Keep both
+  paths going through `_default_loopback()` so they cannot drift apart.
+- **In Bomsai Player this watchdog overlaps `AudioSourceManager`.** That manager
+  resolves "auto" to a concrete monitor name *before* handing it over, so
+  `is_following()` is False there and only the reconnect half runs — which the
+  manager also does. Worst case is one redundant reopen, not a fight. Do not
+  "fix" it by deleting the watchdog: standalone milkdrop-viz has no manager.
 
 See PORTING.md for port status and the Windows setup recipe.

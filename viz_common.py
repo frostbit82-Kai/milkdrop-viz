@@ -14,6 +14,7 @@ Exports:
 # ─── audio ────────────────────────────────────────────────────────────────────
 
 import os
+import sys
 import json
 import time
 import logging
@@ -22,12 +23,38 @@ import subprocess
 from collections import deque
 import numpy as np
 
+# The Windows console encodes as cp1252, and this module prints stars, arrows
+# and em dashes throughout. An encoding error there is never worth a crash: one
+# already killed the audio backend and another killed the render thread mid
+# preset. Change only the error handler, not the encoding, so the console keeps
+# its native code page and the literal keys hosts parse (XID=) are untouched.
+if sys.platform == "win32":
+    for _stream in (sys.stdout, sys.stderr):
+        try:
+            _stream.reconfigure(errors="replace")
+        except Exception:
+            pass       # not a TextIOWrapper (redirected, or replaced by a host)
+
 logger_audio = logging.getLogger("visualizer.audio")
 
 
 def _log(msg: str):
-    print(msg)             # standalone SDL viz (no logging config)
-    logger_audio.info(msg) # embedded player (bomsai_player.log)
+    """Print to stdout and to the embedded player's log.
+
+    The Windows console is cp1252 by default, so the arrows and em dashes used
+    throughout these messages raise UnicodeEncodeError there. A log line must
+    never be able to take a capture backend down with it, so unprintable
+    characters degrade instead of raising.
+    """
+    try:
+        print(msg)         # standalone SDL viz (no logging config)
+    except UnicodeEncodeError:
+        enc = getattr(sys.stdout, "encoding", None) or "ascii"
+        print(msg.encode(enc, "replace").decode(enc, "replace"))
+    try:
+        logger_audio.info(msg)  # embedded player (bomsai_player.log)
+    except Exception:
+        pass
 
 
 try:
@@ -38,49 +65,145 @@ except ImportError:
     print("[audio] sounddevice not installed — visualization will run silent")
 
 
-def capture_devices() -> list:
-    """Names for the audio-source picker, for whichever platform we are on.
+class _AudioBackend:
+    """One way of pulling stereo float32 audio off the system.
 
-    Linux lists PortAudio input devices, which includes the monitor sources that
-    carry what the speakers are playing. Windows has no such thing: the way to
-    hear the system there is WASAPI loopback on a RENDER endpoint, so the list
-    is speakers, not microphones. Same picker, different meaning behind it.
+    Which capture mechanisms exist is a platform question, so the capture layer
+    is split into backends instead of branching inside AudioCapture. A backend
+    turns whatever the OS offers into (frames, 2) float32 arrays and hands them
+    to ``emit``; AudioCapture owns the ring buffer and the public API.
     """
-    if sys.platform == "win32":
-        try:
-            import soundcard as sc
-            return [m.name for m in sc.all_microphones(include_loopback=True)]
-        except Exception as e:
-            _log(f"[audio] soundcard unavailable, falling back to inputs: {e}")
-    if _SD_AVAILABLE:
-        try:
-            return [d["name"] for d in sd.query_devices()
-                    if d["max_input_channels"] > 0]
-        except Exception:
-            pass
-    return []
+
+    #: Short identifier used in log lines.
+    name = "base"
+
+    def __init__(self, device_name: str, emit):
+        self._device_name = device_name or ""
+        self._emit = emit
+        #: What start() actually opened. With an empty device name the backend
+        #: picks the system default, so the caller cannot know the endpoint up
+        #: front -- and following the default means noticing when it changes.
+        self.active_name = ""
+
+    @classmethod
+    def available(cls) -> bool:
+        """Cheap check: could this backend work on this machine at all?"""
+        return False
+
+    @staticmethod
+    def list_devices() -> list:
+        """Device names to offer in the settings dialog."""
+        return []
+
+    @staticmethod
+    def default_device_name() -> str:
+        """Identifier of the system's current default capture target.
+
+        Returns '' when the backend cannot tell, which disables following
+        rather than causing a restart loop on an unknown value. May be slow
+        (subprocess or device enumeration), so callers must not run it on the
+        render thread.
+        """
+        return ""
+
+    def start(self) -> bool:
+        return False
+
+    def stop(self):
+        pass
+
+    def is_alive(self) -> bool:
+        return False
 
 
-class AudioCapture:
-    CHUNK = 512
+def _to_stereo(arr: "np.ndarray", channels: int) -> "np.ndarray":
+    """Normalise an interleaved capture buffer to (frames, 2) float32.
 
-    def __init__(self, device_name: str):
-        self._device_name = device_name
-        self._buffer: deque = deque(maxlen=8)  # Keep last 8 audio chunks
-        self._lock = threading.Lock()
-        self._stream = None          # sounddevice backend
-        self._wasapi_live = False    # soundcard loopback backend (Windows)
-        self._proc = None            # parec backend
+    Mono is duplicated; surround layouts are truncated to the front pair,
+    which is what the visualiser reacts to and avoids guessing at a downmix.
+    """
+    if channels <= 1:
+        return np.repeat(arr.reshape(-1, 1), 2, axis=1)
+    frames = arr.size // channels
+    arr = arr[:frames * channels].reshape(frames, channels)
+    return arr[:, :2]
+
+
+class _ParecBackend(_AudioBackend):
+    """Linux/PulseAudio, preferred: connects straight to the named source,
+    so there are no ALSA plugins in the way and no stream re-routing needed."""
+
+    name = "parec"
+
+    def __init__(self, device_name: str, emit):
+        super().__init__(device_name, emit)
+        self._proc = None
         self._reader = None
         self._stop_flag = False
 
-    # ── parec backend (preferred): direct, exact source capture ─────────
-    def _start_parec(self) -> bool:
-        """Capture via 'parec' (pulseaudio-utils). Connects straight to the
-        named source — no ALSA plugins, no stream re-routing required."""
+    @classmethod
+    def available(cls) -> bool:
         import shutil
-        if not self._device_name or shutil.which("parec") is None:
+        return (sys.platform.startswith("linux")
+                and shutil.which("parec") is not None)
+
+    @staticmethod
+    def list_devices() -> list:
+        return []          # sounddevice enumerates; parec takes the same names
+
+    @staticmethod
+    def default_device_name() -> str:
+        """Monitor source of the current default sink.
+
+        PulseAudio has no 'default source' worth following -- that is usually a
+        microphone. What the visualiser wants is whatever the machine is
+        *playing*, which is the default sink's monitor.
+        """
+        try:
+            import subprocess
+            sink = subprocess.run(
+                ["pactl", "get-default-sink"],
+                capture_output=True, text=True, timeout=2,
+            ).stdout.strip()
+            return f"{sink}.monitor" if sink else ""
+        except Exception:
+            return ""
+
+    def _resolve_source(self) -> str:
+        """The source to actually record from.
+
+        parec does not validate --device: handed a name no source answers to, it
+        connects to PulseAudio's DEFAULT SOURCE instead, which is the microphone.
+        Audio then flows, is_alive() is true and nothing looks wrong, while the
+        visualiser reacts to the room. So the name is matched against the real
+        source list here and anything that does not match falls back to the
+        default sink's monitor — the same shape as the WASAPI backend's
+        _pick_device, which is why Windows never hit this.
+        """
+        want = (self._device_name or "").strip()
+        if want and want != AudioCapture.AUTO_LABEL:
+            try:
+                import subprocess
+                out = subprocess.run(
+                    ["pactl", "list", "sources", "short"],
+                    capture_output=True, text=True, timeout=2).stdout
+                names = [ln.split("\t")[1] for ln in out.splitlines()
+                         if len(ln.split("\t")) > 1]
+            except Exception:
+                names = []
+            if not names or want in names:
+                return want
+            _log(f"[audio] Source '{want}' not found — falling back to the "
+                 f"default output's monitor")
+        return self.default_device_name()
+
+    def start(self) -> bool:
+        if not self.available():
             return False
+        device = self._resolve_source()
+        if not device:
+            return False
+        self._device_name = device
         cmd = ["parec", f"--device={self._device_name}",
                "--format=float32le", "--rate=44100", "--channels=2",
                "--latency-msec=30"]
@@ -101,7 +224,7 @@ class AudioCapture:
             return False
 
         self._stop_flag = False
-        nbytes = self.CHUNK * 2 * 4          # frames × channels × float32
+        nbytes = AudioCapture.CHUNK * 2 * 4   # frames × channels × float32
 
         def reader():
             proc = self._proc
@@ -115,98 +238,72 @@ class AudioCapture:
                 arr = np.frombuffer(data, dtype=np.float32)
                 if arr.size % 2:
                     arr = arr[:-1]
-                chunk = arr.reshape(-1, 2)
-                with self._lock:
-                    self._buffer.append(chunk)
+                self._emit(arr.reshape(-1, 2))
             if not self._stop_flag:
                 _log("[audio] parec stream ended (source gone?)")
 
         self._reader = threading.Thread(target=reader, daemon=True)
         self._reader.start()
+        self.active_name = self._device_name
         _log(f"[audio] parec capture started ← {self._device_name}")
         return True
 
-    # ── WASAPI loopback backend (Windows) ───────────────────────────────
-    def _start_wasapi(self) -> bool:
-        """Capture what the speakers are playing, on Windows.
-
-        There is no monitor source to open the way PulseAudio has one, so this
-        opens the render endpoint itself in loopback mode. `soundcard` is used
-        rather than `sounddevice` because the bundled PortAudio build exposes no
-        loopback flag at all — WasapiSettings takes exclusive, auto_convert and
-        explicit_sample_format, and nothing else.
-
-        UNVERIFIED: written on Linux and never executed. The contract it has to
-        honour is the one the parec reader honours — float32, shape (frames, 2),
-        appended under the lock — so if the audio is wrong, that is the shape to
-        check first. soundcard's own documentation warns that WASAPI sometimes
-        ignores blocksize and can underrun its buffers, so stuttering or a
-        visibly lagging render is a known thing to look for rather than a
-        mystery; the deque is capped at 8 chunks and drops the oldest, which
-        keeps a slow reader from growing memory but does not fix an underrun. Failing here is not fatal: start() falls through to the
-        sounddevice path, which on Windows gets a microphone rather than the
-        system output.
-        """
-        if sys.platform != "win32":
-            return False
-        try:
-            import soundcard as sc
-        except ImportError:
-            _log("[audio] soundcard not installed — no system-audio capture on "
-                 "Windows. pip install soundcard")
-            return False
-
-        try:
-            if self._device_name:
-                mic = next((m for m in sc.all_microphones(include_loopback=True)
-                            if m.name == self._device_name), None)
-                if mic is None:
-                    _log(f"[audio] No loopback device named "
-                         f"'{self._device_name}', using the default speaker")
-            else:
-                mic = None
-            if mic is None:
-                mic = sc.get_microphone(sc.default_speaker().name,
-                                        include_loopback=True)
-        except Exception as e:
-            _log(f"[audio] Could not open a loopback device: {e}")
-            return False
-
-        self._stop_flag = False
-
-        def reader():
+    def stop(self):
+        self._stop_flag = True
+        if self._proc:
             try:
-                with mic.recorder(samplerate=44100, channels=2,
-                                  blocksize=self.CHUNK) as rec:
-                    self._wasapi_live = True
-                    while not self._stop_flag:
-                        chunk = rec.record(numframes=self.CHUNK)
-                        if chunk is None or not len(chunk):
-                            continue
-                        # soundcard hands back float32 (frames, channels); the
-                        # rest of the app assumes two channels.
-                        if chunk.ndim == 1:
-                            chunk = np.repeat(chunk[:, None], 2, axis=1)
-                        elif chunk.shape[1] == 1:
-                            chunk = np.repeat(chunk, 2, axis=1)
-                        elif chunk.shape[1] > 2:
-                            chunk = chunk[:, :2]
-                        with self._lock:
-                            self._buffer.append(np.ascontiguousarray(
-                                chunk, dtype=np.float32))
-            except Exception as e:
-                _log(f"[audio] WASAPI loopback stopped: {e}")
-            finally:
-                self._wasapi_live = False
+                self._proc.kill()
+                self._proc.wait(timeout=2)
+            except Exception:
+                pass
+            self._proc = None
+        if self._reader:
+            try:
+                self._reader.join(timeout=1)
+            except Exception:
+                pass
+            self._reader = None
 
-        self._reader = threading.Thread(target=reader, daemon=True)
-        self._reader.start()
-        time.sleep(0.2)
-        if not self._wasapi_live:
-            _log("[audio] WASAPI loopback did not start")
-            return False
-        _log(f"[audio] WASAPI loopback started \u2190 {mic.name}")
-        return True
+    def is_alive(self) -> bool:
+        return self._proc is not None and self._proc.poll() is None
+
+
+class _SoundDeviceBackend(_AudioBackend):
+    """PortAudio via sounddevice. On Linux this is the fallback when parec is
+    missing, and it needs pactl to re-route onto the requested source. On
+    Windows it captures a real input endpoint (a microphone or line-in) — it
+    cannot do loopback, which is what _WasapiLoopbackBackend is for."""
+
+    name = "sounddevice"
+
+    def __init__(self, device_name: str, emit):
+        super().__init__(device_name, emit)
+        self._stream = None
+
+    @classmethod
+    def available(cls) -> bool:
+        return _SD_AVAILABLE
+
+    @staticmethod
+    def list_devices() -> list:
+        if not _SD_AVAILABLE:
+            return []
+        try:
+            return [d["name"] for d in sd.query_devices()
+                    if d["max_input_channels"] > 0]
+        except Exception:
+            return []
+
+    @staticmethod
+    def default_device_name() -> str:
+        """On Linux this backend re-routes onto a PulseAudio source, so the
+        thing worth following is the same default-sink monitor parec uses. On
+        Windows it captures a real input (microphone, line-in), where "follow
+        the output" has no meaning -- that is _WasapiLoopbackBackend's job.
+        """
+        if sys.platform.startswith("linux"):
+            return _ParecBackend.default_device_name()
+        return ""
 
     def _pulse_device(self) -> "int | None":
         """Index of PortAudio's pulse/pipewire passthrough device, if any.
@@ -269,8 +366,6 @@ class AudioCapture:
 
     def _resolve_device(self) -> int:
         """Find device index by partial name match, fall back to any monitor."""
-        if not _SD_AVAILABLE:
-            return 0
         devices = sd.query_devices()
         name = self._device_name.lower()
         if name:
@@ -283,28 +378,20 @@ class AudioCapture:
                 return i
         return sd.default.device[0]
 
-    def start(self):
-        # Preferred per platform: whichever backend can hear the system output.
-        # parec talks to the sound server directly; WASAPI loopback is the only
-        # way to the same thing on Windows. Both no-op on the other platform, so
-        # trying them in order costs nothing.
-        if self._start_parec():
-            return
-        if self._start_wasapi():
-            return
+    def start(self) -> bool:
         if not _SD_AVAILABLE:
-            _log("[audio] No capture backend available (no parec, "
-                 "no sounddevice)")
-            return
+            return False
 
-        # Fallback: sounddevice/PortAudio.
-        # Route explicit Pulse source names through the pulse device
+        # PULSE_SOURCE is a PulseAudio variable; setting it anywhere else is
+        # at best inert and at worst confusing, so it stays gated on Linux.
+        is_linux = sys.platform.startswith("linux")
         device = None
-        if self._device_name:
-            os.environ["PULSE_SOURCE"] = self._device_name
-            device = self._pulse_device()
-        else:
-            os.environ.pop("PULSE_SOURCE", None)
+        if is_linux:
+            if self._device_name:
+                os.environ["PULSE_SOURCE"] = self._device_name
+                device = self._pulse_device()
+            else:
+                os.environ.pop("PULSE_SOURCE", None)
         if device is None:
             device = self._resolve_device()
         _log(f"[audio] Using device: {sd.query_devices(device)['name']} "
@@ -314,8 +401,7 @@ class AudioCapture:
             data = indata
             if data.ndim == 2 and data.shape[1] == 1:
                 data = np.repeat(data, 2, axis=1)   # mono → stereo
-            with self._lock:
-                self._buffer.append(data.copy())
+            self._emit(data.copy())
 
         # Try stereo@44.1k first, then progressively relax: device-default
         # samplerate, then mono (mics/line-in are often 1-channel).
@@ -327,34 +413,25 @@ class AudioCapture:
                     device=device,
                     channels=channels,
                     samplerate=samplerate,
-                    blocksize=self.CHUNK,
+                    blocksize=AudioCapture.CHUNK,
                     dtype="float32",
                     callback=callback,
                 )
                 self._stream.start()
-                self._move_to_source()
-                return
+                if is_linux:
+                    self._move_to_source()
+                try:
+                    self.active_name = sd.query_devices(device)["name"]
+                except Exception:
+                    self.active_name = self._device_name
+                return True
             except Exception as e:
                 last_err = e
                 self._stream = None
         _log(f"[audio] Could not open audio stream: {last_err}")
-        _log("[audio] Visualization will run without audio reaction.")
+        return False
 
     def stop(self):
-        self._stop_flag = True
-        if self._proc:
-            try:
-                self._proc.kill()
-                self._proc.wait(timeout=2)
-            except Exception:
-                pass
-            self._proc = None
-        if self._reader:
-            try:
-                self._reader.join(timeout=1)
-            except Exception:
-                pass
-            self._reader = None
         if self._stream:
             try:
                 self._stream.stop()
@@ -364,10 +441,407 @@ class AudioCapture:
             self._stream = None
 
     def is_alive(self) -> bool:
-        """True if a capture backend is currently delivering (or able to)."""
-        if self._proc is not None and self._proc.poll() is None:
+        return self._stream is not None
+
+
+class _WasapiLoopbackBackend(_AudioBackend):
+    """Windows: WASAPI loopback, which captures what a device is *playing*.
+
+    The device list means the opposite of the Linux one. PulseAudio exposes a
+    monitor *source* per sink and you record from it; WASAPI has no such
+    object, so loopback attaches to a **render** endpoint (speakers,
+    headphones) and returns its output stream. The settings dialog therefore
+    lists outputs on Windows and inputs on Linux — see AudioCapture.device_label.
+    """
+
+    name = "wasapi-loopback"
+
+    def __init__(self, device_name: str, emit):
+        super().__init__(device_name, emit)
+        self._pa = None
+        self._stream = None
+        self._channels = 2
+
+    @classmethod
+    def available(cls) -> bool:
+        if sys.platform != "win32":
+            return False
+        try:
+            import pyaudiowpatch          # noqa: F401
             return True
-        return self._stream is not None or self._wasapi_live
+        except Exception:
+            return False
+
+    @staticmethod
+    def _loopback_devices(pa) -> list:
+        try:
+            return list(pa.get_loopback_device_info_generator())
+        except Exception:
+            return []
+
+    @staticmethod
+    def list_devices() -> list:
+        if not _WasapiLoopbackBackend.available():
+            return []
+        import pyaudiowpatch as pyaudio
+        pa = None
+        try:
+            pa = pyaudio.PyAudio()
+            return [d["name"]
+                    for d in _WasapiLoopbackBackend._loopback_devices(pa)]
+        except Exception as e:
+            _log(f"[audio] Could not enumerate WASAPI loopback devices: {e}")
+            return []
+        finally:
+            if pa is not None:
+                try:
+                    pa.terminate()
+                except Exception:
+                    pass
+
+    @staticmethod
+    def _default_loopback(pa, devices):
+        """The loopback twin of the default render endpoint.
+
+        WASAPI reports the default *output*; its loopback counterpart is a
+        separate device whose name embeds the output's, so the two are matched
+        by substring rather than by index.
+        """
+        try:
+            import pyaudiowpatch as pyaudio
+            api = pa.get_host_api_info_by_type(pyaudio.paWASAPI)
+            default_out = pa.get_device_info_by_index(api["defaultOutputDevice"])
+            for d in devices:
+                if default_out["name"] in d["name"]:
+                    return d
+        except Exception:
+            pass
+        return devices[0] if devices else None
+
+    @staticmethod
+    def default_device_name() -> str:
+        """Name of the loopback endpoint that auto mode would pick right now.
+
+        Opens its own PyAudio instance: the watchdog has to answer this while a
+        stream is already running on another one, and it must reflect the live
+        system default rather than what was cached at start().
+        """
+        if not _WasapiLoopbackBackend.available():
+            return ""
+        import pyaudiowpatch as pyaudio
+        pa = None
+        try:
+            pa = pyaudio.PyAudio()
+            devices = _WasapiLoopbackBackend._loopback_devices(pa)
+            dev = _WasapiLoopbackBackend._default_loopback(pa, devices)
+            return dev["name"] if dev else ""
+        except Exception:
+            return ""
+        finally:
+            if pa is not None:
+                try:
+                    pa.terminate()
+                except Exception:
+                    pass
+
+    def _pick_device(self, pa):
+        """The configured loopback endpoint, else the default output's."""
+        devices = self._loopback_devices(pa)
+        if not devices:
+            return None
+
+        want = self._device_name.lower()
+        if want:
+            for d in devices:
+                if want in d["name"].lower():
+                    return d
+            _log(f"[audio] Loopback device '{self._device_name}' not found — "
+                 f"falling back to the default output")
+
+        return self._default_loopback(pa, devices)
+
+    def start(self) -> bool:
+        if not self.available():
+            return False
+        import pyaudiowpatch as pyaudio
+
+        try:
+            self._pa = pyaudio.PyAudio()
+        except Exception as e:
+            _log(f"[audio] Could not initialise WASAPI: {e}")
+            self._pa = None
+            return False
+
+        dev = self._pick_device(self._pa)
+        if dev is None:
+            _log("[audio] No WASAPI loopback endpoint found. Windows exposes "
+                 "one per output device; is anything playing back at all?")
+            self.stop()
+            return False
+
+        self._channels = max(1, int(dev.get("maxInputChannels") or 2))
+        rate = int(dev.get("defaultSampleRate") or 44100)
+
+        def callback(in_data, frame_count, time_info, status):
+            if in_data:
+                arr = np.frombuffer(in_data, dtype=np.float32)
+                self._emit(_to_stereo(arr, self._channels).copy())
+            return (None, pyaudio.paContinue)
+
+        try:
+            self._stream = self._pa.open(
+                format=pyaudio.paFloat32,
+                channels=self._channels,
+                rate=rate,
+                frames_per_buffer=AudioCapture.CHUNK,
+                input=True,
+                input_device_index=dev["index"],
+                stream_callback=callback,
+            )
+            self._stream.start_stream()
+        except Exception as e:
+            _log(f"[audio] Could not open WASAPI loopback stream: {e}")
+            self.stop()
+            return False
+
+        self.active_name = dev["name"]
+        _log(f"[audio] WASAPI loopback started ← {dev['name']} "
+             f"({self._channels}ch @ {rate}Hz)")
+        return True
+
+    def stop(self):
+        if self._stream:
+            try:
+                self._stream.stop_stream()
+                self._stream.close()
+            except Exception:
+                pass
+            self._stream = None
+        if self._pa:
+            try:
+                self._pa.terminate()
+            except Exception:
+                pass
+            self._pa = None
+
+    def is_alive(self) -> bool:
+        if self._stream is None:
+            return False
+        try:
+            return bool(self._stream.is_active())
+        except Exception:
+            return False
+
+
+def _backend_chain() -> list:
+    """Backends to try, best first, for this platform."""
+    if sys.platform == "win32":
+        return [_WasapiLoopbackBackend, _SoundDeviceBackend]
+    return [_ParecBackend, _SoundDeviceBackend]
+
+
+class AudioCapture:
+    CHUNK = 512
+
+    #: main.py's --no-audio sets the device name to this. Nothing used to check
+    #: for it, so the flag documented as "skip audio capture" opened a stream
+    #: anyway -- on Windows it failed to match a loopback endpoint and fell back
+    #: to the default output, capturing exactly what it was told not to.
+    DISABLED = "__disabled__"
+
+    #: Seconds between follow/reconnect checks. Matches the player's audio
+    #: source watchdog; short enough that switching outputs feels immediate,
+    #: long enough that device enumeration is not a constant cost.
+    FOLLOW_POLL_S = 4.0
+
+    def __init__(self, device_name: str):
+        self._device_name = device_name
+        self._buffer: deque = deque(maxlen=8)  # Keep last 8 audio chunks
+        self._lock = threading.Lock()          # guards _buffer only
+        self._backend = None
+        #: Guards backend lifecycle. Separate from _lock because the watchdog
+        #: tears a backend down while the render thread is still draining the
+        #: ring buffer, and one lock covering both would make them wait on
+        #: each other for no reason.
+        self._life = threading.RLock()
+        self._follow_thread = None
+        self._follow_stop = None
+        #: Set once a reopen attempt has failed, so a genuinely absent device
+        #: logs one line rather than one every FOLLOW_POLL_S forever.
+        self._reopen_failed = False
+        #: Last default we reopened towards. Detecting the default and picking
+        #: the endpoint are two separate queries, so they can disagree -- an
+        #: endpoint that reports as default but refuses to open would otherwise
+        #: be retried every tick forever. One attempt per distinct target.
+        self._follow_target = ""
+
+    # ── device discovery, for the settings dialog ───────────────────────
+    @staticmethod
+    def list_devices() -> list:
+        """Capture device names for this platform, best backend first."""
+        names: list = []
+        for cls in _backend_chain():
+            if not cls.available():
+                continue
+            for n in cls.list_devices():
+                if n not in names:
+                    names.append(n)
+        return names
+
+    #: Shown in the settings dialog for the empty device name. Stored as "",
+    #: so existing config.json files keep working untouched.
+    AUTO_LABEL = "Auto (follow system default)"
+
+    @staticmethod
+    def device_label() -> str:
+        """Settings-dialog caption. Windows loopback listens to an *output*,
+        which is the opposite of the Linux monitor-source model, so the
+        wording has to differ or the list reads as nonsense."""
+        if sys.platform == "win32":
+            return "Output to capture:"
+        return "Audio device:"
+
+    # ── lifecycle ──────────────────────────────────────────────────────
+    def _emit(self, chunk: "np.ndarray"):
+        with self._lock:
+            self._buffer.append(chunk)
+
+    def is_following(self) -> bool:
+        """True when no device is pinned, so capture tracks the system default.
+
+        An empty device name has always meant "let the backend choose"; that
+        choice is now re-made whenever the default moves.
+        """
+        return self._device_name not in (self.DISABLED,) and not self._device_name
+
+    def _open_backend(self, quiet: bool = False) -> bool:
+        """Try each backend in order. Caller must hold _life."""
+        for cls in _backend_chain():
+            if not cls.available():
+                continue
+            backend = cls(self._device_name, self._emit)
+            try:
+                if backend.start():
+                    self._backend = backend
+                    self._reopen_failed = False
+                    return True
+            except Exception as e:
+                _log(f"[audio] {cls.name} backend failed: {e}")
+            backend.stop()
+        self._backend = None
+        if not quiet:
+            _log("[audio] No capture backend available — "
+                 "visualization will run without audio reaction.")
+        return False
+
+    def start(self):
+        if self._device_name == self.DISABLED:
+            _log("[audio] Capture disabled (--no-audio)")
+            self._backend = None
+            return
+        with self._life:
+            self._open_backend()
+        self._start_follow()
+
+    def stop(self):
+        self._stop_follow()
+        with self._life:
+            if self._backend:
+                try:
+                    self._backend.stop()
+                except Exception:
+                    pass
+                self._backend = None
+
+    def is_alive(self) -> bool:
+        """True if a capture backend is currently delivering (or able to)."""
+        with self._life:
+            return self._backend is not None and self._backend.is_alive()
+
+    def active_device(self) -> str:
+        """The endpoint actually being captured, which in follow mode is not
+        the configured one. Empty when capture is not running."""
+        with self._life:
+            return self._backend.active_name if self._backend else ""
+
+    # ── follow / reconnect watchdog ─────────────────────────────────────
+    def _start_follow(self):
+        if self._device_name == self.DISABLED or self._follow_thread:
+            return
+        self._follow_stop = threading.Event()
+        self._follow_thread = threading.Thread(
+            target=self._follow_loop, args=(self._follow_stop,),
+            daemon=True, name="audio-follow")
+        self._follow_thread.start()
+
+    def _stop_follow(self):
+        evt, thread = self._follow_stop, self._follow_thread
+        self._follow_stop = self._follow_thread = None
+        if evt:
+            evt.set()
+        # Not joined: the tick can be mid-enumeration, which on Windows means
+        # a PyAudio init that takes long enough to stall a settings-dialog
+        # apply. The thread is a daemon and re-checks the event before acting.
+
+    def _follow_loop(self, stop_evt):
+        """Reopen capture when it dies, and follow the default output.
+
+        Runs off the render thread on purpose: device enumeration means a
+        pactl subprocess on Linux and a PyAudio instance on Windows, either of
+        which is tens of milliseconds. At 120 fps that is a visible stutter.
+        """
+        while not stop_evt.wait(self.FOLLOW_POLL_S):
+            if stop_evt.is_set():
+                return
+            try:
+                self._follow_tick(stop_evt)
+            except Exception as e:
+                _log(f"[audio] Follow watchdog error: {e}")
+
+    def _follow_tick(self, stop_evt):
+        with self._life:
+            backend = self._backend
+            following = self.is_following()
+        if backend is None and not self._reopen_failed:
+            return                      # never started, or deliberately stopped
+
+        if backend is not None and not backend.is_alive():
+            self._reopen("capture stopped", stop_evt)
+            return
+
+        if not following:
+            return
+
+        # Ask the class, not the instance: this must reflect the live system
+        # default rather than anything cached when the stream was opened.
+        want = type(backend).default_device_name() if backend else ""
+        if not want:
+            return                      # backend cannot tell; leave it alone
+        if not backend.active_name or want == backend.active_name:
+            self._follow_target = ""      # settled on the current default
+            return
+        if want == self._follow_target:
+            return                        # already moved for this one; landed elsewhere
+        self._follow_target = want
+        self._reopen(f"default output changed to '{want}'", stop_evt)
+
+    def _reopen(self, why: str, stop_evt=None):
+        with self._life:
+            if stop_evt is not None and stop_evt.is_set():
+                return
+            if self._backend is not None:
+                _log(f"[audio] {why} — reopening capture")
+                try:
+                    self._backend.stop()
+                except Exception:
+                    pass
+                self._backend = None
+            elif self._reopen_failed:
+                pass                    # retrying a device that was missing
+            else:
+                return
+            if not self._open_backend(quiet=self._reopen_failed):
+                self._reopen_failed = True
 
     def get_chunk(self) -> "np.ndarray | None":
         with self._lock:
@@ -377,13 +851,13 @@ class AudioCapture:
 
     def update_device(self, device_name: str):
         """Hot-swap audio device (Audio Source menu / settings dialog)."""
-        was_running = (self._stream is not None or self._proc is not None
-                       or self._wasapi_live)
+        was_running = self._backend is not None
         self.stop()
         self._device_name = device_name
+        self._reopen_failed = False
+        self._follow_target = ""
         if was_running:
             self.start()
-
 
 # ─── ipc_reader ───────────────────────────────────────────────────────────────
 
@@ -798,9 +1272,16 @@ class ProjectM4:
     def _setup_playlist_signatures(self):
         P = self._playlist
 
-        # projectm_playlist_create takes NO arguments (unlike what I assumed before)
+        # Takes the projectM instance:
+        #   projectm_playlist_handle projectm_playlist_create(projectm_handle)
+        # Declaring it as no-args left the first argument register holding
+        # whatever happened to be there. On the SysV ABI (RDI) that was benign
+        # often enough to look correct on Linux, helped by the explicit
+        # projectm_playlist_connect() below doing the real wiring. On Windows
+        # x64 the argument is RCX, and projectM wrote through the garbage:
+        # "access violation writing 0x00000000000036C8".
         P.projectm_playlist_create.restype  = ctypes.c_void_p
-        P.projectm_playlist_create.argtypes = []
+        P.projectm_playlist_create.argtypes = [ctypes.c_void_p]
 
         P.projectm_playlist_destroy.restype  = None
         P.projectm_playlist_destroy.argtypes = [ctypes.c_void_p]
@@ -868,7 +1349,7 @@ class ProjectM4:
         self._core.projectm_set_fps(self._pm, fps)
 
         if self._playlist:
-            self._pl = self._playlist.projectm_playlist_create()
+            self._pl = self._playlist.projectm_playlist_create(self._pm)
             if not self._pl:
                 raise RuntimeError("projectm_playlist_create() returned NULL")
             self._playlist.projectm_playlist_connect(self._pl, self._pm)
@@ -1254,13 +1735,17 @@ class SettingsDialog(QDialog):
         self._audio_dev = QComboBox()
         self._audio_dev.setEditable(True)
         self._audio_dev.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
-        for name in capture_devices():
-            self._audio_dev.addItem(name)
-        self._audio_dev.setCurrentText(cfg.get("audio_device", ""))
-        # "Audio device" is the wrong noun on Windows, where the thing being
-        # opened is a speaker played back through loopback.
-        layout.addRow("Audio source:" if sys.platform == "win32"
-                      else "Audio device:", self._audio_dev)
+        # Ask the capture layer, not sounddevice: on Windows the list is
+        # WASAPI loopback endpoints, which sounddevice cannot enumerate.
+        self._audio_dev.addItem(AudioCapture.AUTO_LABEL)
+        try:
+            for name in AudioCapture.list_devices():
+                self._audio_dev.addItem(name)
+        except Exception:
+            pass
+        _dev = cfg.get("audio_device", "")
+        self._audio_dev.setCurrentText(_dev or AudioCapture.AUTO_LABEL)
+        layout.addRow(AudioCapture.device_label(), self._audio_dev)
 
         # Buttons
         sep = QFrame()
@@ -1312,8 +1797,18 @@ class SettingsDialog(QDialog):
             "beat_sensitivity":     round(self._beat.value(), 1),
             "hard_cuts_enabled":    self._hard_cuts.isChecked(),
             "hard_cut_sensitivity": round(self._hcs.value(), 1),
-            "audio_device":         self._audio_dev.currentText(),
+            "audio_device":         self._audio_device_value(),
         }
+
+    def _audio_device_value(self) -> str:
+        """Combo text back to a stored device name.
+
+        The auto entry is a label, not a device: it has to round-trip to the
+        empty string or it would be handed to the backend as a name to match
+        and never found.
+        """
+        text = self._audio_dev.currentText().strip()
+        return "" if text == AudioCapture.AUTO_LABEL else text
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1610,8 +2105,19 @@ import random as _random
 import time as _time
 import subprocess as _subprocess
 
-os.environ.setdefault("SDL_VIDEODRIVER", "x11")
-os.environ["PYSDL2_DLL_PATH"] = "/usr/lib/x86_64-linux-gnu"
+# PySDL2 reads PYSDL2_DLL_PATH once, at its own import, so this has to run
+# first. Both variables are Linux-only: SDL_VIDEODRIVER=x11 is meaningless on
+# Windows, and pointing PYSDL2_DLL_PATH at an ELF directory stops PySDL2 finding
+# any SDL2 at all. renderer.py sets the same pair correctly before importing
+# this module, so use setdefault and do not clobber what it chose.
+if sys.platform.startswith("linux"):
+    os.environ.setdefault("SDL_VIDEODRIVER", "x11")
+    os.environ.setdefault("PYSDL2_DLL_PATH", "/usr/lib/x86_64-linux-gnu")
+elif getattr(sys, "frozen", False):
+    # Frozen build only: SDL2.dll sits beside the executable. NOT for a normal
+    # install — the pysdl2-dll wheel points PySDL2 at its own bundled binaries,
+    # but only while PYSDL2_DLL_PATH is still unset.
+    os.environ.setdefault("PYSDL2_DLL_PATH", str(Path(sys.executable).parent))
 
 import sdl2
 import sdl2.ext
@@ -1790,9 +2296,12 @@ class Renderer:
         x = self._cfg.get("window_x", sdl2.SDL_WINDOWPOS_CENTERED)
         y = self._cfg.get("window_y", sdl2.SDL_WINDOWPOS_CENTERED)
 
-        # Hint: ask the compositor not to manage our window position
-        sdl2.SDL_SetHint(b"SDL_VIDEO_X11_NET_WM_BYPASS_COMPOSITOR", b"1")
-        sdl2.SDL_SetHint(b"SDL_VIDEODRIVER", b"x11")
+        # Both hints name X11 and mean nothing anywhere else, so they are
+        # gated like the environment variables at the top of this module.
+        if sys.platform.startswith("linux"):
+            # Ask the compositor not to manage our window position.
+            sdl2.SDL_SetHint(b"SDL_VIDEO_X11_NET_WM_BYPASS_COMPOSITOR", b"1")
+            sdl2.SDL_SetHint(b"SDL_VIDEODRIVER", b"x11")
 
         flags = (sdl2.SDL_WINDOW_OPENGL |
                  sdl2.SDL_WINDOW_SHOWN  |
@@ -1844,11 +2353,58 @@ class Renderer:
 
     # ── projectM init ─────────────────────────────────────────────────────
 
+    def _init_glew(self) -> bool:
+        """Resolve OpenGL entry points on Windows, before projectM makes any.
+
+        libprojectM links GLEW on Windows but never calls glewInit() itself —
+        upstream only does it in its SDL developer UI, which this build does not
+        include. Until something calls it every GLEW function pointer is NULL,
+        and the first GL call inside projectm_create() writes through a null
+        pointer: "access violation writing 0x0000000000000000".
+
+        Linux never hits this. projectM links libGL directly there, so the
+        dynamic loader resolves the symbols and there is no GLEW indirection.
+
+        This works only because projectM was built against the *shared*
+        glew32.dll: it and this call share one global pointer table. A
+        statically linked GLEW would hand projectM its own private copy and
+        initialising ours would silently fix nothing.
+
+        Requires a current GL context, so call it after SDL_GL_CreateContext
+        and on the same thread.
+        """
+        if sys.platform != "win32":
+            return True
+        try:
+            glew = _ctypes.CDLL("glew32.dll")
+        except OSError as e:
+            print(f"[renderer] glew32.dll not found. It must sit beside "
+                  f"projectM-4.dll or on PATH: {e}")
+            return False
+        try:
+            # GLboolean is an unsigned char; a wider write would clobber
+            # whatever GLEW keeps next to it. Core profiles need this set or
+            # glewInit() refuses on some drivers.
+            _ctypes.c_ubyte.in_dll(glew, "glewExperimental").value = 1
+        except ValueError:
+            pass                      # not exported by every GLEW build
+        glew.glewInit.restype = _ctypes.c_uint
+        err = glew.glewInit()
+        if err != 0:                  # GLEW_OK
+            print(f"[renderer] glewInit() failed with code {err}")
+            return False
+        return True
+
     def _init_projectm(self) -> bool:
         try:
             self._pm = self._create_projectm()
         except RuntimeError as e:
             print(f"[renderer] Fatal: {e}")
+            return False
+
+        # After the libraries are loaded (so we bind the same glew32.dll
+        # projectM does) and before any projectM call touches OpenGL.
+        if not self._init_glew():
             return False
 
         w   = self._cfg.get("width", 1280)
