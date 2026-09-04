@@ -80,6 +80,10 @@ class _AudioBackend:
     def __init__(self, device_name: str, emit):
         self._device_name = device_name or ""
         self._emit = emit
+        #: What start() actually opened. With an empty device name the backend
+        #: picks the system default, so the caller cannot know the endpoint up
+        #: front -- and following the default means noticing when it changes.
+        self.active_name = ""
 
     @classmethod
     def available(cls) -> bool:
@@ -90,6 +94,17 @@ class _AudioBackend:
     def list_devices() -> list:
         """Device names to offer in the settings dialog."""
         return []
+
+    @staticmethod
+    def default_device_name() -> str:
+        """Identifier of the system's current default capture target.
+
+        Returns '' when the backend cannot tell, which disables following
+        rather than causing a restart loop on an unknown value. May be slow
+        (subprocess or device enumeration), so callers must not run it on the
+        render thread.
+        """
+        return ""
 
     def start(self) -> bool:
         return False
@@ -136,6 +151,24 @@ class _ParecBackend(_AudioBackend):
     def list_devices() -> list:
         return []          # sounddevice enumerates; parec takes the same names
 
+    @staticmethod
+    def default_device_name() -> str:
+        """Monitor source of the current default sink.
+
+        PulseAudio has no 'default source' worth following -- that is usually a
+        microphone. What the visualiser wants is whatever the machine is
+        *playing*, which is the default sink's monitor.
+        """
+        try:
+            import subprocess
+            sink = subprocess.run(
+                ["pactl", "get-default-sink"],
+                capture_output=True, text=True, timeout=2,
+            ).stdout.strip()
+            return f"{sink}.monitor" if sink else ""
+        except Exception:
+            return ""
+
     def start(self) -> bool:
         if not self._device_name or not self.available():
             return False
@@ -179,6 +212,7 @@ class _ParecBackend(_AudioBackend):
 
         self._reader = threading.Thread(target=reader, daemon=True)
         self._reader.start()
+        self.active_name = self._device_name
         _log(f"[audio] parec capture started ← {self._device_name}")
         return True
 
@@ -227,6 +261,17 @@ class _SoundDeviceBackend(_AudioBackend):
                     if d["max_input_channels"] > 0]
         except Exception:
             return []
+
+    @staticmethod
+    def default_device_name() -> str:
+        """On Linux this backend re-routes onto a PulseAudio source, so the
+        thing worth following is the same default-sink monitor parec uses. On
+        Windows it captures a real input (microphone, line-in), where "follow
+        the output" has no meaning -- that is _WasapiLoopbackBackend's job.
+        """
+        if sys.platform.startswith("linux"):
+            return _ParecBackend.default_device_name()
+        return ""
 
     def _pulse_device(self) -> "int | None":
         """Index of PortAudio's pulse/pipewire passthrough device, if any.
@@ -343,6 +388,10 @@ class _SoundDeviceBackend(_AudioBackend):
                 self._stream.start()
                 if is_linux:
                     self._move_to_source()
+                try:
+                    self.active_name = sd.query_devices(device)["name"]
+                except Exception:
+                    self.active_name = self._device_name
                 return True
             except Exception as e:
                 last_err = e
@@ -418,6 +467,51 @@ class _WasapiLoopbackBackend(_AudioBackend):
                 except Exception:
                     pass
 
+    @staticmethod
+    def _default_loopback(pa, devices):
+        """The loopback twin of the default render endpoint.
+
+        WASAPI reports the default *output*; its loopback counterpart is a
+        separate device whose name embeds the output's, so the two are matched
+        by substring rather than by index.
+        """
+        try:
+            import pyaudiowpatch as pyaudio
+            api = pa.get_host_api_info_by_type(pyaudio.paWASAPI)
+            default_out = pa.get_device_info_by_index(api["defaultOutputDevice"])
+            for d in devices:
+                if default_out["name"] in d["name"]:
+                    return d
+        except Exception:
+            pass
+        return devices[0] if devices else None
+
+    @staticmethod
+    def default_device_name() -> str:
+        """Name of the loopback endpoint that auto mode would pick right now.
+
+        Opens its own PyAudio instance: the watchdog has to answer this while a
+        stream is already running on another one, and it must reflect the live
+        system default rather than what was cached at start().
+        """
+        if not _WasapiLoopbackBackend.available():
+            return ""
+        import pyaudiowpatch as pyaudio
+        pa = None
+        try:
+            pa = pyaudio.PyAudio()
+            devices = _WasapiLoopbackBackend._loopback_devices(pa)
+            dev = _WasapiLoopbackBackend._default_loopback(pa, devices)
+            return dev["name"] if dev else ""
+        except Exception:
+            return ""
+        finally:
+            if pa is not None:
+                try:
+                    pa.terminate()
+                except Exception:
+                    pass
+
     def _pick_device(self, pa):
         """The configured loopback endpoint, else the default output's."""
         devices = self._loopback_devices(pa)
@@ -432,17 +526,7 @@ class _WasapiLoopbackBackend(_AudioBackend):
             _log(f"[audio] Loopback device '{self._device_name}' not found — "
                  f"falling back to the default output")
 
-        # Default render endpoint, matched to its loopback twin by name.
-        try:
-            import pyaudiowpatch as pyaudio
-            api = pa.get_host_api_info_by_type(pyaudio.paWASAPI)
-            default_out = pa.get_device_info_by_index(api["defaultOutputDevice"])
-            for d in devices:
-                if default_out["name"] in d["name"]:
-                    return d
-        except Exception:
-            pass
-        return devices[0]
+        return self._default_loopback(pa, devices)
 
     def start(self) -> bool:
         if not self.available():
@@ -488,6 +572,7 @@ class _WasapiLoopbackBackend(_AudioBackend):
             self.stop()
             return False
 
+        self.active_name = dev["name"]
         _log(f"[audio] WASAPI loopback started ← {dev['name']} "
              f"({self._channels}ch @ {rate}Hz)")
         return True
@@ -532,11 +617,31 @@ class AudioCapture:
     #: to the default output, capturing exactly what it was told not to.
     DISABLED = "__disabled__"
 
+    #: Seconds between follow/reconnect checks. Matches the player's audio
+    #: source watchdog; short enough that switching outputs feels immediate,
+    #: long enough that device enumeration is not a constant cost.
+    FOLLOW_POLL_S = 4.0
+
     def __init__(self, device_name: str):
         self._device_name = device_name
         self._buffer: deque = deque(maxlen=8)  # Keep last 8 audio chunks
-        self._lock = threading.Lock()
+        self._lock = threading.Lock()          # guards _buffer only
         self._backend = None
+        #: Guards backend lifecycle. Separate from _lock because the watchdog
+        #: tears a backend down while the render thread is still draining the
+        #: ring buffer, and one lock covering both would make them wait on
+        #: each other for no reason.
+        self._life = threading.RLock()
+        self._follow_thread = None
+        self._follow_stop = None
+        #: Set once a reopen attempt has failed, so a genuinely absent device
+        #: logs one line rather than one every FOLLOW_POLL_S forever.
+        self._reopen_failed = False
+        #: Last default we reopened towards. Detecting the default and picking
+        #: the endpoint are two separate queries, so they can disagree -- an
+        #: endpoint that reports as default but refuses to open would otherwise
+        #: be retried every tick forever. One attempt per distinct target.
+        self._follow_target = ""
 
     # ── device discovery, for the settings dialog ───────────────────────
     @staticmethod
@@ -550,6 +655,10 @@ class AudioCapture:
                 if n not in names:
                     names.append(n)
         return names
+
+    #: Shown in the settings dialog for the empty device name. Stored as "",
+    #: so existing config.json files keep working untouched.
+    AUTO_LABEL = "Auto (follow system default)"
 
     @staticmethod
     def device_label() -> str:
@@ -565,11 +674,16 @@ class AudioCapture:
         with self._lock:
             self._buffer.append(chunk)
 
-    def start(self):
-        if self._device_name == self.DISABLED:
-            _log("[audio] Capture disabled (--no-audio)")
-            self._backend = None
-            return
+    def is_following(self) -> bool:
+        """True when no device is pinned, so capture tracks the system default.
+
+        An empty device name has always meant "let the backend choose"; that
+        choice is now re-made whenever the default moves.
+        """
+        return self._device_name not in (self.DISABLED,) and not self._device_name
+
+    def _open_backend(self, quiet: bool = False) -> bool:
+        """Try each backend in order. Caller must hold _life."""
         for cls in _backend_chain():
             if not cls.available():
                 continue
@@ -577,25 +691,125 @@ class AudioCapture:
             try:
                 if backend.start():
                     self._backend = backend
-                    return
+                    self._reopen_failed = False
+                    return True
             except Exception as e:
                 _log(f"[audio] {cls.name} backend failed: {e}")
             backend.stop()
         self._backend = None
-        _log("[audio] No capture backend available — "
-             "visualization will run without audio reaction.")
+        if not quiet:
+            _log("[audio] No capture backend available — "
+                 "visualization will run without audio reaction.")
+        return False
+
+    def start(self):
+        if self._device_name == self.DISABLED:
+            _log("[audio] Capture disabled (--no-audio)")
+            self._backend = None
+            return
+        with self._life:
+            self._open_backend()
+        self._start_follow()
 
     def stop(self):
-        if self._backend:
-            try:
-                self._backend.stop()
-            except Exception:
-                pass
-            self._backend = None
+        self._stop_follow()
+        with self._life:
+            if self._backend:
+                try:
+                    self._backend.stop()
+                except Exception:
+                    pass
+                self._backend = None
 
     def is_alive(self) -> bool:
         """True if a capture backend is currently delivering (or able to)."""
-        return self._backend is not None and self._backend.is_alive()
+        with self._life:
+            return self._backend is not None and self._backend.is_alive()
+
+    def active_device(self) -> str:
+        """The endpoint actually being captured, which in follow mode is not
+        the configured one. Empty when capture is not running."""
+        with self._life:
+            return self._backend.active_name if self._backend else ""
+
+    # ── follow / reconnect watchdog ─────────────────────────────────────
+    def _start_follow(self):
+        if self._device_name == self.DISABLED or self._follow_thread:
+            return
+        self._follow_stop = threading.Event()
+        self._follow_thread = threading.Thread(
+            target=self._follow_loop, args=(self._follow_stop,),
+            daemon=True, name="audio-follow")
+        self._follow_thread.start()
+
+    def _stop_follow(self):
+        evt, thread = self._follow_stop, self._follow_thread
+        self._follow_stop = self._follow_thread = None
+        if evt:
+            evt.set()
+        # Not joined: the tick can be mid-enumeration, which on Windows means
+        # a PyAudio init that takes long enough to stall a settings-dialog
+        # apply. The thread is a daemon and re-checks the event before acting.
+
+    def _follow_loop(self, stop_evt):
+        """Reopen capture when it dies, and follow the default output.
+
+        Runs off the render thread on purpose: device enumeration means a
+        pactl subprocess on Linux and a PyAudio instance on Windows, either of
+        which is tens of milliseconds. At 120 fps that is a visible stutter.
+        """
+        while not stop_evt.wait(self.FOLLOW_POLL_S):
+            if stop_evt.is_set():
+                return
+            try:
+                self._follow_tick(stop_evt)
+            except Exception as e:
+                _log(f"[audio] Follow watchdog error: {e}")
+
+    def _follow_tick(self, stop_evt):
+        with self._life:
+            backend = self._backend
+            following = self.is_following()
+        if backend is None and not self._reopen_failed:
+            return                      # never started, or deliberately stopped
+
+        if backend is not None and not backend.is_alive():
+            self._reopen("capture stopped", stop_evt)
+            return
+
+        if not following:
+            return
+
+        # Ask the class, not the instance: this must reflect the live system
+        # default rather than anything cached when the stream was opened.
+        want = type(backend).default_device_name() if backend else ""
+        if not want:
+            return                      # backend cannot tell; leave it alone
+        if not backend.active_name or want == backend.active_name:
+            self._follow_target = ""      # settled on the current default
+            return
+        if want == self._follow_target:
+            return                        # already moved for this one; landed elsewhere
+        self._follow_target = want
+        self._reopen(f"default output changed to '{want}'", stop_evt)
+
+    def _reopen(self, why: str, stop_evt=None):
+        with self._life:
+            if stop_evt is not None and stop_evt.is_set():
+                return
+            if self._backend is not None:
+                _log(f"[audio] {why} — reopening capture")
+                try:
+                    self._backend.stop()
+                except Exception:
+                    pass
+                self._backend = None
+            elif self._reopen_failed:
+                pass                    # retrying a device that was missing
+            else:
+                return
+            if not self._open_backend(quiet=self._reopen_failed):
+                self._reopen_failed = True
 
     def get_chunk(self) -> "np.ndarray | None":
         with self._lock:
@@ -608,6 +822,8 @@ class AudioCapture:
         was_running = self._backend is not None
         self.stop()
         self._device_name = device_name
+        self._reopen_failed = False
+        self._follow_target = ""
         if was_running:
             self.start()
 
@@ -1489,12 +1705,14 @@ class SettingsDialog(QDialog):
         self._audio_dev.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         # Ask the capture layer, not sounddevice: on Windows the list is
         # WASAPI loopback endpoints, which sounddevice cannot enumerate.
+        self._audio_dev.addItem(AudioCapture.AUTO_LABEL)
         try:
             for name in AudioCapture.list_devices():
                 self._audio_dev.addItem(name)
         except Exception:
             pass
-        self._audio_dev.setCurrentText(cfg.get("audio_device", ""))
+        _dev = cfg.get("audio_device", "")
+        self._audio_dev.setCurrentText(_dev or AudioCapture.AUTO_LABEL)
         layout.addRow(AudioCapture.device_label(), self._audio_dev)
 
         # Buttons
@@ -1547,8 +1765,18 @@ class SettingsDialog(QDialog):
             "beat_sensitivity":     round(self._beat.value(), 1),
             "hard_cuts_enabled":    self._hard_cuts.isChecked(),
             "hard_cut_sensitivity": round(self._hcs.value(), 1),
-            "audio_device":         self._audio_dev.currentText(),
+            "audio_device":         self._audio_device_value(),
         }
+
+    def _audio_device_value(self) -> str:
+        """Combo text back to a stored device name.
+
+        The auto entry is a label, not a device: it has to round-trip to the
+        empty string or it would be handed to the backend as a name to match
+        and never found.
+        """
+        text = self._audio_dev.currentText().strip()
+        return "" if text == AudioCapture.AUTO_LABEL else text
 
 
 # ─────────────────────────────────────────────────────────────────────────────

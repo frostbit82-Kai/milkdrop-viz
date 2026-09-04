@@ -90,4 +90,21 @@ There is no display in an agent shell and SDL needs one, so:
   because vcpkg sanitises the environment for port builds. `git.exe` uses libcurl and
   ignores `_curlrc`, so clone in WSL and copy the tree across if a submodule fetch fails.
 
+- **An empty `audio_device` means "follow the system default", not "no audio".**
+  `AudioCapture` runs a 4 s watchdog thread that reopens capture when the stream
+  dies and, in follow mode only, when the default output changes. It runs off the
+  render thread deliberately: enumeration is a `pactl` subprocess on Linux and a
+  fresh `PyAudio()` on Windows, tens of milliseconds either way, and at 120 fps
+  that is a visible stutter.
+- **Detecting the default and picking the endpoint are two separate queries, so
+  they can disagree.** If `default_device_name()` names an endpoint that
+  `_pick_device()` will not actually open, the watchdog would reopen every tick
+  forever. `_follow_target` caps it at one attempt per distinct target. Keep both
+  paths going through `_default_loopback()` so they cannot drift apart.
+- **In Bomsai Player this watchdog overlaps `AudioSourceManager`.** That manager
+  resolves "auto" to a concrete monitor name *before* handing it over, so
+  `is_following()` is False there and only the reconnect half runs — which the
+  manager also does. Worst case is one redundant reopen, not a fight. Do not
+  "fix" it by deleting the watchdog: standalone milkdrop-viz has no manager.
+
 See PORTING.md for port status and the Windows setup recipe.
