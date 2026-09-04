@@ -40,6 +40,20 @@ per-install shims: `main.py` (entry point, CLI flags), `renderer.py` (save paths
 `config.py` (defaults), `audio.py` / `projectm_wrapper.py` / `ui.py` (re-exports),
 `preset_browser.py`.
 
+## Packaging
+
+`installer/` builds the release. `bash installer/build_linux.sh` produces a
+tarball whose `install.sh` puts the app in `~/.local` with no root. See
+`installer/README.md` for the build, the vendored libprojectM and the glibc
+floor.
+
+**The vendored `installer/vendor/linux/libprojectM-4*.so.4` are committed on
+purpose.** Upstream release links have gone dead before, and rebuilding needs a
+toolchain the packaging box may not have. `PROJECTM_LIB_DIR` overrides them.
+projectM is LGPL-2.1 and stays a separate `ctypes`-loaded library with its
+licence in `installer/licenses/` — that is what makes shipping it in a paid app
+legitimate, so do not link it statically.
+
 ## Testing
 
 There is no display in an agent shell and SDL needs one, so:
@@ -95,6 +109,34 @@ There is no display in an agent shell and SDL needs one, so:
   you. `setup_windows.ps1` forces IPv4 via `CURL_HOME`, plus `VCPKG_KEEP_ENV_VARS`
   because vcpkg sanitises the environment for port builds. `git.exe` uses libcurl and
   ignores `_curlrc`, so clone in WSL and copy the tree across if a submodule fetch fails.
+
+- **A frozen build changes where three things live, and each broke separately.**
+  `config.py` moves `BASE_DIR` to the OS config directory when `sys.frozen` is
+  set, because the install directory is replaced wholesale on upgrade.
+  `_bundled_libs()` puts `sys._MEIPASS` at the head of the projectM candidate
+  lists. And `PYSDL2_DLL_PATH` has to point at `_MEIPASS`, not at
+  `dirname(sys.executable)` — for a PyInstaller onedir build those are different
+  directories (`_internal` and its parent).
+- **The PySDL2 env block in `viz_common.py` runs before the one in
+  `renderer.py`.** `main.py` imports `config`, which imports `viz_common`, one
+  line before it imports `renderer`. Both blocks now test `sys.frozen` first and
+  the platform second, so whichever wins the race sets the same thing. Fixing
+  only `renderer.py` looks right and does nothing.
+- **`sdl2dll` is excluded from frozen builds and SDL2 is bundled by hand.** The
+  wheel's `dll/` directory does not survive the freeze, so `sdl2dll` decides it
+  is a source-only install and warns that PySDL2 will ignore it. The spec copies
+  `libSDL2-2.0.so` / `SDL2.dll` to the bundle root instead, which is exactly
+  where `PYSDL2_DLL_PATH` points.
+- **PyOpenGL loads its platform backend and array handlers by name at runtime,**
+  so PyInstaller's analysis never sees them and the frozen app dies with
+  `TypeError: 'NoneType' object is not callable` inside `OpenGL/platform`. The
+  spec adds `collect_submodules("OpenGL.platform")` and `("OpenGL.arrays")`.
+- **A frozen app's stdout is block-buffered when redirected, and `PYTHONUNBUFFERED`
+  does not always reach it.** A test that redirects to a file and sees only the
+  first line has proved nothing: the app may be running fine and holding the rest.
+  Check a side effect instead — `pgrep -a parec`, or `grep projectM /proc/<pid>/maps`.
+  Loading 11,223 presets under Xvfb and llvmpipe takes the better part of a minute,
+  which is long enough to look like a hang.
 
 - **An empty `audio_device` means "follow the system default", not "no audio".**
   `AudioCapture` runs a 4 s watchdog thread that reopens capture when the stream

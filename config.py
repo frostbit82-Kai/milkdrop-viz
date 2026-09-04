@@ -4,6 +4,7 @@ Shared logic lives in viz_common.py; this file supplies the local file paths
 and the DEFAULT_CONFIG.
 """
 
+import os
 import sys
 from pathlib import Path
 
@@ -22,7 +23,29 @@ from viz_common import (
     is_excluded,
 )
 
-BASE_DIR = Path(__file__).parent
+
+def _base_dir() -> Path:
+    """Where config.json, ratings.json and keymaps.json live.
+
+    A source checkout keeps them beside the code, which is where every existing
+    one already sits. An installed build must not: that directory is replaced
+    wholesale on upgrade and can be read-only, so state goes to the OS's own
+    per-user config location instead.
+    """
+    if not getattr(sys, "frozen", False):
+        return Path(__file__).parent
+    if sys.platform == "win32":
+        root = Path(os.environ.get("APPDATA") or Path.home() / "AppData/Roaming")
+    elif sys.platform == "darwin":
+        root = Path.home() / "Library/Application Support"
+    else:
+        root = Path(os.environ.get("XDG_CONFIG_HOME") or Path.home() / ".config")
+    d = root / "MilkDropVisualizer"
+    d.mkdir(parents=True, exist_ok=True)
+    return d
+
+
+BASE_DIR = _base_dir()
 
 CONFIG_PATH  = BASE_DIR / "config.json"
 RATINGS_PATH = BASE_DIR / "ratings.json"

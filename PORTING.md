@@ -62,9 +62,43 @@ Done, on Windows, verified:
 - [x] Converged the two `viz_common.py` copies (they are byte-identical; see
       `CLAUDE.md` for what keeps them working), guarded by `check_sync.py`
 
+Done, packaging:
+
+- [x] **Linux release package.** `installer/build_linux.sh` produces an 88 MB
+      `MilkDropVisualizer-<version>-linux-x86_64.tar.gz`; the user extracts it and
+      runs `./install.sh`, which installs to `~/.local` with no root, adds a menu
+      entry and a `milkdrop-viz` command, and smoke-tests the app before saying it
+      worked. Verified end to end: installed copy loads its own bundled
+      libprojectM, 11,223 presets, parec bound to the sink monitor, presets
+      rendering and switching. `uninstall.sh` reverses it and keeps settings
+      and ratings
+- [x] libprojectM vendored at `installer/vendor/linux/` rather than rebuilt, with
+      projectM's LGPL-2.1 text alongside it in `installer/licenses/`
+
 Not started:
-- [ ] PyInstaller packaging, then code signing
+- [ ] Windows installer — the PyInstaller spec is already cross-platform; what is
+      missing is `build_windows.ps1`, an installer format (Inno Setup), and code
+      signing
 - [ ] Steam page
+
+## Packaging
+
+`installer/README.md` covers the build. The parts that cost time:
+
+**The glibc of the build machine becomes the floor.** PyInstaller bundles this
+box's `libpython`, and the vendored libprojectM is a local build, so a package
+made on Ubuntu 26.04 will not start on an older release. Build on the oldest one
+worth supporting — that decision is still open and it is easier to make before
+the first sale than after.
+
+**Three things move when `sys.frozen` is set**: the config directory, the
+projectM search path, and `PYSDL2_DLL_PATH`. All three are handled and all three
+are listed in `CLAUDE.md`; the one to remember is that `sys._MEIPASS` and
+`dirname(sys.executable)` are *different directories* for a onedir build.
+
+**Windows needs one extra file in `PROJECTM_LIB_DIR`**: `glew32.dll`, beside
+`projectM-4.dll` and `projectM-4-playlist.dll`. The spec already globs for it.
+`setup_windows.ps1` gathers all three into `C:\dev\projectm-deploy`.
 
 ## Building libprojectM on Windows
 

@@ -13,26 +13,34 @@ sys.path.insert(0, str(Path(__file__).parent))
 # once, at ITS import, so setting it afterwards did nothing. Harmless on Linux,
 # where the loader finds libSDL2 on its own, and a hard failure on Windows where
 # the DLL sits beside the executable and there is no system path to fall back on.
+# Frozen builds come first, on every platform: SDL2 travels inside the bundle, so
+# an installed copy must not fall through to whatever the host happens to have.
+# NOT for a normal install — the pysdl2-dll wheel points PySDL2 at its own bundled
+# binaries, but only while PYSDL2_DLL_PATH is still unset, so setting it for a
+# source checkout would suppress the wheel and leave Windows with no SDL2 at all.
+# setdefault is what lets this sit above the Linux block instead of inside it.
+if getattr(sys, "frozen", False):
+    # PyInstaller unpacks to _MEIPASS (the _internal directory for a onedir
+    # build); a plain "beside the executable" is only right when there is none.
+    os.environ.setdefault(
+        "PYSDL2_DLL_PATH",
+        getattr(sys, "_MEIPASS", str(Path(sys.executable).parent)),
+    )
+
 if sys.platform.startswith("linux"):
     os.environ.setdefault("SDL_VIDEODRIVER", "x11")
     os.environ.setdefault("PYSDL2_DLL_PATH", "/usr/lib/x86_64-linux-gnu")
-elif getattr(sys, "frozen", False):
-    # Frozen build only: SDL2.dll sits beside the executable. NOT for a normal
-    # install — the pysdl2-dll wheel points PySDL2 at its own bundled binaries,
-    # but only while PYSDL2_DLL_PATH is still unset, so setting it here would
-    # suppress the wheel and leave Windows with no SDL2 at all.
-    os.environ.setdefault("PYSDL2_DLL_PATH", str(Path(sys.executable).parent))
 
 from viz_common import Renderer as _BaseRenderer, load_projectm, _build_key_lookup, _token_matches
 
 # Import local config helpers so callers can do: from renderer import ...
 from config import (
-    QUALITY_MESH, save_config, save_ratings, save_keymaps,
+    BASE_DIR, QUALITY_MESH, save_config, save_ratings, save_keymaps,
     set_preset_rating, get_preset_rating, is_excluded, load_keymaps,
     CONFIG_PATH, RATINGS_PATH, KEYMAPS_PATH,
 )
 
-_CONFIG_DIR = Path(__file__).parent
+_CONFIG_DIR = BASE_DIR   # config.json lives wherever config.py decided
 
 
 class Renderer(_BaseRenderer):

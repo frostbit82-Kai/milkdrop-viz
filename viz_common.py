@@ -1042,6 +1042,21 @@ from pathlib import Path
 
 logger_pm = logging.getLogger(__name__)
 
+
+def _bundled_libs(*names) -> list:
+    """Absolute paths to libraries shipped inside a frozen build.
+
+    PyInstaller puts bundled binaries in sys._MEIPASS (the _internal directory
+    for a onedir build) and the launcher beside it, so both are offered. A
+    source checkout is not frozen and gets an empty list, which is why this can
+    lead every candidate list without changing how a developer run resolves.
+    """
+    if not getattr(sys, "frozen", False):
+        return []
+    roots = [getattr(sys, "_MEIPASS", ""), os.path.dirname(sys.executable)]
+    return [os.path.join(r, n) for r in roots if r for n in names]
+
+
 # Cross-platform library discovery
 try:
     from pathlib import Path as PathlibPath
@@ -1058,11 +1073,13 @@ except Exception:
     # Fallback if running standalone
     def get_projectm_candidates():
         if sys.platform == "win32":
-            return ["libprojectM-4.dll", "projectM-4.dll"]
+            return _bundled_libs("projectM-4.dll", "libprojectM-4.dll") + [
+                "libprojectM-4.dll", "projectM-4.dll"]
         elif sys.platform == "darwin":
             return ["/usr/local/lib/libprojectM-4.dylib", "/opt/homebrew/lib/libprojectM-4.dylib"]
         else:
-            return [
+            return _bundled_libs(
+                "libprojectM-4.so", "libprojectM-4.so.4") + [
                 "/usr/local/lib/libprojectM-4.so",
                 "/usr/local/lib/libprojectM-4.so.4",
                 "/usr/local/lib/libprojectM-4.so.4.1.0",
@@ -1074,11 +1091,14 @@ except Exception:
             # MSVC emits no "lib" prefix (CMake OUTPUT_NAME is projectM-4-playlist),
             # so the unprefixed name is what a Visual Studio build actually produces.
             # The prefixed name is kept for MinGW/MSYS2 builds, matching the core list.
-            return ["libprojectM-4-playlist.dll", "projectM-4-playlist.dll"]
+            return _bundled_libs(
+                "projectM-4-playlist.dll", "libprojectM-4-playlist.dll") + [
+                "libprojectM-4-playlist.dll", "projectM-4-playlist.dll"]
         elif sys.platform == "darwin":
             return ["/usr/local/lib/libprojectM-4-playlist.dylib"]
         else:
-            return [
+            return _bundled_libs(
+                "libprojectM-4-playlist.so", "libprojectM-4-playlist.so.4") + [
                 "/usr/local/lib/libprojectM-4-playlist.so",
                 "/usr/local/lib/libprojectM-4-playlist.so.4",
                 "/usr/local/lib/libprojectM-4-playlist.so.4.1.0",
@@ -2110,14 +2130,21 @@ import subprocess as _subprocess
 # Windows, and pointing PYSDL2_DLL_PATH at an ELF directory stops PySDL2 finding
 # any SDL2 at all. renderer.py sets the same pair correctly before importing
 # this module, so use setdefault and do not clobber what it chose.
+if getattr(sys, "frozen", False):
+    # Frozen builds first, on every platform: SDL2 travels inside the bundle and
+    # an installed copy must not fall through to the host's. This has to sit
+    # above the Linux branch rather than after it, because whichever module
+    # imports viz_common first decides — and config.py gets here before
+    # renderer.py does. NOT for a normal install: the pysdl2-dll wheel points
+    # PySDL2 at its own binaries, but only while PYSDL2_DLL_PATH is unset.
+    os.environ.setdefault(
+        "PYSDL2_DLL_PATH",
+        getattr(sys, "_MEIPASS", str(Path(sys.executable).parent)),
+    )
+
 if sys.platform.startswith("linux"):
     os.environ.setdefault("SDL_VIDEODRIVER", "x11")
     os.environ.setdefault("PYSDL2_DLL_PATH", "/usr/lib/x86_64-linux-gnu")
-elif getattr(sys, "frozen", False):
-    # Frozen build only: SDL2.dll sits beside the executable. NOT for a normal
-    # install — the pysdl2-dll wheel points PySDL2 at its own bundled binaries,
-    # but only while PYSDL2_DLL_PATH is still unset.
-    os.environ.setdefault("PYSDL2_DLL_PATH", str(Path(sys.executable).parent))
 
 import sdl2
 import sdl2.ext

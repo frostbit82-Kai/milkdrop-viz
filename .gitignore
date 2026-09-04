@@ -17,3 +17,7 @@ kai_workflows.db
 
 # Vendored tooling that belongs to its own project
 ponytail-main/
+
+# Installer output (the vendored libprojectM under installer/vendor IS tracked)
+installer/build/
+installer/dist/

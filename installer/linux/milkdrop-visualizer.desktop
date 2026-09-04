@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=MilkDrop Visualizer
+GenericName=Music Visualizer
+Comment=MilkDrop preset visualizer driven by whatever your speakers are playing
+Exec=@EXEC@
+Icon=@ICON@
+Terminal=false
+Categories=AudioVideo;Audio;Player;
+Keywords=milkdrop;visualizer;visualiser;music;audio;projectm;
+StartupNotify=true
