@@ -60,10 +60,9 @@ Done, on Windows, verified:
       Aggregate inter-frame motion does *not* show this — both states animate hard —
       so measure energy and its variance, not frame difference
 - [x] Converged the two `viz_common.py` copies (they are byte-identical; see
-      `CLAUDE.md` for what keeps them working)
+      `CLAUDE.md` for what keeps them working), guarded by `check_sync.py`
 
 Not started:
-
 - [ ] PyInstaller packaging, then code signing
 - [ ] Steam page
 

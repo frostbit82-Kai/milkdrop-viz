@@ -17,9 +17,15 @@ directories. A `/home/<name>/...` or `C:\Users\<name>\...` default is a bug.
 **`viz_common.py` exists twice.** This copy and `Bomsai Player/visualizer/viz_common.py`
 are currently **byte-identical** — they were converged after drifting 730 lines apart,
 with this copy ahead on every axis. Nothing keeps them in step: they are still two
-files, and changing one does not change the other, so they will drift again. When you
-change this one, copy it across and re-check the two things that made convergence
-non-trivial:
+files, and changing one does not change the other, so they will drift again.
+
+**Run `python check_sync.py` after touching this file** — it is the only thing that
+notices the drift, and they have already drifted twice: once by 730 lines, once by a
+one-line bug fix that reached the standalone and not the player. `--fix` copies this
+copy over the player's; the commit in that repo is still yours to make. A checkout with
+no player beside it skips and passes, so it is safe to run anywhere.
+
+When you copy it across, re-check the two things that made convergence non-trivial:
 
 - The player relies on `cfg["embedded"]` to park the SDL window off-screen; its
   `DEFAULT_CONFIG` sets it. Standalone leaves it unset and stays visible.
