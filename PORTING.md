@@ -74,6 +74,19 @@ Done, packaging:
       and ratings
 - [x] libprojectM vendored at `installer/vendor/linux/` rather than rebuilt, with
       projectM's LGPL-2.1 text alongside it in `installer/licenses/`
+- [x] **Old-system build**: `installer/build_linux_docker.sh`, glibc floor 2.43 -> 2.36
+- [x] **Status toasts actually appear.** `status_message` was connected to an
+      empty method, so every "Mode: Random" / "Hard cuts: ON" / "Sorted by
+      rating" was dropped on the floor. Verified with xdotool driving the frozen
+      build: mode and hard-cut toasts now render. Locking a preset toasts too
+- [~] **Context menu dismissal** — reported not to close when clicking the
+      visualiser behind it; **could not be reproduced here**, windowed or
+      fullscreen, source or frozen, with xdotool clicking genuinely outside the
+      menu rectangle. Qt's popup grab does cover SDL's window on X11. Added a
+      fallback anyway: while the host says its menu is open, the render loop
+      forwards any key or click it *does* see as a close request, which also
+      stops an ESCAPE meant for the menu quitting the app. If it still happens,
+      the next thing to learn is whether the session is X11 or Wayland
 
 Not started:
 - [ ] Windows installer — the PyInstaller spec is already cross-platform; what is
@@ -85,11 +98,13 @@ Not started:
 
 `installer/README.md` covers the build. The parts that cost time:
 
-**The glibc of the build machine becomes the floor.** PyInstaller bundles this
-box's `libpython`, and the vendored libprojectM is a local build, so a package
-made on Ubuntu 26.04 will not start on an older release. Build on the oldest one
-worth supporting — that decision is still open and it is easier to make before
-the first sale than after.
+**The glibc of the build machine becomes the floor.** Measured, not guessed:
+a package built on this box needs **glibc 2.43** — Ubuntu 26.04 and nothing
+else. `installer/build_linux_docker.sh` builds the whole thing (libprojectM
+included) inside Debian 12 instead and takes the floor to **2.36**: Debian 12+,
+Ubuntu 24.04+, Fedora 37+, current Arch and SteamOS. Use it for anything
+released. Ubuntu 22.04 (2.35) needs a lower base image and therefore building
+Python too; for Steam the eventual target is the Steam Runtime 3 "sniper" SDK.
 
 **Three things move when `sys.frozen` is set**: the config directory, the
 projectM search path, and `PYSDL2_DLL_PATH`. All three are handled and all three

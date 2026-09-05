@@ -64,6 +64,14 @@ There is no display in an agent shell and SDL needs one, so:
   expression instead of a copy that can drift from it.
 - Anything touching the GL loop or live audio has to be run by hand. Say so rather
   than claiming it passed.
+- **The UI can be driven headlessly**: Xvfb plus `xdotool` for clicks and keys,
+  and `xwininfo -id <id>` for what is actually on screen. Two things will mislead
+  you. `xwininfo -root -children` lists *unmapped* windows, so a window in that
+  list proves nothing — grep its `Map State: IsViewable`. And
+  `xdotool search --onlyvisible` finds nothing at all under a WM-less Xvfb.
+- **Kill background helpers by PID.** `pkill -f "Xvfb :77"` also matches the
+  agent's own shell command line, which contains that string, so it kills the
+  shell running the test.
 
 ## Traps already paid for
 
@@ -109,6 +117,25 @@ There is no display in an agent shell and SDL needs one, so:
   you. `setup_windows.ps1` forces IPv4 via `CURL_HOME`, plus `VCPKG_KEEP_ENV_VARS`
   because vcpkg sanitises the environment for port builds. `git.exe` uses libcurl and
   ignores `_curlrc`, so clone in WSL and copy the tree across if a submodule fetch fails.
+
+- **A signal connected to an empty method looks wired and is not.**
+  `status_message` — every "Mode: Random", "Hard cuts: ON", "Sorted by rating"
+  the renderer produces — was connected to `App._on_status`, whose body was
+  `pass`. Nothing was broken, nothing logged, and none of it ever reached the
+  toast. When a UI element is reported missing, check what the signal is
+  connected *to* before checking whether it is emitted.
+- **A source run and an installed run do not read the same settings.** From a
+  checkout, `BASE_DIR` is the repo, so the app uses the developer's own
+  `config.json` and `keymaps.json`; frozen, it uses a clean per-user config
+  directory and therefore `DEFAULT_KEYMAPS`. The repo's keymaps.json rebinds
+  `toggle_mode` from `m` to `r`, so the same keypress does different things in
+  the two builds. A UI difference between source and installed is not
+  automatically a packaging bug.
+- **The context menu is 236x473** — most of a 640x480 window. An automated
+  "click outside the menu" has to be outside the *menu's* rectangle, which is
+  not where it was opened. Clicking at what looked like empty visualiser landed
+  on the menu and produced a convincing false reproduction of "it will not
+  close".
 
 - **A frozen build changes where three things live, and each broke separately.**
   `config.py` moves `BASE_DIR` to the OS config directory when `sys.frozen` is

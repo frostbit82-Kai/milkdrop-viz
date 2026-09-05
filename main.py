@@ -91,13 +91,22 @@ class App:
         if start_borderless:
             self._renderer._borderless_on_start = True
 
+        self._menu = None
+
         self._bridge.request_quit.connect(self._on_quit)
         self._bridge.show_toast.connect(self._toast.show_message)
         self._bridge.show_context_menu.connect(self._show_context_menu)
+        self._bridge.close_context_menu.connect(self._close_context_menu)
         self._bridge.toggle_preset_browser.connect(self._toggle_browser)
-        self._bridge.preset_changed.connect(self._on_preset_changed)
-        self._bridge.lock_changed.connect(self._on_lock_changed)
-        self._bridge.status_message.connect(self._on_status)
+        # status_message carries every "Mode: random", "Hard cuts: ON",
+        # "Sorted by rating" the renderer produces. It used to land on an empty
+        # method, so none of them were ever shown. preset_changed is left off
+        # the toast on purpose: it fires on the automatic rotation as well, and
+        # a banner every thirty seconds is not a status update.
+        self._bridge.status_message.connect(self._toast.show_message)
+        self._bridge.lock_changed.connect(
+            lambda locked: self._toast.show_message(
+                "Preset locked" if locked else "Preset unlocked"))
 
         self._render_thread = threading.Thread(
             target=self._renderer.run, daemon=True
@@ -112,13 +121,23 @@ class App:
         self._qt_app.quit()
 
     def _show_context_menu(self):
-        menu = ContextMenu(
+        self._menu = ContextMenu(
             renderer=self._renderer,
             cfg=self._cfg,
             ratings=self._ratings,
             keymaps=self._keymaps,
         )
-        menu.popup_at_cursor()
+        self._renderer.set_menu_open(True)
+        try:
+            self._menu.popup_at_cursor()      # blocks until the menu closes
+        finally:
+            self._menu = None
+            self._renderer.set_menu_open(False)
+
+    def _close_context_menu(self):
+        """The render loop saw a click or key that Qt's popup grab missed."""
+        if self._menu is not None:
+            self._menu.close()
 
     def _toggle_browser(self):
         if self._browser is None:
@@ -130,15 +149,6 @@ class App:
             self._browser.show()
             self._browser.raise_()
             self._browser.activateWindow()
-
-    def _on_preset_changed(self, name: str, rating: int):
-        pass
-
-    def _on_lock_changed(self, locked: bool):
-        pass
-
-    def _on_status(self, msg: str):
-        pass
 
 
 def main():

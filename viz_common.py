@@ -1616,6 +1616,7 @@ class Bridge(QObject):
     show_toast         = pyqtSignal(str)        # brief overlay message
     request_quit       = pyqtSignal()
     toggle_preset_browser = pyqtSignal()        # show/hide the preset browser
+    close_context_menu = pyqtSignal()           # host should dismiss its menu
     playlist_changed   = pyqtSignal()           # order/contents changed (sort, delete, mode)
 
 
@@ -2260,6 +2261,7 @@ class Renderer:
         self._locked              = False
         self._borderless          = False
         self._borderless_on_start = False   # set by main.py --borderless flag
+        self._menu_open           = False   # host's context menu is on screen
         self._shuffle             = True
         self._running             = False
         self._target_y            = None
@@ -2517,6 +2519,16 @@ class Renderer:
     def request_context_menu(self):
         with self._lock: self._req_context_menu = True
 
+    def set_menu_open(self, is_open: bool):
+        """Host tells the render loop whether its context menu is on screen.
+
+        Only the host sets this. Arming it here, when the menu is merely
+        requested, would leave a host that ignores the request — Bomsai Studio
+        consumes the RCLICK line itself — with the flag stuck on and every key
+        and click swallowed for the rest of the session.
+        """
+        self._menu_open = bool(is_open)
+
     def request_sort(self, by: str = "name"):
         """Reorder the playlist by preset name or rating (runs on render thread)."""
         with self._lock: self._req_sort = "rating" if by == "rating" else "name"
@@ -2669,6 +2681,20 @@ class Renderer:
                 if event.type == sdl2.SDL_QUIT:
                     self._running = False
                     break
+
+                # Belt and braces for a report that would not reproduce here:
+                # a context menu that did not go away when the visualiser
+                # behind it was clicked. Qt grabs the pointer for its popup and
+                # on X11 that grab does cover SDL's window — measured, with
+                # xdotool driving a real window — so normally the renderer sees
+                # none of these events and this branch never runs. Where the
+                # grab does not hold it does see them, and forwarding one
+                # closes the menu rather than leaving it stranded. It also
+                # keeps an ESCAPE meant for the menu from quitting the app.
+                if self._menu_open and event.type in (
+                        sdl2.SDL_MOUSEBUTTONDOWN, sdl2.SDL_KEYDOWN):
+                    self._bridge.close_context_menu.emit()
+                    continue
 
                 elif event.type == sdl2.SDL_KEYDOWN:
                     sym      = event.key.keysym.sym
