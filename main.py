@@ -33,12 +33,11 @@ if sys.platform.startswith("linux"):
     os.environ.setdefault("QT_QPA_PLATFORM", "xcb")
     os.environ["LD_LIBRARY_PATH"] = "/usr/local/lib:" + os.environ.get("LD_LIBRARY_PATH", "")
 
-from PyQt6.QtWidgets import QApplication
-from PyQt6.QtCore import pyqtSignal
-
 from config import load_config, load_ratings, load_keymaps
 from renderer import Renderer
-from ui import Bridge, ContextMenu, ToastLabel
+# Qt comes through the ui shim, which gets it from viz_common -- that is where
+# the PySide6/PyQt6 choice is made, and naming a binding here would undo it.
+from ui import Bridge, ContextMenu, ToastLabel, QApplication, Signal
 
 
 def _parse_geometry(geo_str: str) -> tuple[int, int, int, int] | None:
@@ -58,7 +57,7 @@ def _parse_geometry(geo_str: str) -> tuple[int, int, int, int] | None:
 
 
 class AppBridge(Bridge):
-    show_context_menu = pyqtSignal()
+    show_context_menu = Signal()
 
 
 class App:

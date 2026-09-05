@@ -10,11 +10,13 @@ reset_all_ratings, delete_zero_rated.
 """
 import logging
 
-from PyQt6.QtWidgets import (
+# Qt comes from viz_common, which picks the binding (PySide6, or PyQt6 when
+# this file is running inside Bomsai Player). Importing PyQt6 directly here
+# would load a second Qt into the process.
+from viz_common import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QListWidget,
-    QListWidgetItem, QPushButton, QAbstractItemView, QMessageBox,
+    QListWidgetItem, QPushButton, QAbstractItemView, QMessageBox, Qt,
 )
-from PyQt6.QtCore import Qt
 
 logger = logging.getLogger(__name__)
 

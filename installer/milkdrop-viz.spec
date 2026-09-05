@@ -69,7 +69,11 @@ a = Analysis(
     # bundle root, which is what _asset_path() looks at when frozen.
     datas=[(str(REPO / "assets"), "assets"), (str(REPO / "VERSION"), ".")],
     hiddenimports=hiddenimports,
-    excludes=["tkinter", "test", "unittest", "pydoc_data", "sdl2dll"],
+    # PyQt6 is excluded deliberately: viz_common falls back to it when
+    # PySide6 is missing, so PyInstaller sees the import and would bundle it
+    # if it were installed on the build machine -- and a GPL binding is
+    # exactly what this app must not ship.
+    excludes=["tkinter", "test", "unittest", "pydoc_data", "sdl2dll", "PyQt6"],
     noarchive=False,
 )
 pyz = PYZ(a.pure)

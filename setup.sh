@@ -43,7 +43,7 @@ rm -rf "$SCRIPT_DIR/.venv"
 "$SCRIPT_DIR/.venv/bin/pip" install --upgrade pip
 "$SCRIPT_DIR/.venv/bin/pip" install \
     numpy \
-    PyQt6 \
+    PySide6 \
     PyOpenGL PyOpenGL_accelerate \
     PySDL2 pysdl2-dll \
     sounddevice

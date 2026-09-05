@@ -1,9 +1,10 @@
 numpy==2.4.6
 PyOpenGL==3.1.10
 PyOpenGL-accelerate==3.1.10
-PyQt6==6.11.0
-PyQt6-Qt6==6.11.1
-PyQt6_sip==13.11.1
+# Qt binding: PySide6, not PyQt6. PySide6 is LGPL, which is what allows it
+# inside a paid application; PyQt6 is GPL-or-commercial. viz_common still
+# falls back to PyQt6 when PySide6 is absent, for Bomsai Player's sake.
+PySide6==6.11.2
 PySDL2==0.9.17
 pysdl2-dll==2.32.10
 sounddevice==0.5.5

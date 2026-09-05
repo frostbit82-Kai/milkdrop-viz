@@ -79,5 +79,12 @@ missing OpenGL driver and a preset directory that has not been set yet.
 LICENSES
 --------
 
-See the licenses/ directory. This app renders through projectM, which is
-LGPL-2.1 and ships here as a separate shared library you are free to replace.
+See the licenses/ directory, starting with README-third-party.txt.
+
+This app renders through projectM (LGPL-2.1) and uses Qt 6 with PySide6
+(LGPL-3.0). Both ship as separate shared libraries beside the application
+rather than linked into it, so either can be replaced with a compatible
+build of your own.
+
+Presets and textures are not included and are not ours to license — they
+belong to the people who made them.

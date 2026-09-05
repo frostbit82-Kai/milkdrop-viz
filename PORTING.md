@@ -96,6 +96,14 @@ Done, packaging:
       it. Fullscreen still lands in the screen corner, because that is then the
       window. Verified: window at 100,80 700x500 put the toast at 630,100;
       moving the window to 250,200 moved it to 794,220
+- [x] **Qt binding swapped to PySide6 (LGPL).** PyQt6 is GPL-or-commercial,
+      which a paid closed binary cannot ship. `viz_common` now selects the
+      binding at import and falls back to PyQt6 for Bomsai Player; the
+      installer spec excludes PyQt6 outright. Verified: source and frozen runs
+      on PySide6, the player's 88 tests still pass on PyQt6, and the package
+      contains no PyQt6. Qt and PySide6 ship as separate shared libraries with
+      their LGPL-3.0 text in `licenses/`. Package went 74 MB -> 82 MB.
+      **Windows: re-run `pip install -r requirements.txt`** -- the pins changed
 - [x] **Dark dialogs and an About box.** Settings, key bindings and the
       confirm boxes share `DIALOG_QSS` instead of the system theme, which was
       a light flashbang beside a black visualiser. The right-click menu gains

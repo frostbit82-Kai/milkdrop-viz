@@ -1658,16 +1658,49 @@ def load_projectm(config_dir=None) -> ProjectM4:
 
 # ─── ui ───────────────────────────────────────────────────────────────────────
 
-from PyQt6.QtWidgets import (
-    QApplication, QMenu, QDialog, QFormLayout, QVBoxLayout, QHBoxLayout,
-    QPushButton, QLabel, QSpinBox, QDoubleSpinBox, QComboBox,
-    QDialogButtonBox, QCheckBox, QFrame, QTableWidget, QTableWidgetItem,
-    QHeaderView, QLineEdit, QSizePolicy, QMessageBox, QFileDialog,
-    QSlider, QWidget, QWidgetAction
-)
-from PyQt6.QtCore import Qt, QObject, pyqtSignal, QPoint, QTimer
-from PyQt6.QtGui import (QKeySequence, QFont, QCursor, QAction, QActionGroup,
-                         QPixmap, QColor)
+# ── Qt binding ───────────────────────────────────────────────────────────────
+# PySide6 first. It is LGPL, which is what allows shipping it inside a paid
+# application; PyQt6 would need a commercial licence from Riverbank or the
+# whole source released under the GPL. PyQt6 stays as the fallback because
+# this same file is Bomsai Player's visualiser and that app is PyQt6
+# throughout.
+#
+# Whichever binding is ALREADY imported wins. Two bindings in one process
+# means two copies of the Qt libraries, which does not survive first contact.
+if "PyQt6.QtCore" in sys.modules:
+    from PyQt6 import QtCore, QtGui, QtWidgets
+elif "PySide6.QtCore" in sys.modules:
+    from PySide6 import QtCore, QtGui, QtWidgets
+else:
+    try:
+        from PySide6 import QtCore, QtGui, QtWidgets
+    except ImportError:
+        from PyQt6 import QtCore, QtGui, QtWidgets
+
+QT_BINDING = QtCore.__name__.split(".")[0]
+
+#: The one name that genuinely differs. Everything else this app touches is
+#: spelled the same in both bindings, including the scoped enums.
+Signal = getattr(QtCore, "Signal", None) or QtCore.pyqtSignal
+pyqtSignal = Signal          # the shim modules beside this one still say this
+
+# Bound here rather than imported by name, so the code below reads exactly as
+# it did when this was `from PyQt6.QtWidgets import ...`. The tuples are the
+# authoritative list of what this module and its shims use.
+for _mod, _names in (
+    (QtCore, ("Qt", "QObject", "QPoint", "QTimer", "QEvent")),
+    (QtGui,  ("QKeySequence", "QFont", "QCursor", "QAction", "QActionGroup",
+              "QPixmap", "QColor")),
+    (QtWidgets, ("QApplication", "QMenu", "QDialog", "QFormLayout",
+                 "QVBoxLayout", "QHBoxLayout", "QPushButton", "QLabel",
+                 "QSpinBox", "QDoubleSpinBox", "QComboBox", "QDialogButtonBox",
+                 "QCheckBox", "QFrame", "QTableWidget", "QTableWidgetItem",
+                 "QHeaderView", "QLineEdit", "QSizePolicy", "QMessageBox",
+                 "QFileDialog", "QSlider", "QWidget", "QWidgetAction",
+                 "QListWidget", "QListWidgetItem", "QAbstractItemView")),
+):
+    for _n in _names:
+        globals()[_n] = getattr(_mod, _n)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -2156,7 +2189,6 @@ class KeymapDialog(QDialog):
         layout.addWidget(btns)
 
     def eventFilter(self, obj, event):
-        from PyQt6.QtCore import QEvent
         if obj is self._table and event.type() == QEvent.Type.KeyPress:
             current = self._table.currentItem()
             if current and current.column() == 1:
@@ -2172,30 +2204,29 @@ class KeymapDialog(QDialog):
 
     def _qt_key_to_token(self, qt_key: int, text: str) -> str:
         """Convert a Qt key code to the string token used in keymaps.json."""
-        from PyQt6.QtCore import Qt as _Qt
         special = {
-            _Qt.Key.Key_Return:    "RETURN",
-            _Qt.Key.Key_Enter:     "RETURN",
-            _Qt.Key.Key_Escape:    "ESCAPE",
-            _Qt.Key.Key_Space:     "SPACE",
-            _Qt.Key.Key_Tab:       "TAB",
-            _Qt.Key.Key_Backspace: "BACKSPACE",
-            _Qt.Key.Key_Delete:    "DELETE",
-            _Qt.Key.Key_Left:      "LEFT",
-            _Qt.Key.Key_Right:     "RIGHT",
-            _Qt.Key.Key_Up:        "UP",
-            _Qt.Key.Key_Down:      "DOWN",
-            _Qt.Key.Key_Home:      "HOME",
-            _Qt.Key.Key_End:       "END",
-            _Qt.Key.Key_PageUp:    "PAGEUP",
-            _Qt.Key.Key_PageDown:  "PAGEDOWN",
-            _Qt.Key.Key_ScrollLock: "SCROLLLOCK",
-            _Qt.Key.Key_F1:  "F1",  _Qt.Key.Key_F2:  "F2",
-            _Qt.Key.Key_F3:  "F3",  _Qt.Key.Key_F4:  "F4",
-            _Qt.Key.Key_F5:  "F5",  _Qt.Key.Key_F6:  "F6",
-            _Qt.Key.Key_F7:  "F7",  _Qt.Key.Key_F8:  "F8",
-            _Qt.Key.Key_F9:  "F9",  _Qt.Key.Key_F10: "F10",
-            _Qt.Key.Key_F11: "F11", _Qt.Key.Key_F12: "F12",
+            Qt.Key.Key_Return:    "RETURN",
+            Qt.Key.Key_Enter:     "RETURN",
+            Qt.Key.Key_Escape:    "ESCAPE",
+            Qt.Key.Key_Space:     "SPACE",
+            Qt.Key.Key_Tab:       "TAB",
+            Qt.Key.Key_Backspace: "BACKSPACE",
+            Qt.Key.Key_Delete:    "DELETE",
+            Qt.Key.Key_Left:      "LEFT",
+            Qt.Key.Key_Right:     "RIGHT",
+            Qt.Key.Key_Up:        "UP",
+            Qt.Key.Key_Down:      "DOWN",
+            Qt.Key.Key_Home:      "HOME",
+            Qt.Key.Key_End:       "END",
+            Qt.Key.Key_PageUp:    "PAGEUP",
+            Qt.Key.Key_PageDown:  "PAGEDOWN",
+            Qt.Key.Key_ScrollLock: "SCROLLLOCK",
+            Qt.Key.Key_F1:  "F1",  Qt.Key.Key_F2:  "F2",
+            Qt.Key.Key_F3:  "F3",  Qt.Key.Key_F4:  "F4",
+            Qt.Key.Key_F5:  "F5",  Qt.Key.Key_F6:  "F6",
+            Qt.Key.Key_F7:  "F7",  Qt.Key.Key_F8:  "F8",
+            Qt.Key.Key_F9:  "F9",  Qt.Key.Key_F10: "F10",
+            Qt.Key.Key_F11: "F11", Qt.Key.Key_F12: "F12",
         }
         if qt_key in special:
             return special[qt_key]
@@ -2245,7 +2276,7 @@ class AboutDialog(QDialog):
             # against the dialog.
             logo.setStyleSheet("background:#000000;border-radius:10px;"
                                "padding:6px;margin-bottom:6px;")
-            layout.addWidget(logo, alignment=Qt.AlignmentFlag.AlignCenter)
+            layout.addWidget(logo, 0, Qt.AlignmentFlag.AlignCenter)
 
         def line(html: str, size: int = 13, colour: str = "#e8e8e8",
                  weight: int = 400, space_after: int = 0):
@@ -2276,7 +2307,7 @@ class AboutDialog(QDialog):
         # so here, and shipping the licence text beside the app, is part of
         # what makes including it in a paid app legitimate.
         line("Visuals rendered by <b>projectM 4</b> (LGPL-2.1), with SDL2, "
-             "PyQt6, PyOpenGL and PortAudio. Licence texts ship in the "
+             "PySide6, PyOpenGL and PortAudio. Licence texts ship in the "
              "<i>licenses</i> folder beside the app.",
              size=11, colour="#9a9a9a")
         line("Presets and textures are the work of their own authors and are "
@@ -2299,7 +2330,6 @@ class ContextMenu(QMenu):
 
     def __init__(self, renderer, cfg: dict, ratings: dict, keymaps: dict):
         # Need a real widget parent for proper theming
-        from PyQt6.QtWidgets import QWidget
         self._tmp_parent = QWidget()
         self._tmp_parent.setWindowFlags(
             Qt.WindowType.Tool | Qt.WindowType.FramelessWindowHint

@@ -137,6 +137,19 @@ There is no display in an agent shell and SDL needs one, so:
   on the menu and produced a convincing false reproduction of "it will not
   close".
 
+- **The Qt binding is PySide6, and viz_common picks it at import.** PySide6 is
+  LGPL, which is what lets it ship inside a paid app; PyQt6 is
+  GPL-or-commercial. `viz_common` falls back to PyQt6 when PySide6 is absent,
+  because the same file is Bomsai Player's visualiser and that app is PyQt6
+  throughout -- and it prefers whichever binding is **already imported**, since
+  two bindings in one process means two copies of Qt. Nothing else in this repo
+  may `import PyQt6` or `import PySide6` directly: take Qt names from
+  `viz_common` (or `ui.py`, which re-exports them). The spec excludes PyQt6 so
+  a build machine that happens to have it cannot leak it into the package.
+- **`pyqtSignal` is `Signal` in PySide6**; `viz_common` exports both names. The
+  scoped enums, `exec()`, and everything else this app touches are spelled the
+  same. Keyword arguments are not: `addWidget(w, alignment=...)` works in PyQt6
+  and not in PySide6, so pass those positionally.
 - **A stylesheet replaces native widget drawing, arrows included.** Styling a
   dialog dark leaves QSpinBox and QComboBox as empty boxes with no arrows, and
   Qt does not honour the CSS border-triangle trick (it fills the block). The
