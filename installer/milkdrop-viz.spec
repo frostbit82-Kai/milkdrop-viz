@@ -65,7 +65,9 @@ a = Analysis(
     [str(REPO / "main.py")],
     pathex=[str(REPO)],
     binaries=binaries,
-    datas=[],
+    # The About dialog's logo, and the version it prints. Both land at the
+    # bundle root, which is what _asset_path() looks at when frozen.
+    datas=[(str(REPO / "assets"), "assets"), (str(REPO / "VERSION"), ".")],
     hiddenimports=hiddenimports,
     excludes=["tkinter", "test", "unittest", "pydoc_data", "sdl2dll"],
     noarchive=False,

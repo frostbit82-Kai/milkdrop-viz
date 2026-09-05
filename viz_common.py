@@ -1666,7 +1666,8 @@ from PyQt6.QtWidgets import (
     QSlider, QWidget, QWidgetAction
 )
 from PyQt6.QtCore import Qt, QObject, pyqtSignal, QPoint, QTimer
-from PyQt6.QtGui import QKeySequence, QFont, QCursor, QAction, QActionGroup
+from PyQt6.QtGui import (QKeySequence, QFont, QCursor, QAction, QActionGroup,
+                         QPixmap, QColor)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1688,6 +1689,104 @@ class Bridge(QObject):
 # ─────────────────────────────────────────────────────────────────────────────
 #  Toast notification  (top-right corner, auto-hides)
 # ─────────────────────────────────────────────────────────────────────────────
+
+def _asset_path(*parts) -> str:
+    """A file that ships with the app (the logo, VERSION).
+
+    Beside this module in a checkout; inside the bundle when frozen -- which is
+    `sys._MEIPASS`, the `_internal` directory, NOT the executable's directory.
+    """
+    root = getattr(sys, "_MEIPASS", "") if getattr(sys, "frozen", False) else ""
+    return os.path.join(root or os.path.dirname(os.path.abspath(__file__)), *parts)
+
+
+def app_version() -> str:
+    """Version string from the VERSION file, or 'dev' when it is not there --
+    which is the case in Bomsai Player, where this module also lives."""
+    try:
+        with open(_asset_path("VERSION")) as f:
+            return f.read().strip() or "dev"
+    except OSError:
+        return "dev"
+
+
+#: One dark sheet for every dialog. The visualiser is a black window with a
+#: near-black menu over it, and a settings dialog in the system's light theme
+#: beside that is a flashbang.
+DIALOG_QSS = """
+    QDialog, QWidget, QMessageBox { background: #141414; color: #e8e8e8; }
+    QLabel, QCheckBox, QRadioButton { color: #e8e8e8; background: transparent; }
+    QLineEdit, QSpinBox, QDoubleSpinBox, QComboBox, QAbstractItemView {
+        background: #1e1e1e;
+        color: #e8e8e8;
+        border: 1px solid rgba(255, 255, 255, 40);
+        border-radius: 4px;
+        padding: 4px 6px;
+        selection-background-color: #3a6ea5;
+        selection-color: #ffffff;
+    }
+    /* A stylesheet replaces the native widget drawing wholesale, and that
+       takes the spin and combo arrows with it -- an unstyled spin box comes
+       out as two empty boxes. Qt draws no CSS border-triangle either (it
+       fills the block), so these are real images, generated once and shipped
+       in assets/. */
+    QComboBox::drop-down { border: 0; width: 18px; }
+    QComboBox::down-arrow, QSpinBox::down-arrow, QDoubleSpinBox::down-arrow {
+        image: url(@ARROW_DOWN@); width: 9px; height: 6px;
+    }
+    QSpinBox::up-arrow, QDoubleSpinBox::up-arrow {
+        image: url(@ARROW_UP@); width: 9px; height: 6px;
+    }
+    QSpinBox::up-button, QDoubleSpinBox::up-button,
+    QSpinBox::down-button, QDoubleSpinBox::down-button {
+        background: #2a2a2a; border: 0; width: 16px;
+    }
+    QSpinBox::up-button:hover, QDoubleSpinBox::up-button:hover,
+    QSpinBox::down-button:hover, QDoubleSpinBox::down-button:hover {
+        background: #3a3a3a;
+    }
+    QComboBox QAbstractItemView { border: 1px solid rgba(255, 255, 255, 40); }
+    QPushButton {
+        background: #262626;
+        color: #e8e8e8;
+        border: 1px solid rgba(255, 255, 255, 45);
+        border-radius: 4px;
+        padding: 5px 14px;
+    }
+    QPushButton:hover   { background: #333333; }
+    QPushButton:pressed { background: #1c1c1c; }
+    QPushButton:default { border-color: rgba(255, 255, 255, 90); }
+    QTableWidget {
+        background: #1a1a1a;
+        color: #e8e8e8;
+        gridline-color: rgba(255, 255, 255, 25);
+        selection-background-color: #3a6ea5;
+        selection-color: #ffffff;
+    }
+    QHeaderView::section {
+        background: #232323; color: #dddddd; border: 0; padding: 4px;
+    }
+    QTableCornerButton::section { background: #232323; border: 0; }
+    QFrame[frameShape="4"], QFrame[frameShape="5"] { color: rgba(255, 255, 255, 30); }
+    QSlider::groove:horizontal {
+        height: 4px; background: rgba(255, 255, 255, 45); border-radius: 2px;
+    }
+    QSlider::handle:horizontal {
+        background: #e8e8e8; width: 12px; margin: -5px 0; border-radius: 6px;
+    }
+    QScrollBar:vertical, QScrollBar:horizontal { background: #1a1a1a; border: 0; }
+    QScrollBar::handle { background: rgba(255, 255, 255, 55); border-radius: 4px; }
+    QScrollBar::add-line, QScrollBar::sub-line { height: 0; width: 0; }
+    QToolTip { background: #1e1e1e; color: #e8e8e8;
+               border: 1px solid rgba(255, 255, 255, 40); }
+""".replace(
+    # Absolute paths, forward slashes: Qt's stylesheet parser reads a
+    # backslash as an escape, so a Windows path has to be normalised.
+    "@ARROW_DOWN@", _asset_path("assets", "arrow-down.png").replace("\\", "/")
+).replace(
+    "@ARROW_UP@", _asset_path("assets", "arrow-up.png").replace("\\", "/")
+)
+
 
 class ToastLabel(QLabel):
     """
@@ -1771,6 +1870,7 @@ class SettingsDialog(QDialog):
         super().__init__(parent)
         self.setWindowTitle("Visualizer Settings")
         self.setMinimumWidth(400)
+        self.setStyleSheet(DIALOG_QSS)
 
         layout = QFormLayout(self)
         layout.setSpacing(10)
@@ -1987,6 +2087,7 @@ class KeymapDialog(QDialog):
         self.setWindowTitle("Keyboard Mapping")
         self.setMinimumWidth(560)
         self.setMinimumHeight(480)
+        self.setStyleSheet(DIALOG_QSS)
         self._keymaps = dict(keymaps)
 
         layout = QVBoxLayout(self)
@@ -2000,7 +2101,7 @@ class KeymapDialog(QDialog):
             "Rating 0 = preset excluded from random rotation."
         )
         info.setWordWrap(True)
-        info.setStyleSheet("color: palette(mid); font-size: 12px;")
+        info.setStyleSheet("color: #9a9a9a; font-size: 12px;")
         layout.addWidget(info)
 
         # Table
@@ -2031,7 +2132,7 @@ class KeymapDialog(QDialog):
             note = ACTION_NOTES.get(action, "")
             note_item = QTableWidgetItem(note)
             note_item.setFlags(Qt.ItemFlag.ItemIsEnabled)
-            note_item.setForeground(self.palette().mid())
+            note_item.setForeground(QColor("#9a9a9a"))
             self._table.setItem(row, 2, note_item)
 
         self._table.installEventFilter(self)
@@ -2118,6 +2219,76 @@ class KeymapDialog(QDialog):
 #  Context menu  (spawned at cursor position, no overlay window)
 # ─────────────────────────────────────────────────────────────────────────────
 
+class AboutDialog(QDialog):
+    """Who made this, what it is built on, and where the presets are not."""
+
+    SITE = "https://bomsaisoftware.com"
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("About MilkDrop Visualizer")
+        self.setStyleSheet(DIALOG_QSS)
+        self.setMinimumWidth(430)
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(24, 22, 24, 18)
+        layout.setSpacing(10)
+
+        logo = QLabel()
+        logo.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        pix = QPixmap(_asset_path("assets", "bomsai-logo.png"))
+        if not pix.isNull():
+            logo.setPixmap(pix.scaledToWidth(
+                120, Qt.TransformationMode.SmoothTransformation))
+            # The artwork has a black background of its own, so it is given a
+            # rounded black tile to sit in rather than a hard square edge
+            # against the dialog.
+            logo.setStyleSheet("background:#000000;border-radius:10px;"
+                               "padding:6px;margin-bottom:6px;")
+            layout.addWidget(logo, alignment=Qt.AlignmentFlag.AlignCenter)
+
+        def line(html: str, size: int = 13, colour: str = "#e8e8e8",
+                 weight: int = 400, space_after: int = 0):
+            lab = QLabel(html)
+            lab.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            lab.setWordWrap(True)
+            lab.setOpenExternalLinks(True)     # the site link opens a browser
+            lab.setTextInteractionFlags(
+                Qt.TextInteractionFlag.TextBrowserInteraction)
+            lab.setStyleSheet(
+                f"color:{colour};font-size:{size}px;font-weight:{weight};"
+                f"margin-bottom:{space_after}px;")
+            layout.addWidget(lab)
+            return lab
+
+        line("MilkDrop Visualizer", size=18, weight=600)
+        line(f"Version {app_version()}", size=12, colour="#9a9a9a", space_after=6)
+        line("Created by <b>Adam Bom</b>", size=13)
+        line(f'BomsAI Software &nbsp;·&nbsp; '
+             f'<a href="{self.SITE}" style="color:#e0b44a;">bomsaisoftware.com</a>',
+             size=13, space_after=8)
+
+        sep = QFrame()
+        sep.setFrameShape(QFrame.Shape.HLine)
+        layout.addWidget(sep)
+
+        # projectM is LGPL-2.1 and loaded as a separate shared library. Saying
+        # so here, and shipping the licence text beside the app, is part of
+        # what makes including it in a paid app legitimate.
+        line("Visuals rendered by <b>projectM 4</b> (LGPL-2.1), with SDL2, "
+             "PyQt6, PyOpenGL and PortAudio. Licence texts ship in the "
+             "<i>licenses</i> folder beside the app.",
+             size=11, colour="#9a9a9a")
+        line("Presets and textures are the work of their own authors and are "
+             "not included — point the app at your own copies in Settings.",
+             size=11, colour="#9a9a9a", space_after=4)
+
+        btns = QDialogButtonBox(QDialogButtonBox.StandardButton.Close)
+        btns.rejected.connect(self.reject)
+        btns.accepted.connect(self.accept)
+        layout.addWidget(btns)
+
+
 class ContextMenu(QMenu):
     """
     Right-click menu. Spawned by the renderer when it detects a right-click
@@ -2133,6 +2304,10 @@ class ContextMenu(QMenu):
         self._tmp_parent.setWindowFlags(
             Qt.WindowType.Tool | Qt.WindowType.FramelessWindowHint
         )
+        # Stylesheets inherit down the widget-parent chain, and the confirm
+        # dialogs below are parented to this, so setting it once here makes
+        # every QMessageBox dark too.
+        self._tmp_parent.setStyleSheet(DIALOG_QSS)
         super().__init__(self._tmp_parent)
         self._renderer = renderer
         self._cfg      = cfg
@@ -2184,6 +2359,7 @@ class ContextMenu(QMenu):
 
         self.addAction("⌨   Key bindings…",   self._open_keymaps)
         self.addAction("⚙   Settings…",        self._open_settings)
+        self.addAction("ℹ   About…",           self._open_about)
         self.addSeparator()
 
         self.addAction("✕   Quit",             QApplication.quit)
@@ -2327,6 +2503,9 @@ class ContextMenu(QMenu):
             self._cfg.update(updates)
             self._renderer._save_config(self._cfg)
             self._renderer.apply_settings(updates)
+
+    def _open_about(self):
+        AboutDialog(self._tmp_parent).exec()
 
     def _open_keymaps(self):
         dlg = KeymapDialog(self._keymaps)

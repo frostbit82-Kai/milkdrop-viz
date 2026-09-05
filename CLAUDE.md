@@ -137,6 +137,16 @@ There is no display in an agent shell and SDL needs one, so:
   on the menu and produced a convincing false reproduction of "it will not
   close".
 
+- **A stylesheet replaces native widget drawing, arrows included.** Styling a
+  dialog dark leaves QSpinBox and QComboBox as empty boxes with no arrows, and
+  Qt does not honour the CSS border-triangle trick (it fills the block). The
+  arrows are real 9x6 PNGs in `assets/`, referenced from `DIALOG_QSS` by
+  absolute path with backslashes normalised -- Qt's stylesheet parser treats a
+  backslash as an escape. A Fusion style plus a dark QPalette was tried first
+  and left every child widget light; the stylesheet is what works.
+- **Files that ship with the app go through `_asset_path()`** -- the logo, the
+  arrows, VERSION. Frozen, that is `sys._MEIPASS`; the spec has to list them in
+  `datas` or the About dialog comes up with no logo and version "dev".
 - **SDL calls belong to the thread that made the window.** The toast is
   placed by the Qt thread but has to sit inside the SDL window, so the
   renderer caches `(x, y, w, h)` on every `SDL_WINDOWEVENT` and `window_rect()`

@@ -96,6 +96,12 @@ Done, packaging:
       it. Fullscreen still lands in the screen corner, because that is then the
       window. Verified: window at 100,80 700x500 put the toast at 630,100;
       moving the window to 250,200 moved it to 794,220
+- [x] **Dark dialogs and an About box.** Settings, key bindings and the
+      confirm boxes share `DIALOG_QSS` instead of the system theme, which was
+      a light flashbang beside a black visualiser. The right-click menu gains
+      "About…": BomsAI logo, created by Adam Bom, a link to
+      bomsaisoftware.com, the version, the projectM LGPL-2.1 notice, and the
+      reminder that presets and textures are other people's work
 - [~] **Context menu dismissal** — reported not to close when clicking the
       visualiser behind it; **could not be reproduced here**, windowed or
       fullscreen, source or frozen, with xdotool clicking genuinely outside the
