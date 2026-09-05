@@ -129,6 +129,39 @@ def _to_stereo(arr: "np.ndarray", channels: int) -> "np.ndarray":
     return arr[:, :2]
 
 
+def pulse_sources() -> list:
+    """Capturable PulseAudio/PipeWire sources: [{'name', 'label', 'kind'}].
+
+    Ported from Bomsai Player. `pactl` is the only thing that knows the source
+    *names* parec accepts -- sounddevice reports ALSA device names, which parec
+    silently fails to match and then falls back to the default monitor, so a
+    picker fed from sounddevice looks like it works and ignores the choice.
+    """
+    try:
+        out = subprocess.run(
+            ["pactl", "-f", "json", "list", "sources"],
+            capture_output=True, text=True, timeout=3,
+        )
+        res = []
+        for src in json.loads(out.stdout):
+            name = src.get("name", "")
+            if not name:
+                continue
+            low = name.lower()
+            kind = ("monitor" if low.endswith(".monitor")
+                    else "bluetooth" if "bluez" in low or "bluetooth" in low
+                    else "input")
+            res.append({"name": name,
+                        "label": src.get("description") or name,
+                        "kind": kind})
+        # Monitors first: this app listens to what is playing far more often
+        # than to a microphone.
+        return ([s for s in res if s["kind"] == "monitor"]
+                + [s for s in res if s["kind"] != "monitor"])
+    except Exception:
+        return []
+
+
 class _ParecBackend(_AudioBackend):
     """Linux/PulseAudio, preferred: connects straight to the named source,
     so there are no ALSA plugins in the way and no stream re-routing needed."""
@@ -149,7 +182,7 @@ class _ParecBackend(_AudioBackend):
 
     @staticmethod
     def list_devices() -> list:
-        return []          # sounddevice enumerates; parec takes the same names
+        return [s["name"] for s in pulse_sources()]
 
     @staticmethod
     def default_device_name() -> str:
@@ -656,6 +689,8 @@ class AudioCapture:
 
     def __init__(self, device_name: str):
         self._device_name = device_name
+        #: Input sensitivity, applied in get_chunk(). 1.0 is untouched PCM.
+        self._gain = 1.0
         self._buffer: deque = deque(maxlen=8)  # Keep last 8 audio chunks
         self._lock = threading.Lock()          # guards _buffer only
         self._backend = None
@@ -679,14 +714,22 @@ class AudioCapture:
     @staticmethod
     def list_devices() -> list:
         """Capture device names for this platform, best backend first."""
-        names: list = []
         for cls in _backend_chain():
             if not cls.available():
                 continue
-            for n in cls.list_devices():
-                if n not in names:
-                    names.append(n)
-        return names
+            names = [n for n in cls.list_devices()]
+            # First backend that knows any devices wins outright. Merging the
+            # lists would mix PulseAudio source names with sounddevice's ALSA
+            # ones, and the ALSA spellings are exactly what parec cannot match.
+            if names:
+                return names
+        return []
+
+    @staticmethod
+    def device_labels() -> dict:
+        """{device name: human description} for the pickers. Missing entries
+        just show the raw name, which is what Windows endpoints already are."""
+        return {s["name"]: s["label"] for s in pulse_sources()}
 
     #: Shown in the settings dialog for the empty device name. Stored as "",
     #: so existing config.json files keep working untouched.
@@ -843,11 +886,32 @@ class AudioCapture:
             if not self._open_backend(quiet=self._reopen_failed):
                 self._reopen_failed = True
 
+    def set_gain(self, gain: float):
+        """Input sensitivity: a multiplier on the captured PCM.
+
+        Not a volume control -- nothing is played back. It exists because a
+        quiet source (a Bluetooth monitor especially) reaches projectM as a
+        near-flat waveform however loud it sounds on the speakers, and beat
+        detection then has nothing to work with.
+        """
+        self._gain = max(0.1, min(8.0, float(gain)))
+
+    def gain(self) -> float:
+        return self._gain
+
     def get_chunk(self) -> "np.ndarray | None":
         with self._lock:
-            if self._buffer:
-                return self._buffer.popleft()
-        return None
+            chunk = self._buffer.popleft() if self._buffer else None
+        if chunk is None or self._gain == 1.0:
+            return chunk
+        # A soft limiter rather than a plain multiply. Hard clipping at high
+        # gain turns the PCM into a square wave -- constant maximum energy,
+        # which drives feedback presets to solid white. tanh is close to
+        # linear while the signal is quiet and rounds the peaks instead of
+        # flattening them. (Learned in Bomsai Player, which does this in
+        # SharedAudio; its gain stays there, this one defaults to 1.0, so a
+        # chunk is never scaled twice.)
+        return np.tanh(chunk * self._gain)
 
     def update_device(self, device_name: str):
         """Hot-swap audio device (Audio Source menu / settings dialog)."""
@@ -1598,10 +1662,11 @@ from PyQt6.QtWidgets import (
     QApplication, QMenu, QDialog, QFormLayout, QVBoxLayout, QHBoxLayout,
     QPushButton, QLabel, QSpinBox, QDoubleSpinBox, QComboBox,
     QDialogButtonBox, QCheckBox, QFrame, QTableWidget, QTableWidgetItem,
-    QHeaderView, QLineEdit, QSizePolicy, QMessageBox, QFileDialog
+    QHeaderView, QLineEdit, QSizePolicy, QMessageBox, QFileDialog,
+    QSlider, QWidget, QWidgetAction
 )
 from PyQt6.QtCore import Qt, QObject, pyqtSignal, QPoint, QTimer
-from PyQt6.QtGui import QKeySequence, QFont, QCursor
+from PyQt6.QtGui import QKeySequence, QFont, QCursor, QAction, QActionGroup
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1758,15 +1823,37 @@ class SettingsDialog(QDialog):
         self._audio_dev.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         # Ask the capture layer, not sounddevice: on Windows the list is
         # WASAPI loopback endpoints, which sounddevice cannot enumerate.
-        self._audio_dev.addItem(AudioCapture.AUTO_LABEL)
+        self._audio_dev.addItem(AudioCapture.AUTO_LABEL, "")
         try:
+            labels = AudioCapture.device_labels()
             for name in AudioCapture.list_devices():
-                self._audio_dev.addItem(name)
+                self._audio_dev.addItem(labels.get(name, name), name)
         except Exception:
             pass
         _dev = cfg.get("audio_device", "")
-        self._audio_dev.setCurrentText(_dev or AudioCapture.AUTO_LABEL)
+        # The item text is a description now, so the stored name is matched
+        # against the item *data*. A name from a device that is not plugged in
+        # right now still has to survive, hence the free-text fallback.
+        _idx = self._audio_dev.findData(_dev)
+        if _idx >= 0:
+            self._audio_dev.setCurrentIndex(_idx)
+        else:
+            self._audio_dev.setCurrentText(_dev or AudioCapture.AUTO_LABEL)
         layout.addRow(AudioCapture.device_label(), self._audio_dev)
+
+        # Input sensitivity. Same 0.1x-8x range as the right-click menu's
+        # slider, and the same config key, so the two always agree.
+        self._gain = QSlider(Qt.Orientation.Horizontal)
+        self._gain.setRange(10, 800)
+        self._gain.setValue(int(float(cfg.get("audio_gain", 1.0)) * 100))
+        _gain_lbl = QLabel(f"{self._gain.value()}%")
+        _gain_lbl.setMinimumWidth(46)
+        self._gain.valueChanged.connect(lambda v: _gain_lbl.setText(f"{v}%"))
+        _gain_row = QHBoxLayout()
+        _gain_row.setContentsMargins(0, 0, 0, 0)
+        _gain_row.addWidget(self._gain, 1)
+        _gain_row.addWidget(_gain_lbl)
+        layout.addRow("Input sensitivity:", _gain_row)
 
         # Buttons
         sep = QFrame()
@@ -1819,6 +1906,7 @@ class SettingsDialog(QDialog):
             "hard_cuts_enabled":    self._hard_cuts.isChecked(),
             "hard_cut_sensitivity": round(self._hcs.value(), 1),
             "audio_device":         self._audio_device_value(),
+            "audio_gain":           round(self._gain.value() / 100.0, 2),
         }
 
     def _audio_device_value(self) -> str:
@@ -1828,6 +1916,9 @@ class SettingsDialog(QDialog):
         empty string or it would be handed to the backend as a name to match
         and never found.
         """
+        idx = self._audio_dev.currentIndex()
+        if idx >= 0 and self._audio_dev.itemText(idx) == self._audio_dev.currentText():
+            return self._audio_dev.itemData(idx) or ""
         text = self._audio_dev.currentText().strip()
         return "" if text == AudioCapture.AUTO_LABEL else text
 
@@ -2058,11 +2149,118 @@ class ContextMenu(QMenu):
         self.addAction(border_text, lambda: self._renderer.request_toggle_borderless())
         self.addSeparator()
 
+        self._build_audio_menu()
+        self.addSeparator()
+
         self.addAction("⌨   Key bindings…",   self._open_keymaps)
         self.addAction("⚙   Settings…",        self._open_settings)
         self.addSeparator()
 
         self.addAction("✕   Quit",             QApplication.quit)
+
+    def _build_audio_menu(self):
+        """Source picker and sensitivity, without going through Settings.
+
+        The device list is rebuilt on every right-click, so something plugged
+        in a moment ago is in it. Both entries write the same config keys the
+        settings dialog does.
+        """
+        sub = self.addMenu("🎧   Audio source")
+        sub.setStyleSheet(self.styleSheet())
+        group = QActionGroup(sub)
+        group.setExclusive(True)
+        current = self._cfg.get("audio_device", "")
+
+        def choose(name: str):
+            self._cfg["audio_device"] = name
+            self._renderer._save_config(self._cfg)
+            self._renderer.apply_settings({"audio_device": name})
+
+        try:
+            devices = AudioCapture.list_devices()
+            labels = AudioCapture.device_labels()
+        except Exception:
+            devices, labels = [], {}
+        for name in [""] + devices:
+            text = labels.get(name, name)
+            act = QAction(text[:52] + ("…" if len(text) > 52 else "")
+                          if name else AudioCapture.AUTO_LABEL, sub)
+            act.setToolTip(name)
+            act.setCheckable(True)
+            act.setChecked(name == current)
+            act.triggered.connect(lambda _, n=name: choose(n))
+            group.addAction(act)
+            sub.addAction(act)
+            if not name:
+                sub.addSeparator()
+        if not devices:
+            none = QAction("(no capture devices found)", sub)
+            none.setEnabled(False)
+            sub.addAction(none)
+
+        # Sensitivity. Live while dragging so the effect is visible against
+        # the running visuals; written to config only on release, because
+        # every drag step would otherwise rewrite config.json.
+        sub.addSeparator()
+        row = QWidget()
+        row_l = QHBoxLayout(row)
+        row_l.setContentsMargins(14, 4, 14, 4)
+        row_l.setSpacing(8)
+        gain = float(self._cfg.get("audio_gain", 1.0))
+        lbl = QLabel(f"🔉 Sensitivity {int(gain * 100)}%")
+        lbl.setStyleSheet("color:#ddd;font-size:12px;min-width:130px;")
+        slider = QSlider(Qt.Orientation.Horizontal)
+        slider.setRange(10, 800)             # 0.1x - 8x
+        slider.setValue(int(gain * 100))
+        slider.setFixedWidth(160)
+
+        def preview(v):
+            lbl.setText(f"🔉 Sensitivity {v}%")
+            self._renderer.apply_settings({"audio_gain": v / 100.0})
+
+        # What is on disk. NOT self._cfg["audio_gain"]: apply_settings hands
+        # the render loop the very same dict object, which updates it as soon
+        # as the preview lands -- so comparing against it would find the value
+        # already there and skip every save. (It did, silently.)
+        on_disk = [gain]
+
+        def store():
+            g = round(slider.value() / 100.0, 2)
+            if g == on_disk[0]:
+                return
+            on_disk[0] = g
+            self._cfg["audio_gain"] = g
+            self._renderer._save_config(self._cfg)
+            _log(f"[audio] input sensitivity {g:g}x")
+
+        # Saving is on a short timer rather than on sliderReleased: that
+        # signal only fires for a handle drag, so a click on the groove or an
+        # arrow key would change the sound and never write it down. Measured
+        # -- a menu closed by ESCAPE does not emit aboutToHide for a submenu
+        # either, so that is not a fallback. The timer is parented to the row
+        # so it dies with the menu.
+        save_timer = QTimer(row)
+        save_timer.setSingleShot(True)
+        save_timer.setInterval(250)
+        save_timer.timeout.connect(store)
+
+        def on_change(v):
+            preview(v)
+            save_timer.start()
+
+        slider.valueChanged.connect(on_change)
+        row_l.addWidget(lbl)
+        row_l.addWidget(slider)
+        wa = QWidgetAction(sub)
+        wa.setDefaultWidget(row)
+        sub.addAction(wa)
+
+        def reset():
+            self._cfg["audio_gain"] = 1.0
+            self._renderer._save_config(self._cfg)
+            self._renderer.apply_settings({"audio_gain": 1.0})
+
+        sub.addAction("↺   Reset sensitivity (100%)", reset)
 
     def _confirm_delete_zero(self):
         n = sum(1 for r in self._ratings.values() if r == 0)
@@ -2271,6 +2469,7 @@ class Renderer:
         self._pm      = None
 
         self._audio = AudioCapture(cfg.get("audio_device", ""))
+        self._audio.set_gain(cfg.get("audio_gain", 1.0))
 
         self._preset_start    = 0.0
         self._preset_duration = 0.0
@@ -2641,7 +2840,13 @@ class Renderer:
 
     def apply_settings(self, updates: dict):
         with self._lock:
-            self._req_settings_updates = updates
+            # Merged, not replaced. The sensitivity slider calls this on every
+            # drag step, and a plain assignment would drop a device change the
+            # render loop had not picked up yet.
+            if self._req_settings_updates is None:
+                self._req_settings_updates = dict(updates)
+            else:
+                self._req_settings_updates.update(updates)
 
     def update_keymaps(self, new_km: dict):
         with self._lock:
@@ -2765,6 +2970,8 @@ class Renderer:
                             0 if (not _f or _f <= 0) else 1)
                     if "audio_device" in updates:
                         self._audio.update_device(updates["audio_device"])
+                    if "audio_gain" in updates:
+                        self._audio.set_gain(updates["audio_gain"])
                 if self._req_geometry is not None:
                     gx, gy, gw, gh = self._req_geometry
                     self._req_geometry = None

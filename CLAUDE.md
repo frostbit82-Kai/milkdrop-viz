@@ -137,6 +137,19 @@ There is no display in an agent shell and SDL needs one, so:
   on the menu and produced a convincing false reproduction of "it will not
   close".
 
+- **The config dict is shared, so a "did it change?" guard can lie.**
+  `apply_settings()` hands the render loop the *same* dict object the menu and
+  the settings dialog hold, and the loop does `self._cfg.update(updates)`. The
+  sensitivity slider previews live through that path, so by the time its save
+  timer fired, `self._cfg["audio_gain"]` already held the new value and the
+  "unchanged, skip the write" test skipped every write. Nothing errored and the
+  sound was correct -- only the persistence was missing. Compare against a value
+  you know reached disk, not against the shared config.
+- **`sliderReleased` fires for a handle drag and nothing else.** A click on the
+  groove or an arrow key changes the value without it. And a submenu closed by
+  ESCAPE does not emit `aboutToHide` either -- both measured. A short
+  single-shot timer restarted on `valueChanged` is what actually covers every
+  way a slider moves.
 - **A frozen build changes where three things live, and each broke separately.**
   `config.py` moves `BASE_DIR` to the OS config directory when `sys.frozen` is
   set, because the install directory is replaced wholesale on upgrade.

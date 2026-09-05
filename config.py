@@ -57,6 +57,7 @@ DEFAULT_CONFIG = {
     "preset_dir":           "",
     "texture_dir":          "",
     "audio_device":         "",  # Empty = auto-detect at runtime
+    "audio_gain":           1.0,  # Input sensitivity multiplier (0.1-8.0)
     "preset_duration":      30,
     "preset_random_extra":  15,
     "fps":                  60,

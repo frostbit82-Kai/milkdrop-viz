@@ -79,6 +79,16 @@ Done, packaging:
       empty method, so every "Mode: Random" / "Hard cuts: ON" / "Sorted by
       rating" was dropped on the floor. Verified with xdotool driving the frozen
       build: mode and hard-cut toasts now render. Locking a preset toasts too
+- [x] **Audio source picker and input sensitivity**, both ported from Bomsai
+      Player. A new "Audio source" submenu on the right-click menu switches
+      capture device live and carries a sensitivity slider (0.1x-8x, soft
+      limited with tanh); the settings dialog gets the same slider. The device
+      list now comes from `pactl` rather than sounddevice, which also fixes a
+      silent bug: sounddevice reports ALSA device names, parec cannot match
+      them, and it fell back to the default monitor -- so picking a device
+      appeared to work and did nothing. Verified live under Xvfb: sensitivity
+      previews, persists and logs; picking the analog input actually reopened
+      parec on it
 - [~] **Context menu dismissal** — reported not to close when clicking the
       visualiser behind it; **could not be reproduced here**, windowed or
       fullscreen, source or frozen, with xdotool clicking genuinely outside the
