@@ -89,6 +89,13 @@ Done, packaging:
       appeared to work and did nothing. Verified live under Xvfb: sensitivity
       previews, persists and logs; picking the analog input actually reopened
       parec on it
+- [x] **Toasts appear over the visualiser window**, top-right, instead of the
+      top-right of the screen. The toast is its own top-level window (the
+      visuals are an SDL surface with no Qt widget above them), so the renderer
+      caches its window rect on every SDL window event and the toast asks for
+      it. Fullscreen still lands in the screen corner, because that is then the
+      window. Verified: window at 100,80 700x500 put the toast at 630,100;
+      moving the window to 250,200 moved it to 794,220
 - [~] **Context menu dismissal** — reported not to close when clicking the
       visualiser behind it; **could not be reproduced here**, windowed or
       fullscreen, source or frozen, with xdotool clicking genuinely outside the

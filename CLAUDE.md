@@ -137,6 +137,11 @@ There is no display in an agent shell and SDL needs one, so:
   on the menu and produced a convincing false reproduction of "it will not
   close".
 
+- **SDL calls belong to the thread that made the window.** The toast is
+  placed by the Qt thread but has to sit inside the SDL window, so the
+  renderer caches `(x, y, w, h)` on every `SDL_WINDOWEVENT` and `window_rect()`
+  hands back the cache. Do not "simplify" that into a `SDL_GetWindowPosition`
+  call from the UI side.
 - **The config dict is shared, so a "did it change?" guard can lie.**
   `apply_settings()` hands the render loop the *same* dict object the menu and
   the settings dialog hold, and the loop does `self._cfg.update(updates)`. The

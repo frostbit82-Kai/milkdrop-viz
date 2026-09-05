@@ -93,6 +93,11 @@ class App:
 
         self._menu = None
 
+        # Toasts sit in the top-right of the visualiser window, not the
+        # screen: the window is usually not fullscreen, and a status message
+        # about it belongs over it.
+        self._toast.set_anchor(self._renderer.window_rect)
+
         self._bridge.request_quit.connect(self._on_quit)
         self._bridge.show_toast.connect(self._toast.show_message)
         self._bridge.show_context_menu.connect(self._show_context_menu)

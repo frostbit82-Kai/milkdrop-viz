@@ -1691,11 +1691,18 @@ class Bridge(QObject):
 
 class ToastLabel(QLabel):
     """
-    Frameless always-on-top label that appears in the top-right corner
-    of the screen for a short duration then fades out.
+    Frameless always-on-top label that appears in the top-right corner of the
+    visualiser window for a short duration, then hides.
+
+    It is a separate top-level window (the visuals are an SDL surface, with no
+    Qt widget over them to draw into), so where it goes has to be worked out
+    from the SDL window's geometry -- see set_anchor.
     """
     def __init__(self):
         super().__init__()
+        #: Callable returning the visualiser's (x, y, w, h), or None. Unset
+        #: means the primary screen, which is where this used to always go.
+        self._anchor = None
         self.setWindowFlags(
             Qt.WindowType.FramelessWindowHint |
             Qt.WindowType.WindowStaysOnTopHint |
@@ -1719,13 +1726,36 @@ class ToastLabel(QLabel):
         self._hide_timer.setSingleShot(True)
         self._hide_timer.timeout.connect(self.hide)
 
+    def set_anchor(self, rect_fn):
+        """Give the toast something to sit inside: a callable returning the
+        visualiser window's (x, y, w, h). Called on the Qt thread every time a
+        message is shown, so it must not touch SDL directly."""
+        self._anchor = rect_fn
+
     def show_message(self, text: str, duration_ms: int = 2000):
         self.setText(text)
         self.adjustSize()
-        # Position: top-right of the primary screen, 20px inset
-        screen = QApplication.primaryScreen().geometry()
-        x = screen.right()  - self.width()  - 20
-        y = screen.top()    + 20
+        screen = QApplication.primaryScreen().availableGeometry()
+        rect = None
+        if self._anchor is not None:
+            try:
+                rect = self._anchor()
+            except Exception:
+                rect = None
+        if rect:
+            wx, wy, ww, wh = rect
+            # Top-right of the window, 20px in. max() keeps it from hanging off
+            # the left when the window is narrower than the message.
+            x = max(wx + 8, wx + ww - self.width() - 20)
+            y = wy + 20
+        else:
+            x = screen.right() - self.width() - 20
+            y = screen.top()   + 20
+        # Clamped to the screen regardless: an embedded build parks its SDL
+        # window at -10000 until the host adopts it, and a toast sent in that
+        # window would otherwise be invisible.
+        x = min(max(x, screen.left()), screen.right() - self.width())
+        y = min(max(y, screen.top()), screen.bottom() - self.height())
         self.move(x, y)
         self.show()
         self.raise_()
@@ -2467,6 +2497,11 @@ class Renderer:
         self._window  = None
         self._context = None
         self._pm      = None
+        #: Last known (x, y, w, h) of the SDL window, refreshed on window
+        #: events. Cached rather than queried on demand because the Qt thread
+        #: reads it (to place the toast) and SDL calls belong to the thread
+        #: that created the window.
+        self._win_rect = None
 
         self._audio = AudioCapture(cfg.get("audio_device", ""))
         self._audio.set_gain(cfg.get("audio_gain", 1.0))
@@ -2542,6 +2577,8 @@ class Renderer:
         if not self._window:
             print(f"[renderer] SDL_CreateWindow failed: {sdl2.SDL_GetError()}")
             return False
+
+        self._track_window()
 
         self._context = sdl2.SDL_GL_CreateContext(self._window)
         if not self._context:
@@ -2935,6 +2972,10 @@ class Renderer:
                         nh = event.window.data2
                         glViewport(0, 0, nw, nh)
                         self._pm.set_window_size(nw, nh)
+                    # Any window event may have moved or resized us: this one
+                    # branch covers moves, fullscreen, restore and maximise
+                    # without a case for each.
+                    self._track_window()
 
             if not self._running:
                 break
@@ -2976,6 +3017,7 @@ class Renderer:
                     gx, gy, gw, gh = self._req_geometry
                     self._req_geometry = None
                     sdl2.SDL_SetWindowSize(self._window, gw, gh)
+                    self._track_window()
                     glViewport(0, 0, gw, gh)
                     if self._pm:
                         self._pm.set_window_size(gw, gh)
@@ -3297,6 +3339,21 @@ class Renderer:
         self._bridge.playlist_changed.emit()
 
     # ── Fullscreen ────────────────────────────────────────────────────────
+
+    def _track_window(self):
+        """Refresh the cached window rect. Render thread only."""
+        if not self._window:
+            return
+        x, y = ctypes.c_int(), ctypes.c_int()
+        w, h = ctypes.c_int(), ctypes.c_int()
+        sdl2.SDL_GetWindowPosition(self._window, ctypes.byref(x), ctypes.byref(y))
+        sdl2.SDL_GetWindowSize(self._window, ctypes.byref(w), ctypes.byref(h))
+        self._win_rect = (x.value, y.value, w.value, h.value)
+
+    def window_rect(self):
+        """(x, y, w, h) of the visualiser window, or None before it exists.
+        Safe to call from any thread -- it reads the cache, not SDL."""
+        return self._win_rect
 
     def _toggle_fullscreen(self):
         flags = sdl2.SDL_GetWindowFlags(self._window)
