@@ -96,6 +96,16 @@ Done, packaging:
       it. Fullscreen still lands in the screen corner, because that is then the
       window. Verified: window at 100,80 700x500 put the toast at 630,100;
       moving the window to 250,200 moved it to 794,220
+- [x] **Borderless has a key binding** (`b` by default) and appears in the key
+      bindings dialog like every other action. `load_keymaps_from` merges over
+      DEFAULT_KEYMAPS, so an existing keymaps.json picks it up
+- [x] **First run says something.** With no presets loaded -- a fresh install,
+      or a folder that has moved -- the renderer emits `no_presets` and the app
+      opens Settings with a toast, once per launch, instead of showing a black
+      window and a warning on stdout that nobody launching from a menu entry
+      will read. Changing the preset or texture directory now takes effect
+      immediately: the texture search paths are re-applied and the new folder
+      is loaded the way startup does
 - [x] **Qt binding swapped to PySide6 (LGPL).** PyQt6 is GPL-or-commercial,
       which a paid closed binary cannot ship. `viz_common` now selects the
       binding at import and falls back to PyQt6 for Bomsai Player; the

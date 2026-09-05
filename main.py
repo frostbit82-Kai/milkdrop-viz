@@ -37,7 +37,8 @@ from config import load_config, load_ratings, load_keymaps
 from renderer import Renderer
 # Qt comes through the ui shim, which gets it from viz_common -- that is where
 # the PySide6/PyQt6 choice is made, and naming a binding here would undo it.
-from ui import Bridge, ContextMenu, ToastLabel, QApplication, Signal
+from ui import (Bridge, ContextMenu, ToastLabel, SettingsDialog, QDialog,
+                QApplication, Signal)
 
 
 def _parse_geometry(geo_str: str) -> tuple[int, int, int, int] | None:
@@ -91,6 +92,7 @@ class App:
             self._renderer._borderless_on_start = True
 
         self._menu = None
+        self._asked_for_presets = False
 
         # Toasts sit in the top-right of the visualiser window, not the
         # screen: the window is usually not fullscreen, and a status message
@@ -108,6 +110,7 @@ class App:
         # the toast on purpose: it fires on the automatic rotation as well, and
         # a banner every thirty seconds is not a status update.
         self._bridge.status_message.connect(self._toast.show_message)
+        self._bridge.no_presets.connect(self._on_no_presets)
         self._bridge.lock_changed.connect(
             lambda locked: self._toast.show_message(
                 "Preset locked" if locked else "Preset unlocked"))
@@ -142,6 +145,28 @@ class App:
         """The render loop saw a click or key that Qt's popup grab missed."""
         if self._menu is not None:
             self._menu.close()
+
+    def _on_no_presets(self, tried_dir: str):
+        """Nothing loaded — first run, or the preset folder has moved.
+
+        The visualiser is black and there is nothing to click inside it, so
+        open the one dialog that fixes it. Once per launch: cancelling is an
+        answer, not a reason to ask again.
+        """
+        if self._asked_for_presets:
+            return
+        self._asked_for_presets = True
+        self._toast.show_message(
+            "No presets loaded — choose a folder in Settings", 6000)
+        self._open_settings()
+
+    def _open_settings(self):
+        dlg = SettingsDialog(self._cfg)
+        if dlg.exec() == QDialog.DialogCode.Accepted:
+            updates = dlg.get_config()
+            self._cfg.update(updates)
+            self._renderer._save_config(self._cfg)
+            self._renderer.apply_settings(updates)
 
     def _toggle_browser(self):
         if self._browser is None:

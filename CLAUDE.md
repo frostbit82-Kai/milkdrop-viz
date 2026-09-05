@@ -137,6 +137,11 @@ There is no display in an agent shell and SDL needs one, so:
   on the menu and produced a convincing false reproduction of "it will not
   close".
 
+- **`_do_reload_playlist` is for delete-zero, not for a new preset folder.**
+  It rebuilds the playlist through `projectm_playlist_add_presets`, which some
+  projectM builds do not export; there it leaves an empty playlist and every
+  name reads "Unknown". A directory change goes through
+  `_reload_preset_dir()`, which takes the same route startup does.
 - **The Qt binding is PySide6, and viz_common picks it at import.** PySide6 is
   LGPL, which is what lets it ship inside a paid app; PyQt6 is
   GPL-or-commercial. `viz_common` falls back to PyQt6 when PySide6 is absent,

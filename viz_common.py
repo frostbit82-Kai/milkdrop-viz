@@ -1006,6 +1006,7 @@ DEFAULT_KEYMAPS = {
     "rate_down":        "-",
     "quit":             "ESCAPE",
     "toggle_mode":      "m",
+    "toggle_borderless": "b",
     "fullscreen_mouse": "DBLCLICK",
 }
 
@@ -1717,6 +1718,7 @@ class Bridge(QObject):
     toggle_preset_browser = pyqtSignal()        # show/hide the preset browser
     close_context_menu = pyqtSignal()           # host should dismiss its menu
     playlist_changed   = pyqtSignal()           # order/contents changed (sort, delete, mode)
+    no_presets         = pyqtSignal(str)        # nothing loaded; arg is the directory tried
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -2104,11 +2106,13 @@ ACTION_LABELS = {
     "rate_down":        "Rate down (−1)",
     "quit":             "Quit",
     "toggle_mode":      "Toggle random / sequential mode",
+    "toggle_borderless": "Toggle borderless window",
     "fullscreen_mouse": "Toggle fullscreen (mouse)",
 }
 
 ACTION_NOTES = {
     "fullscreen_mouse": "Value must be DBLCLICK",
+    "toggle_borderless": "Drops the title bar; the window stays its size",
     "lock":             "SCROLLLOCK uses the Scroll Lock key",
     "rate_down":        "Rating 0 excludes preset from random rotation",
 }
@@ -2243,7 +2247,19 @@ class KeymapDialog(QDialog):
                 item.setText(DEFAULT_KEYMAPS.get(action, ""))
 
     def get_keymaps(self) -> dict:
-        return dict(self._keymaps)
+        """What the table shows, not what was handed in.
+
+        Rows fall back to DEFAULT_KEYMAPS for an action the loaded file did
+        not have -- a binding added in a later version -- so reading the table
+        is what writes a complete keymaps.json back out.
+        """
+        km = dict(self._keymaps)
+        for row in range(self._table.rowCount()):
+            item = self._table.item(row, 1)
+            action = item.data(Qt.ItemDataRole.UserRole) if item else None
+            if action:
+                km[action] = item.text().strip()
+        return km
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -2899,12 +2915,35 @@ class Renderer:
 
         preset_dir = self._cfg.get("preset_dir", "")
 
-        # Texture search paths — texture-sampling presets render white
-        # without these
-        # The configured directory comes first and the rest are guesses kept for
-        # installs that never set one. Nothing is bundled, so an empty setting
-        # and no lucky guess means texture-sampling presets render white — which
-        # is why the settings dialog asks for this up front.
+        self._apply_texture_paths()
+
+        count = 0
+        if not os.path.isdir(preset_dir):
+            print(f"[renderer] WARNING: preset dir not found: {preset_dir!r}")
+        else:
+            count = self._pm.load_preset_dir(preset_dir)
+            print(f"[renderer] Loaded {count} presets from {preset_dir}")
+
+        if count == 0:
+            # Nothing bundles presets, so this is the normal first run -- and
+            # it is also what a moved or emptied folder looks like. Either way
+            # the window is black and stdout is not where someone who launched
+            # this from a menu entry is looking, so the host is told to ask.
+            self._bridge.no_presets.emit(preset_dir)
+
+        return True
+
+    def _apply_texture_paths(self):
+        """Point projectM at the texture directories.
+
+        Texture-sampling presets render solid white without these. The
+        configured directory leads and the rest are guesses kept for installs
+        that never set one -- nothing is bundled. Called again when Settings
+        changes a directory, so neither field needs a restart.
+        """
+        if not self._pm or not hasattr(self._pm, "set_texture_search_paths"):
+            return
+        preset_dir = self._cfg.get("preset_dir", "")
         tex_paths = [p for p in (
             self._cfg.get("texture_dir", "").strip(),
             os.path.join(os.path.dirname(__file__), "textures"),
@@ -2912,16 +2951,8 @@ class Renderer:
             os.path.expanduser("~/projectm-textures"),
             preset_dir,
         ) if p and os.path.isdir(p)]
-        if tex_paths and hasattr(self._pm, "set_texture_search_paths"):
+        if tex_paths:
             self._pm.set_texture_search_paths(tex_paths)
-
-        if not os.path.isdir(preset_dir):
-            print(f"[renderer] WARNING: preset dir not found: {preset_dir}")
-        else:
-            count = self._pm.load_preset_dir(preset_dir)
-            print(f"[renderer] Loaded {count} presets from {preset_dir}")
-
-        return True
 
     def _create_projectm(self) -> ProjectM4:
         """Factory hook — override to pass a different config_dir."""
@@ -3222,6 +3253,10 @@ class Renderer:
                         self._audio.update_device(updates["audio_device"])
                     if "audio_gain" in updates:
                         self._audio.set_gain(updates["audio_gain"])
+                    if "preset_dir" in updates or "texture_dir" in updates:
+                        self._apply_texture_paths()
+                    if "preset_dir" in updates:
+                        self._reload_preset_dir()
                 if self._req_geometry is not None:
                     gx, gy, gw, gh = self._req_geometry
                     self._req_geometry = None
@@ -3313,6 +3348,8 @@ class Renderer:
             self._do_toggle_hard_cuts()
         elif km("toggle_mode", sym, scancode):
             self._do_toggle_mode()
+        elif km("toggle_borderless", sym, scancode):
+            self._toggle_borderless()
         elif km("fullscreen", sym, scancode) or km("fullscreen_alt", sym, scancode):
             self._toggle_fullscreen()
         elif km("rate_up", sym, scancode):
@@ -3479,6 +3516,36 @@ class Renderer:
         except Exception as e:
             print(f"[renderer] goto failed: {e}", flush=True)
 
+    def _reload_preset_dir(self):
+        """Load the preset directory Settings just changed to.
+
+        Deliberately not _do_reload_playlist: that one rebuilds the playlist
+        from the paths it already knows via projectm_playlist_add_presets,
+        which some projectM builds do not export -- there it silently leaves
+        an empty playlist behind and every preset name reads "Unknown". This
+        takes the same route startup does, which works on every build.
+        """
+        if not self._pm:
+            return
+        d = self._cfg.get("preset_dir", "")
+        if not os.path.isdir(d):
+            print(f"[renderer] preset dir not usable: {d!r}", flush=True)
+            self._bridge.status_message.emit("Preset folder not found")
+            return
+        try:
+            self._pm.clear_playlist()
+            count = self._pm.load_preset_dir(d)
+            if count:
+                self._pm.set_playlist_position(0, hard_cut=True)
+            self._rated_history.clear()          # native indices changed
+            self._preset_start = _time.monotonic()
+            print(f"[renderer] Loaded {count} presets from {d}", flush=True)
+            self._bridge.status_message.emit(f"Loaded {count} presets")
+            self._bridge.playlist_changed.emit()
+            self._emit_current_preset()
+        except Exception as e:
+            print(f"[renderer] loading preset dir failed: {e}", flush=True)
+
     def _do_reload_playlist(self):
         """Rebuild the playlist from whatever .milk files remain on disk (used
         after delete-zero removes files)."""
@@ -3489,7 +3556,15 @@ class Renderer:
             paths = [p for p, _ in self._all_preset_files()]
             self._rebuild_playlist(paths)
             self._rated_history.clear()   # native indices changed
-            self._seek_to_stem(cur)
+            if cur and cur != "Unknown":
+                self._seek_to_stem(cur)
+            elif paths:
+                # Nothing was playing: first run, or the preset directory was
+                # wrong until a moment ago. Start on the first preset rather
+                # than leaving projectM's idle screen up until the next
+                # auto-advance, which is half a minute by default.
+                self._pm.set_playlist_position(0, hard_cut=True)
+                self._preset_start = _time.monotonic()
             self._bridge.status_message.emit(f"Playlist: {len(paths)} presets")
             self._bridge.playlist_changed.emit()
             self._emit_current_preset()
