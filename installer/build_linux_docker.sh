@@ -22,15 +22,20 @@ if [ -z "$PROJECTM_SRC" ]; then
     for c in "$REPO/../projectm" \
              "/run/media/fr0st/AE86E49C86E465F5/dev/projectm" \
              "$HOME/dev/projectm"; do
-        [ -f "$c/CMakeLists.txt" ] && { PROJECTM_SRC="$(cd "$c" && pwd)"; break; }
+        # Both files, not just the top one: a tree whose submodules were never
+        # initialised has the outer CMakeLists.txt and nothing under vendor/,
+        # and cmake only says so two minutes into the container build.
+        [ -f "$c/CMakeLists.txt" ] && [ -f "$c/vendor/projectm-eval/CMakeLists.txt" ] \
+            && { PROJECTM_SRC="$(cd "$c" && pwd)"; break; }
     done
 fi
 REBUILD_PM=1
-if [ ! -f "${PROJECTM_SRC:-/nonexistent}/CMakeLists.txt" ]; then
-    # No source tree — the drive holding it may not even be mounted. If a
-    # previous container build already left its libprojectM in vendor/, reuse
-    # that rather than refusing: it was built in this same image, so it has
-    # the same floor. The floor check at the end is what proves it.
+if [ ! -f "${PROJECTM_SRC:-/nonexistent}/vendor/projectm-eval/CMakeLists.txt" ]; then
+    # No usable source tree — the drive holding it may not be mounted, or the
+    # one that is there has no submodules. If a previous container build
+    # already left its libprojectM in vendor/, reuse that rather than
+    # refusing: it was built in this same image, so it has the same floor.
+    # The floor check at the end is what proves it.
     if [ -f "$HERE/vendor/linux/libprojectM-4.so.4" ]; then
         REBUILD_PM=0
         echo "==> No projectM source tree; reusing installer/vendor/linux/"
