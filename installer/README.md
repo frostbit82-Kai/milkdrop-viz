@@ -66,12 +66,33 @@ Steam itself.
 
 ## Windows
 
-Not built yet. The spec is already cross-platform: it picks `SDL2.dll` instead of
-`libSDL2-2.0.so` and expects `PROJECTM_LIB_DIR` to hold `projectM-4.dll`,
-`projectM-4-playlist.dll` and `glew32.dll` — the three that `setup_windows.ps1`
-gathers into `C:\dev\projectm-deploy`. What is missing is the counterpart to
-`build_linux.sh` and an installer format (Inno Setup is the obvious one), plus
-code signing.
+    powershell -ExecutionPolicy Bypass -File installer\build_windows.ps1
+
+Produces `installer\dist\MilkDropVisualizer-<version>-win64-setup.exe` and the
+portable tree beside it. It freezes with the same cross-platform spec the Linux
+build uses — the spec picks `SDL2.dll` over `libSDL2-2.0.so` and reads
+`PROJECTM_LIB_DIR` for `projectM-4.dll`, `projectM-4-playlist.dll` and
+`glew32.dll` — then hands the staged tree to Inno Setup 6. `-SkipInstaller`
+stops after freezing, which is what you want while iterating on the app.
+
+Those three DLLs are vendored at `vendor/windows/` for the same reason as the
+Linux `.so` files, and `PROJECTM_LIB_DIR` overrides them. `setup_windows.ps1`
+builds fresh ones and gathers them into `C:\dev\projectm-deploy`.
+
+**The release build is windowed**, so there is no console box behind the
+visuals — and therefore no log at all, since `print()` is a no-op when
+`sys.stdout` is None. `MILKDROP_CONSOLE=1` builds a console version instead,
+which is the only way to see why a frozen build failed.
+
+Still missing: **code signing**. Unsigned, SmartScreen shows its "Windows
+protected your PC" wall on first run. Steam delivers the app through its own
+client, so this matters most for a direct download.
+
+## One version, both platforms
+
+`VERSION` drives both scripts, and both artifacts are named from it. Bump it
+once and rebuild **both** packages from that commit, or two different builds
+end up wearing the same version number.
 
 ## What is deliberately absent
 
