@@ -1129,6 +1129,22 @@ def _bundled_libs(*names) -> list:
     return [os.path.join(r, n) for r in roots if r for n in names]
 
 
+def _vendored_libs(*names) -> list:
+    """Absolute paths to the binaries the installers ship, in the checkout.
+
+    These go last, after every system location, so a developer's own build
+    still wins where there is one. On Windows there is no system location at
+    all, which used to mean a source run needed either a DLL beside the app or
+    a projectm_lib path in config.json pointing at wherever it was built.
+    Paths that do not exist are ignored by the caller, so this is inert for an
+    install that has no installer/ directory beside it.
+    """
+    plat = "windows" if sys.platform == "win32" else "linux"
+    root = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                        "installer", "vendor", plat)
+    return [os.path.join(root, n) for n in names]
+
+
 # Cross-platform library discovery
 try:
     from pathlib import Path as PathlibPath
@@ -1146,7 +1162,8 @@ except Exception:
     def get_projectm_candidates():
         if sys.platform == "win32":
             return _bundled_libs("projectM-4.dll", "libprojectM-4.dll") + [
-                "libprojectM-4.dll", "projectM-4.dll"]
+                "libprojectM-4.dll", "projectM-4.dll"] + _vendored_libs(
+                "projectM-4.dll")
         elif sys.platform == "darwin":
             return ["/usr/local/lib/libprojectM-4.dylib", "/opt/homebrew/lib/libprojectM-4.dylib"]
         else:
@@ -1156,7 +1173,7 @@ except Exception:
                 "/usr/local/lib/libprojectM-4.so.4",
                 "/usr/local/lib/libprojectM-4.so.4.1.0",
                 "/usr/lib/x86_64-linux-gnu/libprojectM-4.so",
-            ]
+            ] + _vendored_libs("libprojectM-4.so.4")
 
     def get_projectm_playlist_candidates():
         if sys.platform == "win32":
@@ -1165,7 +1182,8 @@ except Exception:
             # The prefixed name is kept for MinGW/MSYS2 builds, matching the core list.
             return _bundled_libs(
                 "projectM-4-playlist.dll", "libprojectM-4-playlist.dll") + [
-                "libprojectM-4-playlist.dll", "projectM-4-playlist.dll"]
+                "libprojectM-4-playlist.dll", "projectM-4-playlist.dll"
+            ] + _vendored_libs("projectM-4-playlist.dll")
         elif sys.platform == "darwin":
             return ["/usr/local/lib/libprojectM-4-playlist.dylib"]
         else:
@@ -1175,7 +1193,7 @@ except Exception:
                 "/usr/local/lib/libprojectM-4-playlist.so.4",
                 "/usr/local/lib/libprojectM-4-playlist.so.4.1.0",
                 "/usr/lib/x86_64-linux-gnu/libprojectM-4-playlist.so",
-            ]
+            ] + _vendored_libs("libprojectM-4-playlist.so.4")
 
 
 def _find_lib(candidates: list, util_name: str):
