@@ -47,12 +47,25 @@ tarball whose `install.sh` puts the app in `~/.local` with no root. See
 `installer/README.md` for the build, the vendored libprojectM and the glibc
 floor.
 
+`installer/build_windows.ps1` produces `MilkDropVisualizer-<version>-win64-setup.exe`
+through PyInstaller and Inno Setup 6, plus the portable tree beside it.
+`-SkipInstaller` stops after freezing. Inno Setup installs per-user under winget,
+so the script looks in `%LOCALAPPDATA%\Programs` as well as Program Files.
+
 **The vendored `installer/vendor/linux/libprojectM-4*.so.4` are committed on
 purpose.** Upstream release links have gone dead before, and rebuilding needs a
 toolchain the packaging box may not have. `PROJECTM_LIB_DIR` overrides them.
 projectM is LGPL-2.1 and stays a separate `ctypes`-loaded library with its
 licence in `installer/licenses/` — that is what makes shipping it in a paid app
-legitimate, so do not link it statically.
+legitimate, so do not link it statically. `installer/vendor/windows/` holds the
+same three DLLs for the same reason: `projectM-4.dll`, `projectM-4-playlist.dll`
+and the `glew32.dll` the core links.
+
+**The Windows release build is windowed, so it prints nothing.** `console` in
+the spec is False on win32 — a black console box behind a visualiser is a
+product defect — and `print()` is a no-op when `sys.stdout` is None, so nothing
+raises. Build with `MILKDROP_CONSOLE=1` to get a console build back; that is
+the only way to see why a frozen build failed.
 
 ## Testing
 

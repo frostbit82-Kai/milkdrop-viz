@@ -129,6 +129,24 @@ Done, packaging:
       stops an ESCAPE meant for the menu quitting the app. If it still happens,
       the next thing to learn is whether the session is X11 or Wayland
 
+Done, Windows packaging:
+
+- [x] **Windows installer.** `installer/build_windows.ps1` freezes the app with
+      the same cross-platform spec and hands it to Inno Setup 6, producing a
+      43.7 MB `MilkDropVisualizer-<version>-win64-setup.exe` plus the portable
+      tree. Installed to `C:\Program Files\MilkDrop Visualizer`, Start Menu
+      entry, optional desktop icon, uninstaller; settings and ratings live in
+      `%APPDATA%\MilkDropVisualizer` and survive uninstall. Verified end to end:
+      silent install, launch from the installed path, bundled projectM loaded,
+      11,223 presets, WASAPI loopback, presets rendering and switching, and the
+      About dialog showing its logo and version 1.1.1 out of `sys._MEIPASS`
+- [x] The release build is **windowed** (no console box behind the visualiser)
+      and therefore silent. `MILKDROP_CONSOLE=1` builds a console version, which
+      is the only way to debug a frozen failure
+- [x] libprojectM vendored at `installer/vendor/windows/` — the same three DLLs
+      `setup_windows.ps1` gathers, with GLEW's licence added to `licenses/`
+- [x] App icon generated from the BomsAI logo (`installer/windows/*.ico`)
+
 Done, Windows parity with Linux — every feature added after the port branch,
 driven on Windows and confirmed:
 
@@ -162,6 +180,7 @@ driving the menu with `SetCursorPos` and no mouse-move event, so Qt placed the
 click outside the popup.
 
 Not started:
+- [ ] Code signing (an unsigned installer gets a SmartScreen warning)
 - [ ] Steam page
 
 ## Packaging
