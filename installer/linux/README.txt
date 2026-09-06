@@ -52,7 +52,7 @@ CONTROLS
     escape            quit
     + / -             rate the current preset up or down
     h                 hard cuts on/off
-    m                 switch preset mode
+    m                 shuffle the playlist order on / off
     scroll lock       lock the current preset
 
 A preset rated 0 stars is dropped from the rotation. Ratings and settings are

@@ -171,6 +171,14 @@ driven on Windows and confirmed:
       restart. `test_theme.py` covers the resolution logic. On Linux the Qt
       half works the same; the frame belongs to the window manager there and
       is left alone
+- [x] **Shuffle reorders the playlist instead of randomising `next`.**
+      projectM's own shuffle picks a random item on every advance, so prev
+      never returned to what just played. The playlist is permuted instead and
+      the native shuffle stays off. Driven on Windows against all 11,223
+      presets: five forward then five back returns to the preset it started
+      on and the names mirror exactly, no preset repeats going forward, and
+      turning shuffle off keeps the order — walking the same stretch again
+      yields the identical sequence. `test_shuffle.py` covers the toggle
 
 **Three Windows-only bugs were found and fixed doing this**, all in code that
 was correct on Linux; see Traps in `CLAUDE.md`:

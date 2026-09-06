@@ -2394,7 +2394,7 @@ ACTION_LABELS = {
     "rate_up":          "Rate up  (+1)",
     "rate_down":        "Rate down (−1)",
     "quit":             "Quit",
-    "toggle_mode":      "Toggle random / sequential mode",
+    "toggle_mode":      "Shuffle the playlist order on / off",
     "toggle_borderless": "Toggle borderless window",
     "fullscreen_mouse": "Toggle fullscreen (mouse)",
 }
@@ -3006,7 +3006,7 @@ class Renderer:
         self._borderless          = False
         self._borderless_on_start = False   # set by main.py --borderless flag
         self._menu_open           = False   # host's context menu is on screen
-        self._shuffle             = True
+        self._shuffle             = False  # list order is as loaded
         self._running             = False
         self._target_y            = None
 
@@ -3807,6 +3807,30 @@ class Renderer:
         except Exception as e:
             print(f"[renderer] sort failed: {e}", flush=True)
 
+    def _do_shuffle_playlist(self) -> bool:
+        """Reorder the playlist itself. Render thread only.
+
+        projectM's own shuffle picks a random item on every advance, so the
+        list is never walked: left and right both land somewhere new and there
+        is no way back to what just played. Permuting the playlist and leaving
+        the native shuffle off (_rebuild_playlist does that) keeps next/prev
+        walking a sequence -- one that happens to be in a random order.
+
+        The current preset is sought out again afterwards, so hitting shuffle
+        reorders what comes next without interrupting what is on screen.
+        """
+        files = self._all_preset_files()
+        if not files:
+            self._bridge.status_message.emit("Shuffle: no presets found")
+            return False
+        _random.shuffle(files)
+        cur = self._pm.current_preset_name()
+        self._rebuild_playlist([p for p, _ in files])
+        self._rated_history.clear()      # native indices changed
+        self._seek_to_stem(cur)
+        print(f"[renderer] Shuffled {len(files)} presets")
+        return True
+
     def _do_goto(self, index: int):
         """Jump to a playlist index (from the browser double-click)."""
         if self._locked or not self._pm:
@@ -3841,6 +3865,7 @@ class Renderer:
             if count:
                 self._pm.set_playlist_position(0, hard_cut=True)
             self._rated_history.clear()          # native indices changed
+            self._shuffle = False                # a fresh list, in load order
             self._preset_start = _time.monotonic()
             print(f"[renderer] Loaded {count} presets from {d}", flush=True)
             self._bridge.status_message.emit(f"Loaded {count} presets")
@@ -3857,6 +3882,8 @@ class Renderer:
         try:
             cur = self._pm.current_preset_name()
             paths = [p for p, _ in self._all_preset_files()]
+            if self._shuffle:
+                _random.shuffle(paths)   # a rebuild must not silently unshuffle
             self._rebuild_playlist(paths)
             self._rated_history.clear()   # native indices changed
             if cur and cur != "Unknown":
@@ -3915,15 +3942,27 @@ class Renderer:
         self._bridge.status_message.emit(f"Hard cuts: {label}")
 
     def _do_toggle_mode(self):
-        self._shuffle = not self._shuffle
-        if self._pm._pl and self._pm._playlist:
-            self._pm._playlist.projectm_playlist_set_shuffle(
-                self._pm._pl, self._shuffle
-            )
-        label = "Random" if self._shuffle else "Sequential"
-        print(f"[renderer] Mode: {label}")
-        self._bridge.status_message.emit(f"Mode: {label}")
-        self._bridge.playlist_changed.emit()
+        """Shuffle on reshuffles the playlist; shuffle off leaves the order.
+
+        Turning it off deliberately does *not* restore the previous order --
+        you carry on walking whatever sequence you are in the middle of. That
+        makes turning it on again the only way to get a new order, which is
+        also how you reshuffle.
+        """
+        if not self._pm:
+            return
+        try:
+            want = not self._shuffle
+            if want and not self._do_shuffle_playlist():
+                return                  # nothing to shuffle -- stay as we were
+            self._shuffle = want
+            label = "ON" if want else "OFF (order kept)"
+            print(f"[renderer] Shuffle: {label}")
+            self._bridge.status_message.emit(f"Shuffle: {label}")
+            self._bridge.playlist_changed.emit()
+            self._emit_current_preset()
+        except Exception as e:
+            print(f"[renderer] shuffle toggle failed: {e}", flush=True)
 
     # ── Fullscreen ────────────────────────────────────────────────────────
 

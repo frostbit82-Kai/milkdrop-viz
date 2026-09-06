@@ -246,6 +246,17 @@ There is no display in an agent shell and SDL needs one, so:
   registry or gsettings code is needed. It cannot be tested under
   `QT_QPA_PLATFORM=offscreen`: that plugin accepts `setColorScheme()` and goes
   on reporting `Unknown`. `test_theme.py` fakes `QApplication` instead.
+- **Shuffle reorders the playlist; it does not randomise `next`.** projectM's
+  own shuffle (`projectm_playlist_set_shuffle`) picks a random item on every
+  advance, so the list is never walked — left and right both land somewhere
+  new and there is no way back to what just played. `_do_shuffle_playlist`
+  permutes the playlist instead and `_rebuild_playlist` leaves the native
+  shuffle off, so next/prev walk a sequence that happens to be random. Do not
+  reintroduce `set_shuffle(True)`; the only caller left passes False.
+  Turning shuffle *off* deliberately keeps the order — you carry on walking
+  the sequence you are in — so turning it on again is also how you reshuffle.
+  Anything that rebuilds the playlist has to say what happens to the flag:
+  delete-zero reshuffles when it was on, a new preset folder clears it.
 - **Enumerating audio devices used to kill the app on Windows.**
   `_WasapiLoopbackBackend.list_devices()` built its own `PyAudio()` and called
   `terminate()` on it, and `Pa_Terminate` tears the WASAPI host API down under
