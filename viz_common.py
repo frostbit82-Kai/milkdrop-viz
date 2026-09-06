@@ -28,12 +28,18 @@ import numpy as np
 # already killed the audio backend and another killed the render thread mid
 # preset. Change only the error handler, not the encoding, so the console keeps
 # its native code page and the literal keys hosts parse (XID=) are untouched.
-if sys.platform == "win32":
-    for _stream in (sys.stdout, sys.stderr):
-        try:
-            _stream.reconfigure(errors="replace")
-        except Exception:
-            pass       # not a TextIOWrapper (redirected, or replaced by a host)
+# Line buffering is separate and matters everywhere: a frozen build's stdout is
+# block-buffered whenever it is redirected, PYTHONUNBUFFERED does not reliably
+# reach it, and a crash then takes the whole buffer with it -- so the log stops
+# at the last flushed line and points at the wrong place entirely.
+for _stream in (sys.stdout, sys.stderr):
+    try:
+        if sys.platform == "win32":
+            _stream.reconfigure(errors="replace", line_buffering=True)
+        else:
+            _stream.reconfigure(line_buffering=True)
+    except Exception:
+        pass           # not a TextIOWrapper (redirected, or replaced by a host)
 
 logger_audio = logging.getLogger("visualizer.audio")
 
@@ -495,6 +501,25 @@ class _WasapiLoopbackBackend(_AudioBackend):
         self._stream = None
         self._channels = 2
 
+    #: The one PortAudio instance this process gets. PyAudio.terminate() calls
+    #: Pa_Terminate, which tears the WASAPI host API down under any stream
+    #: still open on it -- and enumerating devices used to build a second
+    #: instance and terminate it. Opening Settings while capture ran therefore
+    #: killed the app outright: an access violation inside _portaudiowpatch,
+    #: no Python traceback, on the one dialog a new install has to use. One
+    #: shared instance, never terminated, removes the race; process exit
+    #: reclaims it.
+    _shared_pa = None
+    _shared_pa_lock = threading.Lock()
+
+    @classmethod
+    def _pyaudio(cls):
+        with cls._shared_pa_lock:
+            if cls._shared_pa is None:
+                import pyaudiowpatch as pyaudio
+                cls._shared_pa = pyaudio.PyAudio()
+            return cls._shared_pa
+
     @classmethod
     def available(cls) -> bool:
         if sys.platform != "win32":
@@ -516,21 +541,13 @@ class _WasapiLoopbackBackend(_AudioBackend):
     def list_devices() -> list:
         if not _WasapiLoopbackBackend.available():
             return []
-        import pyaudiowpatch as pyaudio
-        pa = None
         try:
-            pa = pyaudio.PyAudio()
+            pa = _WasapiLoopbackBackend._pyaudio()
             return [d["name"]
                     for d in _WasapiLoopbackBackend._loopback_devices(pa)]
         except Exception as e:
             _log(f"[audio] Could not enumerate WASAPI loopback devices: {e}")
             return []
-        finally:
-            if pa is not None:
-                try:
-                    pa.terminate()
-                except Exception:
-                    pass
 
     @staticmethod
     def _default_loopback(pa, devices):
@@ -561,21 +578,13 @@ class _WasapiLoopbackBackend(_AudioBackend):
         """
         if not _WasapiLoopbackBackend.available():
             return ""
-        import pyaudiowpatch as pyaudio
-        pa = None
         try:
-            pa = pyaudio.PyAudio()
+            pa = _WasapiLoopbackBackend._pyaudio()
             devices = _WasapiLoopbackBackend._loopback_devices(pa)
             dev = _WasapiLoopbackBackend._default_loopback(pa, devices)
             return dev["name"] if dev else ""
         except Exception:
             return ""
-        finally:
-            if pa is not None:
-                try:
-                    pa.terminate()
-                except Exception:
-                    pass
 
     def _pick_device(self, pa):
         """The configured loopback endpoint, else the default output's."""
@@ -599,7 +608,7 @@ class _WasapiLoopbackBackend(_AudioBackend):
         import pyaudiowpatch as pyaudio
 
         try:
-            self._pa = pyaudio.PyAudio()
+            self._pa = self._pyaudio()
         except Exception as e:
             _log(f"[audio] Could not initialise WASAPI: {e}")
             self._pa = None
@@ -650,12 +659,10 @@ class _WasapiLoopbackBackend(_AudioBackend):
             except Exception:
                 pass
             self._stream = None
-        if self._pa:
-            try:
-                self._pa.terminate()
-            except Exception:
-                pass
-            self._pa = None
+        # Deliberately not terminated -- see _shared_pa. Closing the stream is
+        # what releases the endpoint; the instance is reused by the next
+        # start() and by every device enumeration.
+        self._pa = None
 
     def is_alive(self) -> bool:
         if self._stream is None:
@@ -1018,7 +1025,7 @@ def load_config_from(config_path, default_config: dict) -> dict:
     p = Path(config_path)
     if p.exists():
         try:
-            with open(p) as f:
+            with open(p, encoding="utf-8-sig") as f:
                 cfg.update(json.load(f))
         except Exception as e:
             print(f"[config] Warning: could not load config.json: {e}")
@@ -1028,7 +1035,7 @@ def load_config_from(config_path, default_config: dict) -> dict:
 def save_config_to(config_path, cfg: dict):
     """Save config.json. Path-agnostic."""
     try:
-        with open(config_path, "w") as f:
+        with open(config_path, "w", encoding="utf-8") as f:
             json.dump(cfg, f, indent=4)
     except Exception as e:
         print(f"[config] Warning: could not save config.json: {e}")
@@ -1040,7 +1047,7 @@ def load_ratings_from(ratings_path) -> dict:
     p = Path(ratings_path)
     if p.exists():
         try:
-            with open(p) as f:
+            with open(p, encoding="utf-8-sig") as f:
                 return json.load(f)
         except Exception:
             pass
@@ -1050,7 +1057,7 @@ def load_ratings_from(ratings_path) -> dict:
 def save_ratings_to(ratings_path, ratings: dict):
     """Save ratings.json. Path-agnostic."""
     try:
-        with open(ratings_path, "w") as f:
+        with open(ratings_path, "w", encoding="utf-8") as f:
             json.dump(ratings, f, indent=4, sort_keys=True)
     except Exception as e:
         print(f"[config] Warning: could not save ratings.json: {e}")
@@ -1063,7 +1070,7 @@ def load_keymaps_from(keymaps_path) -> dict:
     p = Path(keymaps_path)
     if p.exists():
         try:
-            with open(p) as f:
+            with open(p, encoding="utf-8-sig") as f:
                 km.update(json.load(f))
         except Exception as e:
             print(f"[config] Warning: could not load keymaps.json: {e}")
@@ -1073,7 +1080,7 @@ def load_keymaps_from(keymaps_path) -> dict:
 def save_keymaps_to(keymaps_path, km: dict):
     """Save keymaps.json. Path-agnostic."""
     try:
-        with open(keymaps_path, "w") as f:
+        with open(keymaps_path, "w", encoding="utf-8") as f:
             json.dump(km, f, indent=4)
     except Exception as e:
         print(f"[config] Warning: could not save keymaps.json: {e}")
@@ -1209,9 +1216,13 @@ def _load_libraries(config_dir=None):
     config_path = PathlibPath(config_dir) / "config.json"
     explicit_core = ""
     if config_path.exists():
-        with open(config_path) as f:
-            cfg = json.load(f)
-        explicit_core = cfg.get("projectm_lib", "")
+        try:
+            with open(config_path, encoding="utf-8-sig") as f:
+                explicit_core = json.load(f).get("projectm_lib", "")
+        except (OSError, ValueError) as e:
+            # Every other reader warns and falls back; this one used to raise
+            # on the render thread, which killed it before the first frame.
+            logger_pm.warning(f"Ignoring unreadable {config_path}: {e}")
 
     # Core
     if explicit_core and os.path.exists(explicit_core):

@@ -204,6 +204,41 @@ There is no display in an agent shell and SDL needs one, so:
   so PyInstaller's analysis never sees them and the frozen app dies with
   `TypeError: 'NoneType' object is not callable` inside `OpenGL/platform`. The
   spec adds `collect_submodules("OpenGL.platform")` and `("OpenGL.arrays")`.
+- **The app's lifetime belongs to the SDL loop, not to Qt.** The visualiser is
+  an SDL window, so Qt's window count hits zero every time a menu or dialog
+  closes, and the default `quitOnLastWindowClosed` would end `exec()` there.
+  `main.py` has turned it off since before the Windows port; the render loop
+  asks to quit through `_on_quit`. Do not remove it, and do not add a second
+  call — a Windows session spent a while blaming this for a "clicking Settings
+  quits the app" symptom that turned out to be the synthetic-mouse trap below.
+- **Enumerating audio devices used to kill the app on Windows.**
+  `_WasapiLoopbackBackend.list_devices()` built its own `PyAudio()` and called
+  `terminate()` on it, and `Pa_Terminate` tears the WASAPI host API down under
+  the capture stream still running on it — an access violation inside
+  `_portaudiowpatch`, no Python traceback. It fired on the one dialog a new
+  install has to use: no presets → Settings opens → Settings lists devices →
+  dead. Every PortAudio user now shares `_WasapiLoopbackBackend._shared_pa`,
+  which is never terminated; `stop()` closes the stream and leaves the instance.
+  Do not add another `PyAudio()`.
+- **JSON config is read with `utf-8-sig`.** Every Windows text editor and
+  `Set-Content -Encoding utf8` writes a BOM, and the locale-default `open()`
+  then fails on character one. `_load_libraries` also reads config.json, on the
+  render thread, and used to do it unguarded — a config error there killed the
+  thread before the first frame while every other reader warned and carried on.
+- **`sys.stdout` is line-buffered from `viz_common` import.** A frozen build's
+  stdout is block-buffered whenever it is redirected and `PYTHONUNBUFFERED` does
+  not reliably reach it, so a crash used to take the whole buffer with it and
+  the log stopped several seconds before the fault. Without this, a native crash
+  points at the wrong place entirely.
+- **A native crash names its module in the Windows event log.** `Get-WinEvent
+  -LogName Application` filtered to `Application Error` gives the faulting DLL
+  and offset. That is what separated "projectM crashed" from "PyAudioWPatch
+  crashed" after an afternoon of guessing at the Python side.
+- **Synthetic mouse input needs a real move event.** `SetCursorPos` alone does
+  not update Qt's idea of the pointer, so a click on a menu item lands where Qt
+  last saw the cursor — the menu closes without triggering and it looks exactly
+  like the item being broken. Follow every `SetCursorPos` with
+  `mouse_event(MOUSEEVENTF_MOVE)`, or drive the menu with arrow keys.
 - **A frozen app's stdout is block-buffered when redirected, and `PYTHONUNBUFFERED`
   does not always reach it.** A test that redirects to a file and sees only the
   first line has proved nothing: the app may be running fine and holding the rest.

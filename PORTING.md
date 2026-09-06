@@ -129,10 +129,39 @@ Done, packaging:
       stops an ESCAPE meant for the menu quitting the app. If it still happens,
       the next thing to learn is whether the session is X11 or Wayland
 
+Done, Windows parity with Linux — every feature added after the port branch,
+driven on Windows and confirmed:
+
+- [x] PySide6 (LGPL) is the binding in use; PyQt6 uninstalled from the venv and
+      absent from the package
+- [x] Settings, Key bindings and About dialogs render dark, with the spin-box
+      and combo arrows resolving through the backslash-normalised QSS paths.
+      The audio row reads "Output to capture:" and lists WASAPI loopback
+      endpoints
+- [x] Context menu, Audio source submenu (live device switch verified — capture
+      reopened on the new endpoint), sensitivity slider, Preset browser,
+      Borderless, About
+- [x] Status toasts render inside the visualiser window, top-right
+- [x] Keyboard and mouse bindings reach the SDL window
+
+**Three Windows-only bugs were found and fixed doing this**, all in code that
+was correct on Linux; see Traps in `CLAUDE.md`:
+
+- Enumerating audio devices terminated the PortAudio instance the capture
+  stream was running on. Opening Settings killed the app — and the no-presets
+  first run opens Settings, so a fresh install died within seconds.
+- `config.json` was read with the locale encoding, so a BOM — which every
+  Windows editor writes — made it unreadable; and the copy `_load_libraries`
+  reads on the render thread was unguarded, killing the thread outright.
+- Frozen stdout was block-buffered, so every crash log stopped several seconds
+  before the fault and pointed at the wrong subsystem.
+
+`setQuitOnLastWindowClosed(False)` was briefly counted as a fourth. It was
+already in `main.py` and always had been; the symptom blamed on it came from
+driving the menu with `SetCursorPos` and no mouse-move event, so Qt placed the
+click outside the popup.
+
 Not started:
-- [ ] Windows installer — the PyInstaller spec is already cross-platform; what is
-      missing is `build_windows.ps1`, an installer format (Inno Setup), and code
-      signing
 - [ ] Steam page
 
 ## Packaging
@@ -203,8 +232,7 @@ Loopback runs at the endpoint's native rate (48 kHz here) rather than resampling
 44.1 kHz the Linux path requests. projectM is fed PCM either way; if beat detection ever
 looks off on Windows, that is the first thing to check.
 
-Still unproven: audio has never been fed into a running projectM on Windows. Capture is
-verified in isolation, not through the render loop.
+Audio through the render loop is proven — see "Beat response confirmed" above.
 
 **It runs.** `main.py` launches, projectM renders, presets switch and system audio
 is captured. Getting there took four fixes that Linux never needed, each of which
@@ -223,13 +251,10 @@ failed in a way that pointed somewhere unhelpful:
 To run it: put `C:\dev\projectm-deploy` on PATH and launch with the venv python.
 `--geometry WxH+X+Y` keeps it windowed.
 
-**Presets and textures still live on the WSL drive.** The repo moved to
-`C:\Projects\milkdrop-viz`, but the asset directories did not: 2.5 GB of textures
-(8,414 files) and 143 MB of presets (11,223 files) are still under
-`\\wsl.localhost\Ubuntu\mnt\wsl\PHYSICALDRIVE1p2\home\fr0st\Projects\milkdrop-viz\`.
-They are gitignored and never ship, so where they sit is purely a performance question,
-but textures are read while presets load and that path is a network redirector. Copy
-them to a native Windows drive before judging load times.
+**Presets and textures now live on the native drive**, at
+`C:\Projects\milkdrop-assets\{projectm-presets,textures}` -- 11,223 presets and
+8,408 textures. They are gitignored and never ship; the app is pointed at them
+through Settings.
 
 ## Notes
 
