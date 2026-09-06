@@ -2178,6 +2178,10 @@ class ToastLabel(QLabel):
 class SettingsDialog(QDialog):
     def __init__(self, cfg: dict, parent=None):
         super().__init__(parent)
+        # A copy, not the caller's dict: every caller does cfg.update(...) after
+        # exec() returns, and changed_config() has to compare against the values
+        # the dialog opened with, not the ones it has just written back.
+        self._opened_with = dict(cfg)
         self.setWindowTitle("Visualizer Settings")
         self.setMinimumWidth(400)
         self.setStyleSheet(dialog_qss())
@@ -2362,6 +2366,18 @@ class SettingsDialog(QDialog):
             "audio_device":         self._audio_device_value(),
             "audio_gain":           round(self._gain.value() / 100.0, 2),
         }
+
+    def changed_config(self) -> dict:
+        """Only the settings the user actually altered.
+
+        get_config() always returns every field, and handing that whole dict to
+        apply_settings made each Save look like a preset-directory change: the
+        renderer rescanned the entire tree, jumped back to the first preset and
+        dropped both the shuffle order and the rated history, even when the only
+        edit was the FPS. Nine thousand presets make that very obvious.
+        """
+        return {k: v for k, v in self.get_config().items()
+                if k not in self._opened_with or self._opened_with[k] != v}
 
     def _audio_device_value(self) -> str:
         """Combo text back to a stored device name.
@@ -2827,7 +2843,7 @@ class ContextMenu(QMenu):
     def _open_settings(self):
         dlg = SettingsDialog(self._cfg)
         if dlg.exec() == QDialog.DialogCode.Accepted:
-            updates = dlg.get_config()
+            updates = dlg.changed_config()
             # Only where the theme is ours to set. This menu is also Bomsai
             # Player's, whose config has no "theme" and whose QApplication is
             # the host's -- restyling that from here would repaint somebody
@@ -2837,7 +2853,9 @@ class ContextMenu(QMenu):
             if themed:
                 # Dialogs are built fresh each time, so the next one picks the
                 # theme up on its own; this is only so Qt's own chrome follows.
-                set_app_theme(updates.get("theme", "dark"))
+                # From the merged config, because updates carries "theme" only
+                # when it changed and the default would undo the real setting.
+                set_app_theme(self._cfg.get("theme", "dark"))
             self._renderer._save_config(self._cfg)
             self._renderer.apply_settings(updates)
 
@@ -3541,7 +3559,10 @@ class Renderer:
                     updates = self._req_settings_updates
                     self._req_settings_updates = None
                     self._cfg.update(updates)
-                    self._apply_pm_settings(updates)
+                    # The merged config, not the diff: _apply_pm_settings reads
+                    # every projectM setting with a default, so handing it a
+                    # partial dict would quietly reset whatever is missing.
+                    self._apply_pm_settings(self._cfg)
                     if "fps" in updates:
                         _f = updates.get("fps", 60)
                         sdl2.SDL_GL_SetSwapInterval(
@@ -3560,6 +3581,8 @@ class Renderer:
                         self._apply_texture_paths()
                     if "preset_dir" in updates:
                         self._reload_preset_dir()
+                    elif "texture_dir" in updates:
+                        self._reload_current_preset()
                 if self._req_geometry is not None:
                     gx, gy, gw, gh = self._req_geometry
                     self._req_geometry = None
@@ -3873,6 +3896,29 @@ class Renderer:
             self._emit_current_preset()
         except Exception as e:
             print(f"[renderer] loading preset dir failed: {e}", flush=True)
+
+    def _reload_current_preset(self):
+        """Re-load the preset on screen, in place.
+
+        projectM resolves a preset's textures when it loads it, so a texture
+        directory changed while something is already playing does nothing
+        visible until the next preset -- which, at a ten-minute duration on a
+        locked preset, reads as "it needs a restart". Seeking to the position
+        it is already at makes it load again against the new search paths.
+        """
+        if not self._pm:
+            return
+        try:
+            pos = self._pm.playlist_position()
+            self._pm.set_playlist_position(pos, hard_cut=True)
+            self._preset_start = _time.monotonic()
+            print(f"[renderer] Reloaded preset {pos} for the new textures",
+                  flush=True)
+            self._bridge.status_message.emit("Textures reloaded")
+            self._emit_current_preset()
+        except Exception as e:
+            print(f"[renderer] reloading the current preset failed: {e}",
+                  flush=True)
 
     def _do_reload_playlist(self):
         """Rebuild the playlist from whatever .milk files remain on disk (used

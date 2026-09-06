@@ -166,9 +166,9 @@ class App:
     def _open_settings(self):
         dlg = SettingsDialog(self._cfg)
         if dlg.exec() == QDialog.DialogCode.Accepted:
-            updates = dlg.get_config()
+            updates = dlg.changed_config()
             self._cfg.update(updates)
-            set_app_theme(updates.get("theme", "dark"))
+            set_app_theme(self._cfg.get("theme", "dark"))
             self._renderer._save_config(self._cfg)
             self._renderer.apply_settings(updates)
 
