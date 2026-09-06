@@ -79,6 +79,12 @@ Those three DLLs are vendored at `vendor/windows/` for the same reason as the
 Linux `.so` files, and `PROJECTM_LIB_DIR` overrides them. `setup_windows.ps1`
 builds fresh ones and gathers them into `C:\dev\projectm-deploy`.
 
+After re-vendoring them, run `windows\verify_dlls.ps1`. It checks that the DLLs
+export every symbol `viz_common.py` binds — a projectM build missing
+`projectm_playlist_add_presets` looks fine until the playlist silently comes up
+empty — and lists what else must ship alongside. The symbol list is read out of
+the source, so it cannot drift.
+
 **The release build is windowed**, so there is no console box behind the
 visuals — and therefore no log at all, since `print()` is a no-op when
 `sys.stdout` is None. `MILKDROP_CONSOLE=1` builds a console version instead,
@@ -93,6 +99,29 @@ client, so this matters most for a direct download.
 `VERSION` drives both scripts, and both artifacts are named from it. Bump it
 once and rebuild **both** packages from that commit, or two different builds
 end up wearing the same version number.
+
+## Where the working copies live
+
+One repository, both platforms — the split is by folder, not by clone:
+
+| Path | Machine | Holds |
+|------|---------|-------|
+| `installer/linux/` | — | `install.sh`, `.desktop`, icon, uninstaller |
+| `installer/windows/` | — | Inno Setup script, `.ico`, `verify_dlls.ps1` |
+| `installer/vendor/{linux,windows}/` | — | projectM (and GLEW) binaries, tracked in git |
+| `installer/build/`, `installer/dist/` | — | build scratch and artifacts, both gitignored |
+
+Each machine keeps exactly one clone, and they meet on GitHub:
+
+| Path | Machine |
+|------|---------|
+| `~/Projects/milkdrop-viz` | Linux — Linux builds, and the shared code |
+| `C:\Projects\milkdrop-viz` | Windows — Windows builds |
+| `C:\Projects\milkdrop-assets` | Windows — presets and textures, never shipped, never in git |
+| `C:\dev\` | Windows — the libprojectM build toolchain only (`vcpkg`, `projectm`) |
+
+Commit on one, push, pull on the other. A second copy of the repo on the same
+machine is how the two trees drift apart; there is no reason to make one.
 
 ## What is deliberately absent
 

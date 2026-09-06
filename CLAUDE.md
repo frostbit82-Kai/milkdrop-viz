@@ -40,6 +40,14 @@ per-install shims: `main.py` (entry point, CLI flags), `renderer.py` (save paths
 `config.py` (defaults), `audio.py` / `projectm_wrapper.py` / `ui.py` (re-exports),
 `preset_browser.py`.
 
+**One clone per machine**: `~/Projects/milkdrop-viz` on Linux,
+`C:\Projects\milkdrop-viz` on Windows, and they meet on GitHub — commit, push,
+pull. A second copy on the same machine is how the two trees drift apart and how
+work gets stranded uncommitted in a folder nobody looks at again. Presets and
+textures live outside the repo entirely (`C:\Projects\milkdrop-assets` on
+Windows, `~/Downloads` on Linux); `C:\dev` holds only the libprojectM build
+toolchain. `installer/README.md` has the full table.
+
 ## Packaging
 
 `installer/` builds the release. `bash installer/build_linux.sh` produces a

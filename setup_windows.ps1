@@ -1,7 +1,14 @@
 # MilkDrop Visualizer - one-shot setup for a fresh Windows install.
 # Windows counterpart to setup.sh: installs the toolchain, builds libprojectM-4,
-# creates the venv. Run from an ordinary PowerShell prompt; winget handles
-# elevation for the Build Tools install.
+# creates the venv. winget handles elevation for the Build Tools install.
+#
+# Windows leaves the execution policy at Restricted, which refuses to load this
+# file at all - "running scripts is disabled on this system". So run it as:
+#
+#     powershell.exe -ExecutionPolicy Bypass -File .\setup_windows.ps1
+#
+# or lift the gate once for your account, which is the saner setting on a dev
+# box:  Set-ExecutionPolicy -Scope CurrentUser RemoteSigned
 #
 # Produces C:\dev\projectm-deploy containing the three DLLs the app needs:
 #   projectM-4.dll  projectM-4-playlist.dll  glew32.dll
@@ -15,7 +22,16 @@ $Build       = "$Src\cmake-build"
 $Install     = "$DevRoot\projectm-install"
 $Deploy      = "$DevRoot\projectm-deploy"
 $VcpkgRoot   = "$DevRoot\vcpkg"
-$ScriptDir   = Split-Path -Parent $MyInvocation.MyCommand.Path
+# $PSScriptRoot is empty when this file is pasted into the console or dot-sourced
+# instead of run as a file - which is exactly what someone tries after hitting the
+# execution-policy error above. Without the fallback the venv lands in the drive
+# root; without the check it lands in whatever directory they happened to be in.
+$ScriptDir   = if ($PSScriptRoot) { $PSScriptRoot } else { (Get-Location).Path }
+if (-not (Test-Path "$ScriptDir\requirements.txt")) {
+    throw "requirements.txt not found in $ScriptDir. Run this as a file " +
+          "(powershell.exe -ExecutionPolicy Bypass -File .\setup_windows.ps1), " +
+          "or cd to the repository first."
+}
 
 New-Item -ItemType Directory -Force -Path $DevRoot | Out-Null
 
