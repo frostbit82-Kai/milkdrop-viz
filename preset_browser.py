@@ -16,6 +16,7 @@ import logging
 from viz_common import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QListWidget,
     QListWidgetItem, QPushButton, QAbstractItemView, QMessageBox, Qt,
+    browser_qss,
 )
 
 logger = logging.getLogger(__name__)
@@ -33,20 +34,8 @@ class PresetPlaylistWindow(QWidget):
         self._on_shuffle = on_shuffle      # callback to toggle visual shuffle
         self.setWindowTitle("Preset Browser")
         self.resize(380, 580)
-        self.setStyleSheet(
-            "QWidget{background:#0c0c12;color:#ddd;}"
-            "QLabel#title{color:#e8e8f0;font-size:14px;font-weight:bold;"
-            "padding:8px 10px;background:rgba(8,8,14,200);}"
-            "QListWidget{background:#14141c;border:1px solid #2a2a38;"
-            "font-size:12px;outline:none;}"
-            "QListWidget::item{padding:4px 8px;border-bottom:1px solid #1d1d27;}"
-            "QListWidget::item:selected{background:#2a4a70;color:#fff;}"
-            "QPushButton{background:rgba(12,12,18,160);color:#cfd3da;"
-            "border:1px solid rgba(255,255,255,28);border-radius:5px;"
-            "padding:4px 10px;}"
-            "QPushButton:hover{background:rgba(40,80,130,170);color:#fff;}"
-            "QPushButton:checked{background:rgba(30,70,120,180);color:#4ab8e8;"
-            "border-color:rgba(74,184,232,160);}")
+        # Built in viz_common so every themed surface shares one palette.
+        self.setStyleSheet(browser_qss())
 
         lay = QVBoxLayout(self)
         lay.setContentsMargins(0, 0, 0, 0)

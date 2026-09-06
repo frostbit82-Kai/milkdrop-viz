@@ -224,6 +224,20 @@ There is no display in an agent shell and SDL needs one, so:
   asks to quit through `_on_quit`. Do not remove it, and do not add a second
   call — a Windows session spent a while blaming this for a "clicking Settings
   quits the app" symptom that turned out to be the synthetic-mouse trap below.
+- **The theme setting drives two different mechanisms.** `theme` in config.json
+  is `dark`, `light` or `system`, and one control has to move both:
+  `dialog_qss()`/`menu_qss()`/`browser_qss()` restyle the Qt widgets, and
+  `apply_window_theme()` handles the frame Windows draws around the SDL window,
+  through DWM's immersive-dark-mode attribute — a stylesheet cannot reach that,
+  and Qt's `setColorScheme()` only covers windows Qt created. Linux has no
+  equivalent for the frame: the window manager owns it. Everything themed is
+  built fresh on open, so there is nothing to restyle live — except the preset
+  browser, which is cached and gets its sheet re-applied on show.
+- **`resolve_theme("system")` reads Qt's colour-scheme hint**, which Qt fills
+  in from the Windows app-theme setting and the freedesktop portal, so no
+  registry or gsettings code is needed. It cannot be tested under
+  `QT_QPA_PLATFORM=offscreen`: that plugin accepts `setColorScheme()` and goes
+  on reporting `Unknown`. `test_theme.py` fakes `QApplication` instead.
 - **Enumerating audio devices used to kill the app on Windows.**
   `_WasapiLoopbackBackend.list_devices()` built its own `PyAudio()` and called
   `terminate()` on it, and `Pa_Terminate` tears the WASAPI host API down under

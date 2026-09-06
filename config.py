@@ -64,6 +64,9 @@ DEFAULT_CONFIG = {
     "width":                1280,
     "height":               720,
     "quality":              "high",
+    # Dark, light, or "system" to follow the desktop. Dark was the only
+    # look this app had, so it stays the default.
+    "theme":                "dark",
     "mesh_x":               64,
     "mesh_y":               48,
     "hard_cuts_enabled":    True,

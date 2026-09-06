@@ -59,6 +59,20 @@ A preset rated 0 stars is dropped from the rotation. Ratings and settings are
 kept in ~/.config/MilkDropVisualizer and survive uninstalling.
 
 
+THEME
+-----
+
+Settings -> Theme is Dark, Light, or Follow system, and covers the settings and
+key-binding dialogs, the right-click menu and the preset browser. Dark is the
+default, because the visuals themselves are usually dark.
+
+"Follow system" reads the desktop's colour-scheme preference through the
+freedesktop portal, the same one GTK and Qt applications use.
+
+The window border is not included: on Linux the window manager draws it, from
+the desktop's own theme, and no application can override that.
+
+
 AUDIO
 -----
 

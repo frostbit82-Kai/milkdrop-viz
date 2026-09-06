@@ -48,6 +48,18 @@ A preset rated 0 stars is dropped from the rotation. Settings and ratings are
 kept in %APPDATA%\MilkDropVisualizer and survive uninstalling and upgrading.
 
 
+THEME
+-----
+
+Settings -> Theme is Dark, Light, or Follow system. It covers the whole
+interface: the settings and key-binding dialogs, the right-click menu, the
+preset browser, and the title bar and border around the visualiser window.
+Dark is the default, because the visuals themselves are usually dark.
+
+"Follow system" tracks the Windows app-theme setting and changes with it the
+next time a menu or dialog is opened.
+
+
 AUDIO
 -----
 

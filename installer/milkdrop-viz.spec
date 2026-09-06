@@ -65,8 +65,10 @@ a = Analysis(
     [str(REPO / "main.py")],
     pathex=[str(REPO)],
     binaries=binaries,
-    # The About dialog's logo, and the version it prints. Both land at the
-    # bundle root, which is what _asset_path() looks at when frozen.
+    # Everything _asset_path() reaches for: the About dialog's logo, the
+    # spin and combo arrows for both themes, and the version it prints. It
+    # all lands at the bundle root, which is what _asset_path() looks at
+    # when frozen.
     datas=[(str(REPO / "assets"), "assets"), (str(REPO / "VERSION"), ".")],
     hiddenimports=hiddenimports,
     # PyQt6 is excluded deliberately: viz_common falls back to it when

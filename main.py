@@ -38,7 +38,7 @@ from renderer import Renderer
 # Qt comes through the ui shim, which gets it from viz_common -- that is where
 # the PySide6/PyQt6 choice is made, and naming a binding here would undo it.
 from ui import (Bridge, ContextMenu, ToastLabel, SettingsDialog, QDialog,
-                QApplication, Signal)
+                QApplication, Signal, set_app_theme, browser_qss)
 
 
 def _parse_geometry(geo_str: str) -> tuple[int, int, int, int] | None:
@@ -75,6 +75,9 @@ class App:
         self._qt_app = QApplication.instance() or QApplication(sys.argv)
         self._qt_app.setApplicationName("MilkDrop Visualizer")
         self._qt_app.setQuitOnLastWindowClosed(False)
+        # Before any dialog exists, so Qt's palette and the OS-drawn title
+        # bars match the sheet the dialogs are about to use.
+        set_app_theme(self._cfg.get("theme", "dark"))
 
         self._bridge  = AppBridge()
         self._toast   = ToastLabel()
@@ -165,6 +168,7 @@ class App:
         if dlg.exec() == QDialog.DialogCode.Accepted:
             updates = dlg.get_config()
             self._cfg.update(updates)
+            set_app_theme(updates.get("theme", "dark"))
             self._renderer._save_config(self._cfg)
             self._renderer.apply_settings(updates)
 
@@ -175,6 +179,9 @@ class App:
         if self._browser.isVisible():
             self._browser.hide()
         else:
+            # The window is built once and reused, so a theme changed since
+            # then would leave it in the old one.
+            self._browser.setStyleSheet(browser_qss())
             self._browser.show()
             self._browser.raise_()
             self._browser.activateWindow()

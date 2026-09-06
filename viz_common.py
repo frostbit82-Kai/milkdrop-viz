@@ -1756,26 +1756,116 @@ def app_version() -> str:
         return "dev"
 
 
-#: One dark sheet for every dialog. The visualiser is a black window with a
-#: near-black menu over it, and a settings dialog in the system's light theme
-#: beside that is a flashbang.
-DIALOG_QSS = """
-    QDialog, QWidget, QMessageBox { background: #141414; color: #e8e8e8; }
-    QLabel, QCheckBox, QRadioButton { color: #e8e8e8; background: transparent; }
+#: The three values `theme` takes in config.json. "system" is resolved through
+#: Qt's own colour-scheme hint, which is fed by the Windows app-theme setting
+#: and by the freedesktop colour-scheme portal on Linux -- so following the
+#: desktop costs no platform code of our own.
+THEMES = ("dark", "light", "system")
+
+#: Every colour the Qt surface uses, per resolved theme. The visualiser itself
+#: is untouched: it is an SDL window full of somebody else's preset, and the
+#: toast is a translucent black overlay on top of it, so neither takes a theme.
+_THEME_PALETTES = {
+    "dark": {
+        "bg":            "#141414",
+        "fg":            "#e8e8e8",
+        "muted":         "#9a9a9a",
+        "link":          "#e0b44a",
+        "field":         "#1e1e1e",
+        "border":        "rgba(255, 255, 255, 40)",
+        "sel_bg":        "#3a6ea5",
+        "sel_fg":        "#ffffff",
+        "button":        "#262626",
+        "button_hover":  "#333333",
+        "button_press":  "#1c1c1c",
+        "button_border": "rgba(255, 255, 255, 45)",
+        "focus_border":  "rgba(255, 255, 255, 90)",
+        "spin":          "#2a2a2a",
+        "spin_hover":    "#3a3a3a",
+        "table":         "#1a1a1a",
+        "grid":          "rgba(255, 255, 255, 25)",
+        "header":        "#232323",
+        "header_fg":     "#dddddd",
+        "separator":     "rgba(255, 255, 255, 30)",
+        "groove":        "rgba(255, 255, 255, 45)",
+        "handle":        "#e8e8e8",
+        "scroll_bg":     "#1a1a1a",
+        "scroll_handle": "rgba(255, 255, 255, 55)",
+        "menu_bg":       "rgba(18, 18, 18, 235)",
+        "menu_border":   "rgba(255, 255, 255, 55)",
+        "menu_hover":    "rgba(255, 255, 255, 22)",
+        "menu_sep":      "rgba(255, 255, 255, 25)",
+        "list_bg":       "#14141c",
+        "list_border":   "#2a2a38",
+        "list_line":     "#1d1d27",
+        "panel":         "#0c0c12",
+        "arrow_down":    "arrow-down.png",
+        "arrow_up":      "arrow-up.png",
+    },
+    "light": {
+        "bg":            "#f5f5f5",
+        "fg":            "#1c1c1c",
+        "muted":         "#5f5f5f",
+        "link":          "#8a5d00",
+        "field":         "#ffffff",
+        "border":        "rgba(0, 0, 0, 55)",
+        "sel_bg":        "#3a6ea5",
+        "sel_fg":        "#ffffff",
+        "button":        "#e6e6e6",
+        "button_hover":  "#dadada",
+        "button_press":  "#c8c8c8",
+        "button_border": "rgba(0, 0, 0, 60)",
+        "focus_border":  "rgba(0, 0, 0, 120)",
+        "spin":          "#e0e0e0",
+        "spin_hover":    "#d0d0d0",
+        "table":         "#ffffff",
+        "grid":          "rgba(0, 0, 0, 30)",
+        "header":        "#e9e9e9",
+        "header_fg":     "#333333",
+        "separator":     "rgba(0, 0, 0, 40)",
+        "groove":        "rgba(0, 0, 0, 55)",
+        "handle":        "#444444",
+        "scroll_bg":     "#ededed",
+        "scroll_handle": "rgba(0, 0, 0, 70)",
+        "menu_bg":       "rgba(250, 250, 250, 242)",
+        "menu_border":   "rgba(0, 0, 0, 60)",
+        "menu_hover":    "rgba(0, 0, 0, 22)",
+        "menu_sep":      "rgba(0, 0, 0, 30)",
+        "list_bg":       "#ffffff",
+        "list_border":   "#c8c8d0",
+        "list_line":     "#e4e4ea",
+        "panel":         "#ececed",
+        "arrow_down":    "arrow-down-dark.png",
+        "arrow_up":      "arrow-up-dark.png",
+    },
+}
+
+#: What `theme` is set to right now. Dialogs are built fresh every time they
+#: are opened, so they simply read this -- there is no live widget to restyle
+#: and no signal to keep connected.
+_app_theme = "dark"
+
+#: Same sheet for every dialog. The visualiser is a black window with a
+#: near-black menu over it, so dark is the default; "light" and "system" exist
+#: because a desktop in a light theme should be allowed to say so.
+_DIALOG_QSS_TEMPLATE = """
+    QDialog, QWidget, QMessageBox { background: @bg@; color: @fg@; }
+    QLabel, QCheckBox, QRadioButton { color: @fg@; background: transparent; }
     QLineEdit, QSpinBox, QDoubleSpinBox, QComboBox, QAbstractItemView {
-        background: #1e1e1e;
-        color: #e8e8e8;
-        border: 1px solid rgba(255, 255, 255, 40);
+        background: @field@;
+        color: @fg@;
+        border: 1px solid @border@;
         border-radius: 4px;
         padding: 4px 6px;
-        selection-background-color: #3a6ea5;
-        selection-color: #ffffff;
+        selection-background-color: @sel_bg@;
+        selection-color: @sel_fg@;
     }
     /* A stylesheet replaces the native widget drawing wholesale, and that
        takes the spin and combo arrows with it -- an unstyled spin box comes
        out as two empty boxes. Qt draws no CSS border-triangle either (it
        fills the block), so these are real images, generated once and shipped
-       in assets/. */
+       in assets/. The light theme needs its own pair: the shipped arrows are
+       #cbcbcb, which disappears on a light spin button. */
     QComboBox::drop-down { border: 0; width: 18px; }
     QComboBox::down-arrow, QSpinBox::down-arrow, QDoubleSpinBox::down-arrow {
         image: url(@ARROW_DOWN@); width: 9px; height: 6px;
@@ -1785,53 +1875,209 @@ DIALOG_QSS = """
     }
     QSpinBox::up-button, QDoubleSpinBox::up-button,
     QSpinBox::down-button, QDoubleSpinBox::down-button {
-        background: #2a2a2a; border: 0; width: 16px;
+        background: @spin@; border: 0; width: 16px;
     }
     QSpinBox::up-button:hover, QDoubleSpinBox::up-button:hover,
     QSpinBox::down-button:hover, QDoubleSpinBox::down-button:hover {
-        background: #3a3a3a;
+        background: @spin_hover@;
     }
-    QComboBox QAbstractItemView { border: 1px solid rgba(255, 255, 255, 40); }
+    QComboBox QAbstractItemView { border: 1px solid @border@; }
     QPushButton {
-        background: #262626;
-        color: #e8e8e8;
-        border: 1px solid rgba(255, 255, 255, 45);
+        background: @button@;
+        color: @fg@;
+        border: 1px solid @button_border@;
         border-radius: 4px;
         padding: 5px 14px;
     }
-    QPushButton:hover   { background: #333333; }
-    QPushButton:pressed { background: #1c1c1c; }
-    QPushButton:default { border-color: rgba(255, 255, 255, 90); }
+    QPushButton:hover   { background: @button_hover@; }
+    QPushButton:pressed { background: @button_press@; }
+    QPushButton:default { border-color: @focus_border@; }
     QTableWidget {
-        background: #1a1a1a;
-        color: #e8e8e8;
-        gridline-color: rgba(255, 255, 255, 25);
-        selection-background-color: #3a6ea5;
-        selection-color: #ffffff;
+        background: @table@;
+        color: @fg@;
+        gridline-color: @grid@;
+        selection-background-color: @sel_bg@;
+        selection-color: @sel_fg@;
     }
     QHeaderView::section {
-        background: #232323; color: #dddddd; border: 0; padding: 4px;
+        background: @header@; color: @header_fg@; border: 0; padding: 4px;
     }
-    QTableCornerButton::section { background: #232323; border: 0; }
-    QFrame[frameShape="4"], QFrame[frameShape="5"] { color: rgba(255, 255, 255, 30); }
+    QTableCornerButton::section { background: @header@; border: 0; }
+    QFrame[frameShape="4"], QFrame[frameShape="5"] { color: @separator@; }
     QSlider::groove:horizontal {
-        height: 4px; background: rgba(255, 255, 255, 45); border-radius: 2px;
+        height: 4px; background: @groove@; border-radius: 2px;
     }
     QSlider::handle:horizontal {
-        background: #e8e8e8; width: 12px; margin: -5px 0; border-radius: 6px;
+        background: @handle@; width: 12px; margin: -5px 0; border-radius: 6px;
     }
-    QScrollBar:vertical, QScrollBar:horizontal { background: #1a1a1a; border: 0; }
-    QScrollBar::handle { background: rgba(255, 255, 255, 55); border-radius: 4px; }
+    QScrollBar:vertical, QScrollBar:horizontal { background: @scroll_bg@; border: 0; }
+    QScrollBar::handle { background: @scroll_handle@; border-radius: 4px; }
     QScrollBar::add-line, QScrollBar::sub-line { height: 0; width: 0; }
-    QToolTip { background: #1e1e1e; color: #e8e8e8;
-               border: 1px solid rgba(255, 255, 255, 40); }
-""".replace(
-    # Absolute paths, forward slashes: Qt's stylesheet parser reads a
-    # backslash as an escape, so a Windows path has to be normalised.
-    "@ARROW_DOWN@", _asset_path("assets", "arrow-down.png").replace("\\", "/")
-).replace(
-    "@ARROW_UP@", _asset_path("assets", "arrow-up.png").replace("\\", "/")
-)
+    QToolTip { background: @field@; color: @fg@; border: 1px solid @border@; }
+"""
+
+#: The right-click menu floats over the visualiser rather than sitting in a
+#: dialog, so it keeps its own translucent sheet.
+_MENU_QSS_TEMPLATE = """
+    QMenu {
+        background: @menu_bg@;
+        color: @fg@;
+        border: 1px solid @menu_border@;
+        border-radius: 6px;
+        padding: 5px 3px;
+        font-size: 13px;
+    }
+    QMenu::item { padding: 7px 24px; border-radius: 4px; min-width: 180px; }
+    QMenu::item:selected { background: @menu_hover@; }
+    QMenu::separator { background: @menu_sep@; height: 1px; margin: 4px 10px; }
+"""
+
+#: The preset browser is its own window with its own list, so it gets its own
+#: sheet -- built here so every themed surface lives in one file.
+_BROWSER_QSS_TEMPLATE = """
+    QWidget { background: @panel@; color: @fg@; }
+    QLabel#title {
+        color: @fg@; font-size: 14px; font-weight: bold;
+        padding: 8px 10px; background: @header@;
+    }
+    QListWidget {
+        background: @list_bg@; border: 1px solid @list_border@;
+        font-size: 12px; outline: none;
+    }
+    QListWidget::item { padding: 4px 8px; border-bottom: 1px solid @list_line@; }
+    QListWidget::item:selected { background: @sel_bg@; color: @sel_fg@; }
+    QPushButton {
+        background: @button@; color: @fg@;
+        border: 1px solid @button_border@; border-radius: 5px;
+        padding: 4px 10px;
+    }
+    QPushButton:hover { background: @button_hover@; }
+    QPushButton:checked {
+        background: @sel_bg@; color: @sel_fg@; border-color: @focus_border@;
+    }
+"""
+
+
+def resolve_theme(theme: str = None) -> str:
+    """Turn a configured theme into "dark" or "light" -- never "system".
+
+    "system" is answered by Qt's colour-scheme hint rather than by reading the
+    registry or a gsettings key here: Qt 6.5+ already tracks the Windows
+    app-theme setting and the freedesktop colour-scheme portal, so following
+    the desktop costs no platform code. Anything Qt cannot answer falls back
+    to dark, which is what this app looked like before the setting existed.
+    """
+    theme = (theme or _app_theme or "dark").lower()
+    if theme in ("dark", "light"):
+        return theme
+    try:
+        scheme = QApplication.instance().styleHints().colorScheme()
+        return "light" if scheme == Qt.ColorScheme.Light else "dark"
+    except Exception:
+        return "dark"          # Qt < 6.5, or no QApplication yet
+
+
+def set_app_theme(theme: str):
+    """Remember the configured theme, and let Qt's own chrome follow it.
+
+    A stylesheet cannot reach everything: on Windows 11 the dialog title bar
+    is drawn by the OS, and a dark dialog under a white title bar looks
+    broken. styleHints().setColorScheme() is what fixes that, and it is also
+    what makes the native file dialog behind "Browse..." match. Qt < 6.8 has
+    no setter, hence the guard.
+    """
+    global _app_theme
+    _app_theme = theme if theme in THEMES else "dark"
+    try:
+        hints = QApplication.instance().styleHints()
+        hints.setColorScheme({
+            "dark":  Qt.ColorScheme.Dark,
+            "light": Qt.ColorScheme.Light,
+        }.get(_app_theme, Qt.ColorScheme.Unknown))
+    except Exception:
+        pass
+
+
+def apply_window_theme(handle, theme: str = None) -> bool:
+    """Match a window's OS-drawn title bar and border to the app theme.
+
+    The frame around the visualiser is not ours to paint -- Windows draws it,
+    from its own light/dark setting -- so a dark visualiser could sit under a
+    white title bar with nothing the stylesheet could do about it. DWM's
+    immersive-dark-mode attribute is the override. It is applied to the SDL
+    window, which Qt's setColorScheme cannot reach: that one only covers
+    windows Qt itself created (the dialogs).
+
+    Attribute 20 is the documented DWMWA_USE_IMMERSIVE_DARK_MODE (Windows 10
+    20H1 and later); 19 was the undocumented spelling on 1809-1909. Passing
+    the wrong one fails rather than misbehaving, so both are tried in turn.
+
+    Linux has no equivalent and needs none: the frame belongs to the window
+    manager, which paints it from the desktop's own theme. Returns False
+    there, and on any Windows too old for either attribute.
+    """
+    if sys.platform != "win32" or not handle:
+        return False
+    dark = ctypes.c_int(1 if resolve_theme(theme) == "dark" else 0)
+    try:
+        dwm = ctypes.windll.dwmapi
+        user32 = ctypes.windll.user32
+    except (AttributeError, OSError):
+        return False
+    hwnd = ctypes.c_void_p(int(handle))
+    applied = False
+    for attribute in (20, 19):
+        if dwm.DwmSetWindowAttribute(hwnd, ctypes.c_int(attribute),
+                                     ctypes.byref(dark),
+                                     ctypes.sizeof(dark)) == 0:
+            applied = True
+            break
+    if applied:
+        # The attribute alone repaints the frame on the next activation, which
+        # from the user's side looks like the setting not having worked.
+        # SWP_FRAMECHANGED forces it now. NOMOVE|NOSIZE|NOZORDER|NOACTIVATE
+        # so nothing else about the window moves.
+        user32.SetWindowPos(hwnd, None, 0, 0, 0, 0, 0x0020 | 0x0002 | 0x0001
+                            | 0x0004 | 0x0010)
+    return applied
+
+
+def theme_colour(key: str, theme: str = None) -> str:
+    """One palette entry, for the few labels that set their own colour."""
+    return _THEME_PALETTES[resolve_theme(theme)].get(key, "")
+
+
+def _build_qss(template: str, theme: str = None) -> str:
+    pal = _THEME_PALETTES[resolve_theme(theme)]
+    out = template
+    for key, value in pal.items():
+        out = out.replace("@%s@" % key, value)
+    for token, name in (("@ARROW_DOWN@", pal["arrow_down"]),
+                        ("@ARROW_UP@",   pal["arrow_up"])):
+        # Absolute paths, forward slashes: Qt's stylesheet parser reads a
+        # backslash as an escape, so a Windows path has to be normalised.
+        out = out.replace(token,
+                          _asset_path("assets", name).replace("\\", "/"))
+    return out
+
+
+def dialog_qss(theme: str = None) -> str:
+    """The dialog sheet for the current theme, or for the one named."""
+    return _build_qss(_DIALOG_QSS_TEMPLATE, theme)
+
+
+def menu_qss(theme: str = None) -> str:
+    return _build_qss(_MENU_QSS_TEMPLATE, theme)
+
+
+def browser_qss(theme: str = None) -> str:
+    return _build_qss(_BROWSER_QSS_TEMPLATE, theme)
+
+
+#: Kept as a name because Bomsai Player's shims import it. It is the dark
+#: sheet, which is what it has always been; anything theme-aware calls
+#: dialog_qss() instead.
+DIALOG_QSS = dialog_qss("dark")
 
 
 class ToastLabel(QLabel):
@@ -1916,7 +2162,7 @@ class SettingsDialog(QDialog):
         super().__init__(parent)
         self.setWindowTitle("Visualizer Settings")
         self.setMinimumWidth(400)
-        self.setStyleSheet(DIALOG_QSS)
+        self.setStyleSheet(dialog_qss())
 
         layout = QFormLayout(self)
         layout.setSpacing(10)
@@ -1962,6 +2208,19 @@ class SettingsDialog(QDialog):
         if idx >= 0:
             self._quality.setCurrentIndex(idx)
         layout.addRow("Quality:", self._quality)
+
+        # Theme. Dark is the default and was the only option: the
+        # visualiser is a black window, and a light dialog beside it is a
+        # flashbang. "Follow system" is for desktops that are not.
+        self._theme = QComboBox()
+        for value, label in (("dark",   "Dark"),
+                             ("light",  "Light"),
+                             ("system", "Follow system")):
+            self._theme.addItem(label, value)
+        idx = self._theme.findData(cfg.get("theme", "dark"))
+        if idx >= 0:
+            self._theme.setCurrentIndex(idx)
+        layout.addRow("Theme:", self._theme)
 
         # Soft cut duration
         self._soft_cut = QDoubleSpinBox()
@@ -2075,6 +2334,7 @@ class SettingsDialog(QDialog):
             "preset_random_extra":  self._rnd.value(),
             "fps":                  self._fps.value(),
             "quality":              quality,
+            "theme":                self._theme.currentData() or "dark",
             "mesh_x":               mx,
             "mesh_y":               my,
             "soft_cut_duration":    round(self._soft_cut.value(), 1),
@@ -2135,7 +2395,7 @@ class KeymapDialog(QDialog):
         self.setWindowTitle("Keyboard Mapping")
         self.setMinimumWidth(560)
         self.setMinimumHeight(480)
-        self.setStyleSheet(DIALOG_QSS)
+        self.setStyleSheet(dialog_qss())
         self._keymaps = dict(keymaps)
 
         layout = QVBoxLayout(self)
@@ -2149,7 +2409,7 @@ class KeymapDialog(QDialog):
             "Rating 0 = preset excluded from random rotation."
         )
         info.setWordWrap(True)
-        info.setStyleSheet("color: #9a9a9a; font-size: 12px;")
+        info.setStyleSheet(f"color: {theme_colour('muted')}; font-size: 12px;")
         layout.addWidget(info)
 
         # Table
@@ -2180,7 +2440,7 @@ class KeymapDialog(QDialog):
             note = ACTION_NOTES.get(action, "")
             note_item = QTableWidgetItem(note)
             note_item.setFlags(Qt.ItemFlag.ItemIsEnabled)
-            note_item.setForeground(QColor("#9a9a9a"))
+            note_item.setForeground(QColor(theme_colour("muted")))
             self._table.setItem(row, 2, note_item)
 
         self._table.installEventFilter(self)
@@ -2285,7 +2545,7 @@ class AboutDialog(QDialog):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setWindowTitle("About MilkDrop Visualizer")
-        self.setStyleSheet(DIALOG_QSS)
+        self.setStyleSheet(dialog_qss())
         self.setMinimumWidth(430)
 
         layout = QVBoxLayout(self)
@@ -2305,7 +2565,9 @@ class AboutDialog(QDialog):
                                "padding:6px;margin-bottom:6px;")
             layout.addWidget(logo, 0, Qt.AlignmentFlag.AlignCenter)
 
-        def line(html: str, size: int = 13, colour: str = "#e8e8e8",
+        muted = theme_colour("muted")
+
+        def line(html: str, size: int = 13, colour: str = None,
                  weight: int = 400, space_after: int = 0):
             lab = QLabel(html)
             lab.setAlignment(Qt.AlignmentFlag.AlignCenter)
@@ -2314,16 +2576,18 @@ class AboutDialog(QDialog):
             lab.setTextInteractionFlags(
                 Qt.TextInteractionFlag.TextBrowserInteraction)
             lab.setStyleSheet(
-                f"color:{colour};font-size:{size}px;font-weight:{weight};"
+                f"color:{colour or theme_colour('fg')};"
+                f"font-size:{size}px;font-weight:{weight};"
                 f"margin-bottom:{space_after}px;")
             layout.addWidget(lab)
             return lab
 
         line("MilkDrop Visualizer", size=18, weight=600)
-        line(f"Version {app_version()}", size=12, colour="#9a9a9a", space_after=6)
+        line(f"Version {app_version()}", size=12, colour=muted, space_after=6)
         line("Created by <b>Adam Bom</b>", size=13)
         line(f'BomsAI Software &nbsp;·&nbsp; '
-             f'<a href="{self.SITE}" style="color:#e0b44a;">bomsaisoftware.com</a>',
+             f'<a href="{self.SITE}" style="color:{theme_colour("link")};">'
+             f'bomsaisoftware.com</a>',
              size=13, space_after=8)
 
         sep = QFrame()
@@ -2336,10 +2600,10 @@ class AboutDialog(QDialog):
         line("Visuals rendered by <b>projectM 4</b> (LGPL-2.1), with SDL2, "
              "PySide6, PyOpenGL and PortAudio. Licence texts ship in the "
              "<i>licenses</i> folder beside the app.",
-             size=11, colour="#9a9a9a")
+             size=11, colour=muted)
         line("Presets and textures are the work of their own authors and are "
              "not included — point the app at your own copies in Settings.",
-             size=11, colour="#9a9a9a", space_after=4)
+             size=11, colour=muted, space_after=4)
 
         btns = QDialogButtonBox(QDialogButtonBox.StandardButton.Close)
         btns.rejected.connect(self.reject)
@@ -2364,26 +2628,14 @@ class ContextMenu(QMenu):
         # Stylesheets inherit down the widget-parent chain, and the confirm
         # dialogs below are parented to this, so setting it once here makes
         # every QMessageBox dark too.
-        self._tmp_parent.setStyleSheet(DIALOG_QSS)
+        self._tmp_parent.setStyleSheet(dialog_qss())
         super().__init__(self._tmp_parent)
         self._renderer = renderer
         self._cfg      = cfg
         self._ratings  = ratings
         self._keymaps  = keymaps
 
-        self.setStyleSheet("""
-            QMenu {
-                background: rgba(18, 18, 18, 235);
-                color: #e8e8e8;
-                border: 1px solid rgba(255,255,255,55);
-                border-radius: 6px;
-                padding: 5px 3px;
-                font-size: 13px;
-            }
-            QMenu::item { padding: 7px 24px; border-radius: 4px; min-width: 180px; }
-            QMenu::item:selected { background: rgba(255,255,255,22); }
-            QMenu::separator { background: rgba(255,255,255,25); height: 1px; margin: 4px 10px; }
-        """)
+        self.setStyleSheet(menu_qss())
 
         self._build()
 
@@ -2471,7 +2723,8 @@ class ContextMenu(QMenu):
         row_l.setSpacing(8)
         gain = float(self._cfg.get("audio_gain", 1.0))
         lbl = QLabel(f"🔉 Sensitivity {int(gain * 100)}%")
-        lbl.setStyleSheet("color:#ddd;font-size:12px;min-width:130px;")
+        lbl.setStyleSheet(f"color:{theme_colour('fg')};"
+                          "font-size:12px;min-width:130px;")
         slider = QSlider(Qt.Orientation.Horizontal)
         slider.setRange(10, 800)             # 0.1x - 8x
         slider.setValue(int(gain * 100))
@@ -2557,7 +2810,16 @@ class ContextMenu(QMenu):
         dlg = SettingsDialog(self._cfg)
         if dlg.exec() == QDialog.DialogCode.Accepted:
             updates = dlg.get_config()
+            # Only where the theme is ours to set. This menu is also Bomsai
+            # Player's, whose config has no "theme" and whose QApplication is
+            # the host's -- restyling that from here would repaint somebody
+            # else's app.
+            themed = "theme" in self._cfg
             self._cfg.update(updates)
+            if themed:
+                # Dialogs are built fresh each time, so the next one picks the
+                # theme up on its own; this is only so Qt's own chrome follows.
+                set_app_theme(updates.get("theme", "dark"))
             self._renderer._save_config(self._cfg)
             self._renderer.apply_settings(updates)
 
@@ -2738,6 +3000,9 @@ class Renderer:
         #: reads it (to place the toast) and SDL calls belong to the thread
         #: that created the window.
         self._win_rect = None
+        #: HWND on Windows, X11 window id elsewhere. Only the frame theme
+        #: uses it, and only on Windows.
+        self._native_handle = 0
 
         self._audio = AudioCapture(cfg.get("audio_device", ""))
         self._audio.set_gain(cfg.get("audio_gain", 1.0))
@@ -2847,6 +3112,9 @@ class Renderer:
                 else:
                     handle = wm_info.info.x11.window
                 print(f"XID={handle}", flush=True)
+                # Kept so the frame can be re-themed when the setting changes.
+                self._native_handle = handle
+                apply_window_theme(handle, self._cfg.get("theme"))
         except Exception as e:
             print(f"[renderer] Could not get XID: {e}", flush=True)
 
@@ -3264,6 +3532,12 @@ class Renderer:
                         self._audio.update_device(updates["audio_device"])
                     if "audio_gain" in updates:
                         self._audio.set_gain(updates["audio_gain"])
+                    if "theme" in updates:
+                        # Render thread only: the frame belongs to the thread
+                        # that made the window, same rule as every other SDL
+                        # call here.
+                        apply_window_theme(self._native_handle,
+                                           updates["theme"])
                     if "preset_dir" in updates or "texture_dir" in updates:
                         self._apply_texture_paths()
                     if "preset_dir" in updates:

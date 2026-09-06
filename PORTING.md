@@ -161,6 +161,16 @@ driven on Windows and confirmed:
       Borderless, About
 - [x] Status toasts render inside the visualiser window, top-right
 - [x] Keyboard and mouse bindings reach the SDL window
+- [x] **Theme setting: dark, light, or follow the system.** One `theme` value
+      in config.json moves both halves of the UI — the Qt surface (settings,
+      key bindings, About, right-click menu, preset browser) through the
+      palette-driven sheets in `viz_common`, and the frame Windows draws
+      around the visualiser through DWM. Verified live on Windows: switching
+      to Light with the desktop in dark mode turns the dialogs, the menu and
+      the title bar light, and switching back turns them dark without a
+      restart. `test_theme.py` covers the resolution logic. On Linux the Qt
+      half works the same; the frame belongs to the window manager there and
+      is left alone
 
 **Three Windows-only bugs were found and fixed doing this**, all in code that
 was correct on Linux; see Traps in `CLAUDE.md`:
