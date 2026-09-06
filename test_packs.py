@@ -92,6 +92,9 @@ def a_zip_cannot_escape_the_chosen_folder():
 
 
 def a_normal_zip_still_extracts():
+    """The archive's single wrapper directory is dropped on the way in --
+    _preset_root only ever existed to point past it, and on Windows its
+    characters count against MAX_PATH."""
     with tempfile.TemporaryDirectory() as d:
         archive = os.path.join(d, "ok.zip")
         with zipfile.ZipFile(archive, "w") as zf:
@@ -99,7 +102,64 @@ def a_normal_zip_still_extracts():
         dest = os.path.join(d, "dest")
         with zipfile.ZipFile(archive) as zf:
             assert v._safe_extract(zf, dest)
-        assert os.path.exists(os.path.join(dest, "pack", "a.milk"))
+        assert os.path.exists(os.path.join(dest, "a.milk"))
+        assert not os.path.exists(os.path.join(dest, "pack"))
+        assert v._preset_root(dest) == dest
+
+
+def a_traversal_is_never_treated_as_a_wrapper():
+    """Stripping ".." as though it were a wrapper turns ../escaped.milk into
+    escaped.milk, which then passes the containment check that exists to
+    reject it. Caught by the escape test above; pinned down here."""
+    assert v._zip_root(["../escaped.milk"]) == ""
+    assert v._zip_root(["./a.milk", "./b.milk"]) == ""
+    assert v._zip_root(["C:/a.milk", "C:/b.milk"]) == ""
+    assert v._zip_root(["pack/a.milk", "pack/b.milk"]) == "pack"
+    # The wrapper's own directory entry splits to ("pack", "") and still names
+    # the wrapper; treating that as "give up" left every real archive unstripped.
+    assert v._zip_root(["pack/", "pack/a.milk"]) == "pack"
+    assert v._zip_root(["a.milk", "pack/b.milk"]) == ""    # no single wrapper
+    assert v._zip_root(["packA/a.milk", "packB/b.milk"]) == ""
+
+
+def a_zip_with_no_single_wrapper_keeps_its_layout():
+    with tempfile.TemporaryDirectory() as d:
+        archive = os.path.join(d, "two.zip")
+        with zipfile.ZipFile(archive, "w") as zf:
+            zf.writestr("packA/a.milk", "x")
+            zf.writestr("packB/b.milk", "x")
+        dest = os.path.join(d, "dest")
+        with zipfile.ZipFile(archive) as zf:
+            assert v._safe_extract(zf, dest)
+        assert os.path.exists(os.path.join(dest, "packA", "a.milk"))
+        assert os.path.exists(os.path.join(dest, "packB", "b.milk"))
+
+
+def a_pack_too_deep_for_windows_fails_before_writing_anything():
+    """Windows refuses a path of 260 characters unless long paths are on, and
+    they are off by default. zipfile raises ENOENT partway through, leaving a
+    half-installed pack that looks like a working one -- Cream of the Crop has
+    two such files under the default install folder. Say so first instead."""
+    if sys.platform != "win32":
+        return                       # no MAX_PATH to hit
+    with tempfile.TemporaryDirectory() as d:
+        archive = os.path.join(d, "deep.zip")
+        dest = os.path.join(d, "dest")
+        # Sized against this destination, and out of components short enough
+        # to be legal names in their own right -- NTFS caps each at 255.
+        need = v._MAX_PATH - len(os.path.abspath(dest)) + 20
+        deep = "/".join("d" * 80 for _ in range(need // 81 + 1)) + "/x.milk"
+        with zipfile.ZipFile(archive, "w") as zf:
+            zf.writestr("pack/ok.milk", "x")
+            zf.writestr(f"pack/{deep}", "x")
+        try:
+            with zipfile.ZipFile(archive) as zf:
+                v._safe_extract(zf, dest)
+        except ValueError as e:
+            assert "Windows allows" in str(e), e
+            assert not os.path.exists(os.path.join(dest, "ok.milk")),                 "wrote files before reporting the ones that cannot fit"
+            return
+        raise AssertionError("a path past MAX_PATH was accepted")
 
 
 def every_pack_has_a_page_and_a_sane_shape():

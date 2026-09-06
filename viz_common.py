@@ -2713,14 +2713,49 @@ PRESET_PACKS = (
 )
 
 
+#: Windows refuses to create a path of 260 characters or more unless long
+#: paths are switched on, which they are not by default and which needs the
+#: registry. Extraction is where it bites: zipfile raises ENOENT thousands of
+#: files in and leaves a half-installed pack behind.
+_MAX_PATH = 259
+
+
+def _zip_root(names) -> str:
+    """The single top-level directory every member sits under, or "".
+
+    GitHub wraps its archives in one (<repo>-<branch>), and on Windows that
+    wrapper is not free: Cream of the Crop's own longest path is 207 characters
+    and "presets-cream-of-the-crop-master/" adds 33 more, which pushes it past
+    MAX_PATH under the default install folder. Dropping the wrapper buys back
+    every one of those characters and loses nothing -- loading is recursive and
+    _preset_root only existed to point past it.
+    """
+    roots = set()
+    for name in names:
+        head = name.split("/", 1)
+        if len(head) == 1:
+            return ""            # a file at the top level: no single wrapper
+        # head[1] empty means the wrapper's own directory entry ("pack/"),
+        # which still names the wrapper -- it is not a reason to give up.
+        if head[0] in ("", ".", "..") or ":" in head[0]:
+            # Only ever strip a plain directory name. Stripping ".." would
+            # turn ../escape.milk into escape.milk and quietly satisfy the
+            # containment check that exists to reject exactly that.
+            return ""
+        roots.add(head[0])
+        if len(roots) > 1:
+            return ""
+    return roots.pop() if roots else ""
+
+
 def _preset_root(dest: str) -> str:
     """The folder to point the app at once a pack is extracted.
 
-    Zips arrive wrapped in a single top-level directory -- GitHub always names
-    it <repo>-<branch> -- so return that rather than the folder we extracted
-    into. Loading is recursive, so the root is the right answer and there is no
-    need to guess which subfolder holds the most presets; Cream of the Crop
-    nests its 9,795 two deep under category names.
+    Normally dest itself, because _safe_extract drops the archive's wrapper
+    directory. A zip that wrapped its presets some other way still gets the
+    single-subdirectory answer. Loading is recursive, so the root is the right
+    answer and there is no need to guess which subfolder holds the most
+    presets; Cream of the Crop nests its 9,795 two deep under category names.
     """
     if not any(f.lower().endswith(".milk")
                for _d, _s, files in os.walk(dest) for f in files):
@@ -2738,18 +2773,51 @@ def _safe_extract(zf, dest: str, progress=None, cancelled=None):
 
     A zip may name ../ or an absolute path; zipfile will happily follow it.
     Nothing in the packs does, but this reads archives the user chose.
+
+    The archive's single wrapper directory is dropped on the way through, both
+    because it is what _preset_root would have skipped anyway and because on
+    Windows its characters count against MAX_PATH. What still will not fit is
+    reported before a single file is written -- a pack that dies two thousand
+    files in has left a mess that looks like a working install.
     """
     dest_abs = os.path.abspath(dest)
     members = zf.infolist()
-    for i, m in enumerate(members):
-        if cancelled and cancelled():
-            return False
-        target = os.path.abspath(os.path.join(dest_abs, m.filename))
+    root = _zip_root([m.filename for m in members])
+    strip = len(root) + 1 if root else 0
+
+    plan = []
+    for m in members:
+        name = m.filename[strip:]
+        if not name:
+            continue                     # the wrapper directory itself
+        target = os.path.abspath(os.path.join(dest_abs, name))
         if target != dest_abs and not target.startswith(dest_abs + os.sep):
             raise ValueError(f"refusing to extract outside the folder: {m.filename}")
-        zf.extract(m, dest_abs)
-        if progress and (i % 200 == 0 or i == len(members) - 1):
-            progress(i + 1, len(members))
+        plan.append((m, name, target))
+
+    if sys.platform == "win32":
+        over = [t for _m, _n, t in plan if len(t) > _MAX_PATH]
+        if over:
+            room = max(len(t) for t in over) - len(dest_abs)
+            raise ValueError(
+                f"{len(over)} of {len(plan)} files need a path longer than "
+                f"Windows allows ({_MAX_PATH} characters). Install into a "
+                f"folder of at most {_MAX_PATH - room} characters — this one "
+                f"is {len(dest_abs)}.")
+
+    for i, (m, name, _t) in enumerate(plan):
+        if cancelled and cancelled():
+            return False
+        # zipfile builds the destination from filename, and it is also what
+        # strips characters Windows forbids in a name, so rename rather than
+        # writing the bytes here and losing that.
+        original, m.filename = m.filename, name
+        try:
+            zf.extract(m, dest_abs)
+        finally:
+            m.filename = original
+        if progress and (i % 200 == 0 or i == len(plan) - 1):
+            progress(i + 1, len(plan))
     return True
 
 

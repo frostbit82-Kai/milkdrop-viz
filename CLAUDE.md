@@ -338,5 +338,23 @@ There is no display in an agent shell and SDL needs one, so:
 - **`_safe_extract` refuses members that resolve outside the destination.** The
   user picks these archives from wherever they downloaded them, and `zipfile`
   will happily follow `../`.
+- **Windows MAX_PATH is what breaks preset packs, and it breaks them by
+  default.** A path of 260 characters or more needs long paths switched on in
+  the registry, which they are not; `zipfile` raises a bare `ENOENT` partway
+  through and leaves a half-installed pack that looks like a working one.
+  Cream of the Crop's longest member is 207 characters and the GitHub wrapper
+  `presets-cream-of-the-crop-master/` adds 33 more, so **two files overflowed
+  under the default install folder** — not an artefact of a deep test path.
+  `_safe_extract` drops the archive's single wrapper directory (buying those 33
+  characters back, and giving 230 with 29 to spare) and checks every target
+  before writing anything, so what still will not fit is a message naming the
+  folder length instead of a mess on disk.
+- **`_zip_root` must never strip `..`, `.`, or a drive.** Stripping a wrapper
+  rewrites member paths, so treating `..` as one turns `../escaped.milk` into
+  `escaped.milk`, which then passes the containment check that exists to reject
+  it. It also must not give up on the wrapper's own directory entry: `"pack/"`
+  splits to `("pack", "")`, and reading that empty half as "no wrapper" left
+  every real archive unstripped — which is how the MAX_PATH overflow survived
+  its first fix.
 
 See PORTING.md for port status and the Windows setup recipe.
