@@ -139,7 +139,7 @@ Done, Windows packaging:
       `%APPDATA%\MilkDropVisualizer` and survive uninstall. Verified end to end:
       silent install, launch from the installed path, bundled projectM loaded,
       11,223 presets, WASAPI loopback, presets rendering and switching, and the
-      About dialog showing its logo and version 1.1.1 out of `sys._MEIPASS`
+      About dialog showing its logo and the `VERSION` file out of `sys._MEIPASS`
 - [x] The release build is **windowed** (no console box behind the visualiser)
       and therefore silent. `MILKDROP_CONSOLE=1` builds a console version, which
       is the only way to debug a frozen failure
