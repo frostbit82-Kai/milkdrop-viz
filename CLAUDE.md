@@ -309,4 +309,34 @@ There is no display in an agent shell and SDL needs one, so:
   manager also does. Worst case is one redundant reopen, not a fight. Do not
   "fix" it by deleting the watchdog: standalone milkdrop-viz has no manager.
 
+- **Preset loading is recursive, and it has to stay that way.**
+  `_all_preset_files()` has always globbed with `**`, but the native
+  `projectm_playlist_add_path` was called with `recurse=False`, so the playlist
+  held only the top level while sort, delete-zero and the browser saw every
+  nested preset. It matters because packs are nested: Cream of the Crop's zip
+  has no `All/` folder at all — its 9,795 presets sit two deep under category
+  names, and pointing at the root loaded **four**. A flat `All/` directory is
+  someone's repackaging, not what the repository ships.
+- **Settings applies only the fields that changed.** `SettingsDialog.get_config()`
+  returns all of them; `changed_config()` diffs against a *copy* of the config the
+  dialog opened with, because every caller does `cfg.update(...)` the moment
+  `exec()` returns and the renderer shares that same dict. Handing the whole
+  config to `apply_settings` made every OK look like a preset-directory change —
+  full rescan, back to preset 0, shuffle order and rated history gone, audio
+  capture restarted. `_apply_pm_settings` still gets the *merged* config, not the
+  diff: it reads every projectM setting with a default, so a partial dict would
+  silently reset whatever it did not mention.
+- **A texture directory change reloads the preset on screen.** projectM resolves
+  textures when it loads a preset, so on a long duration or a locked preset the
+  old behaviour was indistinguishable from needing a restart.
+- **Google Drive will not hand a large file to a program.** It answers with a
+  virus-scan interstitial (`<title>Google Drive - Virus scan warning</title>`)
+  and needs a confirm token scraped from it, then throttles once enough people
+  have pulled the file — which would surface as this app being broken. Packs
+  with no direct URL offer the download page plus a local-zip import instead.
+  Do not add Drive-scraping code.
+- **`_safe_extract` refuses members that resolve outside the destination.** The
+  user picks these archives from wherever they downloaded them, and `zipfile`
+  will happily follow `../`.
+
 See PORTING.md for port status and the Windows setup recipe.

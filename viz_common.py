@@ -1110,6 +1110,8 @@ import ctypes
 import ctypes.util
 import glob
 import random
+import zipfile
+import urllib.request
 from pathlib import Path
 
 logger_pm = logging.getLogger(__name__)
@@ -1523,8 +1525,14 @@ class ProjectM4:
         historically used True — callers pass what they need.
         """
         if self._pl and self._playlist:
+            # Recursive, because _all_preset_files() has always globbed with
+            # ** and the two have to agree: a non-recursive load left the
+            # playlist holding only the top level while sort, delete-zero and
+            # the browser saw every nested preset. Packs are nested -- Cream of
+            # the Crop ships 9,795 presets two folders deep, and pointing at
+            # its root used to load four.
             count = self._playlist.projectm_playlist_add_path(
-                self._pl, path.encode(), False, False
+                self._pl, path.encode(), True, False
             )
             # Order is managed in Python (ProjectMVisualizer) so that "prev"
             # returns to the actual previous preset and shuffle reorders the
@@ -1718,16 +1726,17 @@ pyqtSignal = Signal          # the shim modules beside this one still say this
 # it did when this was `from PyQt6.QtWidgets import ...`. The tuples are the
 # authoritative list of what this module and its shims use.
 for _mod, _names in (
-    (QtCore, ("Qt", "QObject", "QPoint", "QTimer", "QEvent")),
+    (QtCore, ("Qt", "QObject", "QPoint", "QTimer", "QEvent", "QThread", "QUrl")),
     (QtGui,  ("QKeySequence", "QFont", "QCursor", "QAction", "QActionGroup",
-              "QPixmap", "QColor")),
+              "QPixmap", "QColor", "QDesktopServices")),
     (QtWidgets, ("QApplication", "QMenu", "QDialog", "QFormLayout",
                  "QVBoxLayout", "QHBoxLayout", "QPushButton", "QLabel",
                  "QSpinBox", "QDoubleSpinBox", "QComboBox", "QDialogButtonBox",
                  "QCheckBox", "QFrame", "QTableWidget", "QTableWidgetItem",
                  "QHeaderView", "QLineEdit", "QSizePolicy", "QMessageBox",
                  "QFileDialog", "QSlider", "QWidget", "QWidgetAction",
-                 "QListWidget", "QListWidgetItem", "QAbstractItemView")),
+                 "QListWidget", "QListWidgetItem", "QAbstractItemView",
+                 "QProgressBar")),
 ):
     for _n in _names:
         globals()[_n] = getattr(_mod, _n)
@@ -1762,6 +1771,30 @@ def _asset_path(*parts) -> str:
     """
     root = getattr(sys, "_MEIPASS", "") if getattr(sys, "frozen", False) else ""
     return os.path.join(root or os.path.dirname(os.path.abspath(__file__)), *parts)
+
+
+def user_data_dir() -> str:
+    """Per-user data directory.
+
+    Never the install directory: install.sh replaces it wholesale on upgrade
+    and removes it on uninstall, and under Program Files it is not writable
+    without elevation. Bulk data belongs in the OS's data location, which is
+    a different one from the config location this app already uses.
+    """
+    if sys.platform == "win32":
+        root = os.environ.get("LOCALAPPDATA") or os.path.expanduser(
+            "~\\AppData\\Local")
+    elif sys.platform == "darwin":
+        root = os.path.expanduser("~/Library/Application Support")
+    else:
+        root = os.environ.get("XDG_DATA_HOME") or os.path.expanduser(
+            "~/.local/share")
+    return os.path.join(root, "MilkDropVisualizer")
+
+
+def default_pack_dir(cfg: dict) -> str:
+    """Where the Get Presets dialog offers to install."""
+    return os.path.join(user_data_dir(), "presets")
 
 
 def app_version() -> str:
@@ -2645,6 +2678,332 @@ class AboutDialog(QDialog):
         layout.addWidget(btns)
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+#  Preset packs  (download / install)
+# ─────────────────────────────────────────────────────────────────────────────
+
+# Nothing here ships with the app. These are the two packs worth pointing a new
+# install at, and the app fetches them on request rather than redistributing
+# them. A pack with no "url" cannot be fetched directly -- Google Drive answers
+# a large-file request with a virus-scan interstitial rather than the file, and
+# throttles once enough people have pulled it, which would surface as this app
+# being broken -- so those offer the download page and a local-zip import.
+PRESET_PACKS = (
+    {
+        "name":    "Cream of the Crop",
+        "detail":  "9,795 presets, curated by ISOSCELES. The default set for "
+                   "projectM since 2022 — the one to start with.",
+        "size":    "about 50 MB",
+        "url":     "https://github.com/projectM-visualizer/"
+                   "presets-cream-of-the-crop/archive/refs/heads/master.zip",
+        "page":    "https://github.com/projectM-visualizer/presets-cream-of-the-crop",
+        "textures": False,
+    },
+    {
+        "name":    "MilkDrop 135k+ MegaPack 2026",
+        "detail":  "Everything, plus the texture pack many presets sample. "
+                   "Several GB — Google Drive will not hand this to the app, "
+                   "so download it in a browser and install the .zip below.",
+        "size":    "several GB",
+        "url":     None,
+        "page":    "https://drive.google.com/file/d/"
+                   "1DlszoqMG-pc5v1Bo9x4NhemGPiwT-0pv/view",
+        "textures": True,
+    },
+)
+
+
+def _preset_root(dest: str) -> str:
+    """The folder to point the app at once a pack is extracted.
+
+    Zips arrive wrapped in a single top-level directory -- GitHub always names
+    it <repo>-<branch> -- so return that rather than the folder we extracted
+    into. Loading is recursive, so the root is the right answer and there is no
+    need to guess which subfolder holds the most presets; Cream of the Crop
+    nests its 9,795 two deep under category names.
+    """
+    if not any(f.lower().endswith(".milk")
+               for _d, _s, files in os.walk(dest) for f in files):
+        return ""
+    entries = [e for e in os.listdir(dest) if not e.startswith(".")]
+    subdirs = [e for e in entries if os.path.isdir(os.path.join(dest, e))]
+    flat = any(e.lower().endswith(".milk") for e in entries)
+    if len(subdirs) == 1 and not flat:
+        return os.path.join(dest, subdirs[0])
+    return dest
+
+
+def _safe_extract(zf, dest: str, progress=None, cancelled=None):
+    """Extract, refusing members that would land outside dest.
+
+    A zip may name ../ or an absolute path; zipfile will happily follow it.
+    Nothing in the packs does, but this reads archives the user chose.
+    """
+    dest_abs = os.path.abspath(dest)
+    members = zf.infolist()
+    for i, m in enumerate(members):
+        if cancelled and cancelled():
+            return False
+        target = os.path.abspath(os.path.join(dest_abs, m.filename))
+        if target != dest_abs and not target.startswith(dest_abs + os.sep):
+            raise ValueError(f"refusing to extract outside the folder: {m.filename}")
+        zf.extract(m, dest_abs)
+        if progress and (i % 200 == 0 or i == len(members) - 1):
+            progress(i + 1, len(members))
+    return True
+
+
+class _PackWorker(QThread):
+    """Downloads and/or extracts a pack off the UI thread."""
+
+    progress = Signal(int, int, str)   # done, total, phase ("" total = unknown)
+    finished_ok = Signal(str, str)     # preset_dir, texture_dir ("" if none)
+    failed = Signal(str)
+
+    def __init__(self, dest: str, url: str = "", zip_path: str = "", parent=None):
+        super().__init__(parent)
+        self._dest = dest
+        self._url = url
+        self._zip = zip_path
+        self._cancel = False
+
+    def cancel(self):
+        self._cancel = True
+
+    def run(self):
+        tmp = ""
+        try:
+            os.makedirs(self._dest, exist_ok=True)
+            src = self._zip
+            if self._url:
+                # Beside the destination so the read-back is a local file and
+                # a full temp filesystem cannot fail the download half way.
+                tmp = os.path.join(self._dest, ".download.part")
+                src = self._download(self._url, tmp)
+                if src is None:
+                    return
+            with zipfile.ZipFile(src) as zf:
+                ok = _safe_extract(
+                    zf, self._dest,
+                    lambda d, t: self.progress.emit(d, t, "Extracting"),
+                    lambda: self._cancel)
+            if not ok:
+                return
+            presets = _preset_root(self._dest)
+            if not presets:
+                self.failed.emit("No .milk presets in that archive.")
+                return
+            textures = ""
+            for dirpath, dirnames, _f in os.walk(self._dest):
+                for d in dirnames:
+                    if d.lower() == "textures":
+                        textures = os.path.join(dirpath, d)
+                        break
+                if textures:
+                    break
+            self.finished_ok.emit(presets, textures)
+        except Exception as e:
+            self.failed.emit(str(e))
+        finally:
+            if tmp and os.path.exists(tmp):
+                try:
+                    os.remove(tmp)
+                except OSError:
+                    pass
+
+    def _download(self, url: str, tmp: str):
+        req = urllib.request.Request(
+            url, headers={"User-Agent": "MilkDropVisualizer"})
+        with urllib.request.urlopen(req, timeout=30) as r:
+            # Absent on a chunked response; the bar goes indeterminate rather
+            # than pretending to a percentage it cannot know.
+            total = int(r.headers.get("Content-Length") or 0)
+            done = 0
+            with open(tmp, "wb") as f:
+                while True:
+                    if self._cancel:
+                        return None
+                    chunk = r.read(262144)
+                    if not chunk:
+                        break
+                    f.write(chunk)
+                    done += len(chunk)
+                    self.progress.emit(done, total, "Downloading")
+        return tmp
+
+
+class PresetPackDialog(QDialog):
+    """Get presets: download a pack, or install one already downloaded."""
+
+    def __init__(self, cfg: dict, on_applied=None, parent=None):
+        super().__init__(parent)
+        self._cfg = cfg
+        self._on_applied = on_applied
+        self._worker = None
+        self.setWindowTitle("Get Presets")
+        self.setMinimumWidth(560)
+        self.setStyleSheet(dialog_qss())
+
+        outer = QVBoxLayout(self)
+        outer.setSpacing(12)
+        outer.setContentsMargins(16, 16, 16, 16)
+
+        intro = QLabel(
+            "Presets are other people's work and are not included, so the app "
+            "fetches them from the people who published them.")
+        intro.setWordWrap(True)
+        outer.addWidget(intro)
+
+        row = QHBoxLayout()
+        row.addWidget(QLabel("Install into:"))
+        self._dest = QLineEdit(default_pack_dir(cfg))
+        row.addWidget(self._dest, 1)
+        browse = QPushButton("Browse…")
+        browse.clicked.connect(self._pick_dest)
+        row.addWidget(browse)
+        outer.addLayout(row)
+
+        self._buttons = []
+        for pack in PRESET_PACKS:
+            outer.addWidget(self._pack_row(pack))
+
+        self._bar = QProgressBar()
+        self._bar.setVisible(False)
+        outer.addWidget(self._bar)
+        self._status = QLabel("")
+        self._status.setWordWrap(True)
+        outer.addWidget(self._status)
+
+        foot = QHBoxLayout()
+        foot.addStretch(1)
+        self._cancel_btn = QPushButton("Cancel")
+        self._cancel_btn.setVisible(False)
+        self._cancel_btn.clicked.connect(self._cancel)
+        foot.addWidget(self._cancel_btn)
+        self._close_btn = QPushButton("Close")
+        self._close_btn.clicked.connect(self.reject)
+        foot.addWidget(self._close_btn)
+        outer.addLayout(foot)
+
+    # ── layout helpers ──────────────────────────────────────────────────
+    def _pack_row(self, pack: dict) -> QWidget:
+        box = QFrame()
+        box.setFrameShape(QFrame.Shape.StyledPanel)
+        lay = QVBoxLayout(box)
+        title = QLabel(f"<b>{pack['name']}</b>  —  {pack['size']}")
+        lay.addWidget(title)
+        detail = QLabel(pack["detail"])
+        detail.setWordWrap(True)
+        lay.addWidget(detail)
+
+        row = QHBoxLayout()
+        if pack["url"]:
+            b = QPushButton("Download and install")
+            b.clicked.connect(lambda _=False, p=pack: self._start(url=p["url"]))
+            row.addWidget(b)
+            self._buttons.append(b)
+        open_page = QPushButton("Open download page")
+        open_page.clicked.connect(
+            lambda _=False, p=pack: QDesktopServices.openUrl(QUrl(p["page"])))
+        row.addWidget(open_page)
+        self._buttons.append(open_page)
+        if not pack["url"]:
+            b = QPushButton("Install a .zip I downloaded…")
+            b.clicked.connect(self._pick_zip)
+            row.addWidget(b)
+            self._buttons.append(b)
+        row.addStretch(1)
+        lay.addLayout(row)
+        return box
+
+    def _pick_dest(self):
+        d = QFileDialog.getExistingDirectory(
+            self, "Where should presets go?", self._dest.text())
+        if d:
+            self._dest.setText(d)
+
+    def _pick_zip(self):
+        f, _ = QFileDialog.getOpenFileName(
+            self, "Choose a preset pack", os.path.expanduser("~"),
+            "Zip archives (*.zip)")
+        if f:
+            self._start(zip_path=f)
+
+    # ── work ────────────────────────────────────────────────────────────
+    def _start(self, url: str = "", zip_path: str = ""):
+        dest = self._dest.text().strip()
+        if not dest:
+            self._status.setText("Choose a folder to install into first.")
+            return
+        for b in self._buttons:
+            b.setEnabled(False)
+        self._bar.setVisible(True)
+        self._bar.setRange(0, 0)
+        self._cancel_btn.setVisible(True)
+        self._close_btn.setEnabled(False)
+        self._status.setText("Starting…")
+        # Parented to the dialog and kept in an attribute: a QThread garbage
+        # collected while run() is still unwinding aborts the process, and
+        # run() is still unwinding when finished_ok reaches this thread.
+        self._worker = _PackWorker(dest, url, zip_path, self)
+        self._worker.progress.connect(self._on_progress)
+        self._worker.finished_ok.connect(self._on_done)
+        self._worker.failed.connect(self._on_failed)
+        self._worker.finished.connect(self._worker.deleteLater)
+        self._worker.start()
+
+    def _on_progress(self, done: int, total: int, phase: str):
+        if total:
+            self._bar.setRange(0, total)
+            self._bar.setValue(done)
+            if phase == "Downloading":
+                self._status.setText(
+                    f"{phase}… {done / 1048576:.0f} of {total / 1048576:.0f} MB")
+            else:
+                self._status.setText(f"{phase}… {done} of {total} files")
+        else:
+            self._bar.setRange(0, 0)
+            self._status.setText(f"{phase}… {done / 1048576:.0f} MB")
+
+    def _on_done(self, preset_dir: str, texture_dir: str):
+        self._reset()
+        updates = {"preset_dir": preset_dir}
+        if texture_dir:
+            updates["texture_dir"] = texture_dir
+        self._cfg.update(updates)
+        n = len(glob.glob(os.path.join(preset_dir, "**", "*.milk"),
+                          recursive=True))
+        self._status.setText(
+            f"Installed {n} presets." +
+            (" Textures found too." if texture_dir else ""))
+        if self._on_applied:
+            self._on_applied(updates)
+
+    def _on_failed(self, message: str):
+        self._reset()
+        self._status.setText(f"Failed: {message}")
+
+    def _cancel(self):
+        if self._worker:
+            self._worker.cancel()
+        self._status.setText("Cancelling…")
+
+    def _reset(self):
+        self._bar.setVisible(False)
+        self._cancel_btn.setVisible(False)
+        self._close_btn.setEnabled(True)
+        for b in self._buttons:
+            b.setEnabled(True)
+
+    def reject(self):
+        # A half-written archive left behind would look like a corrupt pack the
+        # next time round, and the worker owns the file until it returns.
+        if self._worker and self._worker.isRunning():
+            self._worker.cancel()
+            self._worker.wait(4000)
+        super().reject()
+
+
 class ContextMenu(QMenu):
     """
     Right-click menu. Spawned by the renderer when it detects a right-click
@@ -2700,6 +3059,7 @@ class ContextMenu(QMenu):
         self._build_audio_menu()
         self.addSeparator()
 
+        self.addAction("⬇   Get presets…",    self._open_packs)
         self.addAction("⌨   Key bindings…",   self._open_keymaps)
         self.addAction("⚙   Settings…",        self._open_settings)
         self.addAction("ℹ   About…",           self._open_about)
@@ -2858,6 +3218,12 @@ class ContextMenu(QMenu):
                 set_app_theme(self._cfg.get("theme", "dark"))
             self._renderer._save_config(self._cfg)
             self._renderer.apply_settings(updates)
+
+    def _open_packs(self):
+        def applied(updates):
+            self._renderer._save_config(self._cfg)
+            self._renderer.apply_settings(updates)
+        PresetPackDialog(self._cfg, applied, self._tmp_parent).exec()
 
     def _open_about(self):
         AboutDialog(self._tmp_parent).exec()

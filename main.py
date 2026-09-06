@@ -38,7 +38,8 @@ from renderer import Renderer
 # Qt comes through the ui shim, which gets it from viz_common -- that is where
 # the PySide6/PyQt6 choice is made, and naming a binding here would undo it.
 from ui import (Bridge, ContextMenu, ToastLabel, SettingsDialog, QDialog,
-                QApplication, Signal, set_app_theme, browser_qss)
+                QApplication, Signal, set_app_theme, browser_qss,
+                PresetPackDialog)
 
 
 def _parse_geometry(geo_str: str) -> tuple[int, int, int, int] | None:
@@ -159,9 +160,17 @@ class App:
         if self._asked_for_presets:
             return
         self._asked_for_presets = True
-        self._toast.show_message(
-            "No presets loaded — choose a folder in Settings", 6000)
-        self._open_settings()
+        self._toast.show_message("No presets loaded", 6000)
+        # Get Presets rather than Settings: on a first run there is no folder
+        # to point at yet, so a directory picker asks a question the user
+        # cannot answer. This dialog answers it and fills the field in.
+        self._open_packs()
+
+    def _open_packs(self):
+        def applied(updates):
+            self._renderer._save_config(self._cfg)
+            self._renderer.apply_settings(updates)
+        PresetPackDialog(self._cfg, applied).exec()
 
     def _open_settings(self):
         dlg = SettingsDialog(self._cfg)
