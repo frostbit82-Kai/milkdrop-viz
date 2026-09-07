@@ -178,6 +178,70 @@ def the_fallback_encoder_also_produces_a_playable_file():
     assert (w, h) == (W, H), f"{w}x{h}"
     assert count >= N - 2, f"only {count} of {N} frames survived"
 
+def the_frozen_bundle_library_path_is_kept_off_ffmpeg():
+    """The 1.5.0 Linux build shipped an older libstdc++ than the host ffmpeg
+    needs, and PyInstaller puts it on the loader path for every child — so
+    ffmpeg died with GLIBCXX_3.4.32 not found and the app reported a broken
+    pipe. Poisoning the path here reproduces exactly that."""
+    poison = os.path.join(tmp, "poison")
+    os.makedirs(poison, exist_ok=True)
+    old = os.environ.get("LD_LIBRARY_PATH")
+    os.environ["LD_LIBRARY_PATH"] = poison
+    os.environ["LD_LIBRARY_PATH_ORIG"] = old or ""
+    try:
+        env = viz_common.child_env()
+        assert env.get("LD_LIBRARY_PATH", "") == (old or ""), env.get("LD_LIBRARY_PATH")
+        assert "LD_LIBRARY_PATH_ORIG" not in env
+        path, rec = record("mp4")
+    finally:
+        os.environ.pop("LD_LIBRARY_PATH_ORIG", None)
+        if old is None:
+            os.environ.pop("LD_LIBRARY_PATH", None)
+        else:
+            os.environ["LD_LIBRARY_PATH"] = old
+    _w, _h, _raw, count = decode(path)
+    assert count >= N - 2, f"only {count} of {N} frames survived"
+
+def a_frozen_build_with_no_saved_original_drops_the_variable():
+    real = viz_common.sys.frozen if hasattr(viz_common.sys, "frozen") else None
+    os.environ["LD_LIBRARY_PATH"] = "/bundle/_internal"
+    viz_common.sys.frozen = True
+    try:
+        env = viz_common.child_env()
+    finally:
+        if real is None:
+            del viz_common.sys.frozen
+        else:
+            viz_common.sys.frozen = real
+        os.environ.pop("LD_LIBRARY_PATH", None)
+    assert "LD_LIBRARY_PATH" not in env, env.get("LD_LIBRARY_PATH")
+
+def a_source_checkout_leaves_the_environment_alone():
+    os.environ["LD_LIBRARY_PATH"] = "/usr/local/lib"
+    try:
+        env = viz_common.child_env()
+    finally:
+        os.environ.pop("LD_LIBRARY_PATH", None)
+    assert env["LD_LIBRARY_PATH"] == "/usr/local/lib", env["LD_LIBRARY_PATH"]
+
+def a_dying_encoder_reports_what_ffmpeg_said():
+    """"Broken pipe" is what the app said while ffmpeg was explaining itself
+    on a stderr nobody read."""
+    rec = _Recorder(os.path.join(tmp, "bad.mp4"), (W, H), 30, "mp4")
+    real = viz_common._VIDEO_CODEC_CACHE
+    viz_common._VIDEO_CODEC_CACHE = {find_ffmpeg(): ["-c:v", "no_such_encoder"]}
+    try:
+        assert not rec.start_encoder()
+        for _ in range(4):
+            rec.submit(frame(0))
+            time.sleep(0.05)
+        err = rec.finish()
+    finally:
+        viz_common._VIDEO_CODEC_CACHE = real
+    assert err, "a failed encode reported success"
+    assert "pipe" not in err.lower(), f"still reporting the pipe, not the cause: {err!r}"
+    assert "no_such_encoder" in err.lower() or "encoder" in err.lower(), err
+
 def a_missing_ffmpeg_is_a_message_not_a_crash():
     real = viz_common.find_ffmpeg
     viz_common.find_ffmpeg = lambda: ""
@@ -215,6 +279,10 @@ for fn in (an_mp4_comes_out_playable,
            the_startup_window_waits_rather_than_dropping,
            the_encoder_is_chosen_from_what_ffmpeg_actually_has,
            the_fallback_encoder_also_produces_a_playable_file,
+           the_frozen_bundle_library_path_is_kept_off_ffmpeg,
+           a_frozen_build_with_no_saved_original_drops_the_variable,
+           a_source_checkout_leaves_the_environment_alone,
+           a_dying_encoder_reports_what_ffmpeg_said,
            a_missing_ffmpeg_is_a_message_not_a_crash,
            a_dead_encoder_is_reported):
     results.append(check(fn.__name__, fn))

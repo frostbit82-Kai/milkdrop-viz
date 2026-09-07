@@ -106,6 +106,28 @@ def bare_renderer():
     return r
 
 
+def a_build_without_the_jpeg_plugin_still_writes_something():
+    """Qt carries JPEG as a plugin and PNG built in; a frozen build that lost
+    the plugin would otherwise write nothing and never say so."""
+    real = QImage.save
+    def only_png(self, path, fmt=None, quality=-1):
+        return False if fmt == "JPG" else real(self, path, fmt, quality)
+    QImage.save = only_png
+    try:
+        w = _ThumbWriter(); w.start()
+        path = thumb_path("no-jpeg-plugin")
+        w.submit(path, W, H, gl_frame())
+        for _ in range(100):
+            if os.path.isfile(path):
+                break
+            time.sleep(0.02)
+    finally:
+        QImage.save = real
+    assert os.path.isfile(path), "nothing was written without the JPEG plugin"
+    img = QImage(path)
+    assert not img.isNull(), "the fallback file is not a readable image"
+    assert img.width() == _ThumbWriter.WIDTH, img.width()
+
 def a_preset_skipped_past_gets_no_thumbnail():
     r = bare_renderer()
     r._maybe_thumbnail()
@@ -184,6 +206,7 @@ def an_empty_cache_leaves_no_gutter():
 for fn in (a_thumbnail_path_is_stable_and_filesystem_safe,
            the_writer_saves_a_scaled_jpeg,
            the_thumbnail_is_the_right_way_up,
+           a_build_without_the_jpeg_plugin_still_writes_something,
            a_preset_skipped_past_gets_no_thumbnail,
            one_that_stays_gets_exactly_one,
            an_already_cached_preset_is_not_re_grabbed,

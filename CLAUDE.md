@@ -396,4 +396,16 @@ There is no display in an agent shell and SDL needs one, so:
   is the fix; it predates this session's work, so do not go looking for a cause in
   the test.
 
+- **A subprocess spawned from the frozen build inherits the bundle's loader
+  path.** The Linux package is deliberately built old to keep the glibc floor
+  at 2.36, so its `libstdc++.so.6` is older than a modern host's — and the
+  system ffmpeg, started as a child, loaded that one and died with
+  `GLIBCXX_3.4.32 not found`. The app reported "broken pipe", which is what the
+  parent saw, not what happened. `child_env()` restores `LD_LIBRARY_PATH_ORIG`
+  (or drops the variable when frozen) for every helper process. **Test any new
+  subprocess against a real frozen build, not a source checkout.**
+- **Always read a dead helper's stderr.** The recorder set its error from the
+  write failure and then skipped reading ffmpeg's output, so the one line that
+  explained the failure above was thrown away every time.
+
 See PORTING.md for port status and the Windows setup recipe.

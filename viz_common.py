@@ -3447,6 +3447,27 @@ def find_ffmpeg() -> str:
     return shutil.which(exe) or ""
 
 
+def child_env() -> dict:
+    """Environment for a helper process spawned out of a frozen build.
+
+    PyInstaller puts the bundle's own library directory on the loader path so
+    the app finds its copies of Qt and SDL, and every child process inherits
+    it -- so a system ffmpeg starts against the bundle's older libstdc++ and
+    dies with "GLIBCXX_3.4.32 not found" before reading a byte. Measured on
+    the 1.5.0 Linux build, where the bundle is deliberately built old to keep
+    the glibc floor down. PyInstaller saves the original in <VAR>_ORIG for
+    exactly this; an empty one means the variable was not set to begin with.
+    """
+    env = dict(os.environ)
+    for var in ("LD_LIBRARY_PATH", "DYLD_LIBRARY_PATH"):
+        orig = env.pop(var + "_ORIG", None)
+        if orig:
+            env[var] = orig
+        elif orig is not None or getattr(sys, "frozen", False):
+            env.pop(var, None)
+    return env
+
+
 _VIDEO_CODEC_CACHE = {}
 
 
@@ -3466,7 +3487,7 @@ def video_codec_args(ffmpeg: str) -> list:
     try:
         have = _subprocess.run(
             [ffmpeg, "-hide_banner", "-loglevel", "error", "-encoders"],
-            capture_output=True, text=True, timeout=15,
+            capture_output=True, text=True, timeout=15, env=child_env(),
             creationflags=(_subprocess.CREATE_NO_WINDOW
                            if sys.platform == "win32" else 0)).stdout
     except Exception as e:
@@ -3558,6 +3579,7 @@ class _Recorder(threading.Thread):
                 stdin=_subprocess.PIPE,
                 stdout=_subprocess.DEVNULL,
                 stderr=_subprocess.PIPE,
+                env=child_env(),
                 creationflags=(_subprocess.CREATE_NO_WINDOW
                                if sys.platform == "win32" else 0),
             )
@@ -3621,10 +3643,18 @@ class _Recorder(threading.Thread):
             stdin.close()
         except Exception:
             pass
-        if not self.error and self._proc.wait() not in (0, None):
-            err = (self._proc.stderr.read() or b"").decode("utf-8", "replace")
-            self.error = err.strip().splitlines()[-1] if err.strip() else \
-                f"ffmpeg exited {self._proc.returncode}"
+        code = self._proc.wait()
+        if self.error or code not in (0, None):
+            # ffmpeg's own last line, whenever there is one: "broken pipe" only
+            # says the encoder died, and the reason it died is here. Reading it
+            # after the wait is safe because -loglevel error keeps the output
+            # far short of the pipe buffer.
+            tail = (self._proc.stderr.read() or b"").decode(
+                "utf-8", "replace").strip()
+            if tail:
+                self.error = tail.splitlines()[-1]
+            elif not self.error:
+                self.error = f"ffmpeg exited {code}"
 
 
 # ─── desktop wallpaper (Windows) ──────────────────────────────────────────────
@@ -3742,7 +3772,13 @@ class _ThumbWriter(threading.Thread):
                 # because glReadPixels hands back rows bottom-up.
                 img = img.copy().mirrored(False, True).scaledToWidth(
                     self.WIDTH, Qt.TransformationMode.SmoothTransformation)
-                img.save(path, "JPG", 80)
+                if not img.save(path, "JPG", 80):
+                    # Qt carries JPEG as a plugin; PNG is built into QtGui. A
+                    # frozen build that lost the imageformats plugin would
+                    # otherwise write nothing at all and never say so. The name
+                    # still ends .jpg -- Qt loads images by content, not by
+                    # extension -- so the browser finds it either way.
+                    img.save(path, "PNG")
             except Exception as e:
                 print(f"[thumb] {path}: {e}", flush=True)
 
