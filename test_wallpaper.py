@@ -61,6 +61,27 @@ class FakeBridge:
         return FakeBridge._Sig(self.toasts)
 
 
+import contextlib
+
+
+@contextlib.contextmanager
+def faked_sdl(fake):
+    """Swap SDL *and* glViewport out for the duration.
+
+    _fit_to_wallpaper resizes the GL viewport along with the window. There is
+    no GL context here, and while that call quietly no-ops on Linux, on Windows
+    PyOpenGL's error checker raises GL_INVALID_OPERATION -- so this suite could
+    not run on the platform the feature is actually for.
+    """
+    real_sdl, real_vp = viz_common.sdl2, viz_common.glViewport
+    viz_common.sdl2 = fake
+    viz_common.glViewport = lambda *a: None
+    try:
+        yield fake
+    finally:
+        viz_common.sdl2, viz_common.glViewport = real_sdl, real_vp
+
+
 def bare(cfg=None, displays=TWO):
     r = object.__new__(Renderer)
     r._cfg = cfg or {}
@@ -132,11 +153,8 @@ def asking_for_the_mode_it_is_already_in_does_nothing():
 def a_chosen_monitor_is_the_one_filled():
     r = bare({"fullscreen_display": 1})
     fake = FakeSDL()
-    viz_common.sdl2, real = fake, viz_common.sdl2
-    try:
+    with faked_sdl(fake):
         r._fit_to_wallpaper()
-    finally:
-        viz_common.sdl2 = real
     assert fake.size == (3840, 2160), fake.size
     assert fake.pos == (1920, 0), fake.pos
     assert fake.bordered == FakeSDL.SDL_FALSE, "wallpaper kept its border"
@@ -145,11 +163,8 @@ def a_chosen_monitor_is_the_one_filled():
 def with_no_choice_it_spans_every_monitor():
     r = bare({"fullscreen_display": -1})
     fake = FakeSDL()
-    viz_common.sdl2, real = fake, viz_common.sdl2
-    try:
+    with faked_sdl(fake):
         r._fit_to_wallpaper()
-    finally:
-        viz_common.sdl2 = real
     assert fake.size == (5760, 2160), fake.size
     assert fake.pos == (0, 0), fake.pos
 
@@ -158,11 +173,8 @@ def positions_are_relative_to_the_virtual_desktop_origin():
     (0, 0) when a monitor sits above or left of the primary one."""
     r = bare({"fullscreen_display": 0}, displays=OFFSET)
     fake = FakeSDL()
-    viz_common.sdl2, real = fake, viz_common.sdl2
-    try:
+    with faked_sdl(fake):
         r._fit_to_wallpaper()
-    finally:
-        viz_common.sdl2 = real
     # primary is at (0, 0) in screen coordinates, but the desktop starts at
     # (-1280, -200), so inside WorkerW the primary begins at (1280, 200)
     assert fake.pos == (1280, 200), fake.pos

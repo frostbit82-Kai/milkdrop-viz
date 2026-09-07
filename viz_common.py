@@ -3772,13 +3772,19 @@ class _ThumbWriter(threading.Thread):
                 # because glReadPixels hands back rows bottom-up.
                 img = img.copy().mirrored(False, True).scaledToWidth(
                     self.WIDTH, Qt.TransformationMode.SmoothTransformation)
-                if not img.save(path, "JPG", 80):
-                    # Qt carries JPEG as a plugin; PNG is built into QtGui. A
-                    # frozen build that lost the imageformats plugin would
-                    # otherwise write nothing at all and never say so. The name
-                    # still ends .jpg -- Qt loads images by content, not by
-                    # extension -- so the browser finds it either way.
-                    img.save(path, "PNG")
+                # Written under a temporary name and moved into place, because
+                # the browser reads this directory while the writer is filling
+                # it: QImage.save writes in place, so a reader that opened the
+                # path mid-encode got a truncated JPEG and drew nothing.
+                # os.replace is atomic on both platforms.
+                part = path + ".part"
+                # Qt carries JPEG as a plugin; PNG is built into QtGui. A frozen
+                # build that lost the imageformats plugin would otherwise write
+                # nothing at all and never say so. The name still ends .jpg --
+                # Qt loads images by content, not by extension -- so the browser
+                # finds it either way.
+                if img.save(part, "JPG", 80) or img.save(part, "PNG"):
+                    os.replace(part, path)
             except Exception as e:
                 print(f"[thumb] {path}: {e}", flush=True)
 

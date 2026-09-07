@@ -76,10 +76,25 @@ for name, fn in list(globals().items()):
             and getattr(fn, "__module__", None) == "__main__":
         check(name, fn)
 print("all settings-diff checks passed")
-# os._exit, not a normal return: PySide6 6.11 segfaults tearing an offscreen
-# QApplication down at interpreter exit, which turned every clean run of this
-# file into exit code 135. Measured on the commit before any of this session's
-# work, so it is Qt's teardown and not anything here. Failures still exit
-# non-zero -- check() lets the AssertionError out.
+# Not a normal return: PySide6 6.11 segfaults tearing an offscreen QApplication
+# down at interpreter exit, which turned every clean run of this file into exit
+# code 135 on Linux. Measured on the commit before any of that session's work,
+# so it is Qt's teardown and not anything here.
+#
+# On Windows os._exit is not enough on its own -- it still runs DLL detach, and
+# that faults once a SettingsDialog has been built, so a passing run reported
+# 139. Closing and deleting the dialogs first does not help: by the end of the
+# file they have already been collected. TerminateProcess skips detach
+# entirely. Failures still exit non-zero either way -- check() lets the
+# AssertionError out, well before this line.
 sys.stdout.flush()
+if sys.platform == "win32":
+    import ctypes
+    k32 = ctypes.windll.kernel32
+    # Declared, not left to ctypes' int default: GetCurrentProcess returns a
+    # HANDLE, and handing a truncated one to TerminateProcess faults on x64 --
+    # the same argtypes trap this project has paid for before.
+    k32.GetCurrentProcess.restype = ctypes.c_void_p
+    k32.TerminateProcess.argtypes = [ctypes.c_void_p, ctypes.c_uint]
+    k32.TerminateProcess(k32.GetCurrentProcess(), 0)
 os._exit(0)

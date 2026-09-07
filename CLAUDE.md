@@ -408,4 +408,20 @@ There is no display in an agent shell and SDL needs one, so:
   write failure and then skipped reading ffmpeg's output, so the one line that
   explained the failure above was thrown away every time.
 
+- **A test that isolates itself with `XDG_DATA_HOME` isolates nothing on
+  Windows.** `user_data_dir()` reads `LOCALAPPDATA` there, so `test_thumbnails`
+  was writing into the real `%LOCALAPPDATA%\BomsAIVisualizer	humbs` and its
+  results depended on what earlier runs had left behind — the gate tests failed
+  from run two onward. Set both variables when a suite redirects that directory.
+- **Thumbnails are written under a temporary name and moved into place.** The
+  preset browser reads that directory while the writer is filling it, and
+  `QImage.save` writes in place, so a reader could open a half-encoded JPEG and
+  draw nothing. `os.replace` is atomic on both platforms.
+- **`_build_wallpaper_entry` returns early on Linux, so a stub renderer without
+  `is_wallpaper()` builds the menu fine there and crashes here.** Anything
+  standing in for the renderer has to carry the Windows-only host methods too.
+  The same shape caught `_fit_to_wallpaper`: it calls `glViewport`, which
+  quietly no-ops without a context on Linux and raises `GL_INVALID_OPERATION`
+  on Windows, so that suite could not run on the platform the feature is for.
+
 See PORTING.md for port status and the Windows setup recipe.

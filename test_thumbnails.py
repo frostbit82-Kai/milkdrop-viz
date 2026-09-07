@@ -39,7 +39,11 @@ def check(name, fn):
 
 app = QApplication.instance() or QApplication([])
 tmp = tempfile.mkdtemp(prefix="viz-thumb-")
-os.environ["XDG_DATA_HOME"] = tmp        # user_data_dir() reads this
+# user_data_dir() reads a different variable per platform, and setting only
+# the Linux one meant this suite wrote into the real %LOCALAPPDATA% cache on
+# Windows -- so results depended on what previous runs had left there.
+os.environ["XDG_DATA_HOME"] = tmp
+os.environ["LOCALAPPDATA"] = tmp
 results = []
 
 
