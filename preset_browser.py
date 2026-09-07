@@ -9,6 +9,7 @@ get_preset_playlist, current_order_pos, jump_to_order, sort_order,
 reset_all_ratings, delete_zero_rated.
 """
 import logging
+import os
 
 # Qt comes from viz_common, which picks the binding (PySide6, or PyQt6 when
 # this file is running inside Bomsai Player). Importing PyQt6 directly here
@@ -16,7 +17,7 @@ import logging
 from viz_common import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QListWidget,
     QListWidgetItem, QPushButton, QAbstractItemView, QMessageBox, QSizePolicy,
-    QLineEdit, QTimer, Qt, browser_qss,
+    QLineEdit, QTimer, QIcon, QSize, Qt, browser_qss, thumb_path,
 )
 
 logger = logging.getLogger(__name__)
@@ -28,6 +29,10 @@ def _stars(rating: int) -> str:
 
 
 class PresetPlaylistWindow(QWidget):
+    #: Thumbnail size in the list. 16:9, so a widescreen capture is not
+    #: letterboxed into it.
+    ICON_SIZE = QSize(96, 54)
+
     def __init__(self, host, on_shuffle=None, parent=None):
         super().__init__(parent, Qt.WindowType.Window)
         self._host = host
@@ -122,7 +127,17 @@ class PresetPlaylistWindow(QWidget):
         self._list = QListWidget()
         self._list.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
         self._list.setUniformItemSizes(True)
+        # Zero until the first thumbnail turns up. A fresh install has an
+        # empty cache, and a non-zero icon size there is a 96px empty gutter
+        # down a list of ten thousand rows.
+        self._list.setIconSize(QSize(0, 0))
         self._list.itemDoubleClicked.connect(self._on_activate)
+        #: Rows whose thumbnail has already been looked for. Rows scroll into
+        #: view far more often than they change, and a miss is as worth
+        #: remembering as a hit -- most presets have no thumbnail yet.
+        self._iconed = set()
+        self._list.verticalScrollBar().valueChanged.connect(
+            self._load_visible_icons)
         lay.addWidget(self._list, stretch=1)
 
         if hasattr(host, "preset_changed"):
@@ -173,7 +188,8 @@ class PresetPlaylistWindow(QWidget):
         self._btn_shuffle.blockSignals(True)
         self._btn_shuffle.setChecked(shuf)
         self._btn_shuffle.blockSignals(False)
-        self._apply_filter()          # rows were just replaced
+        self._iconed.clear()          # rows were just replaced
+        self._apply_filter()
         self._highlight(self._host.current_order_pos())
 
     # ── Internal ───────────────────────────────────────────────────────
@@ -225,6 +241,33 @@ class PresetPlaylistWindow(QWidget):
         total = self._list.count()
         self.setWindowTitle("Preset Browser" if shown == total
                             else f"Preset Browser — {shown} of {total}")
+        self._load_visible_icons()      # a different set of rows is on screen
+
+    def _load_visible_icons(self):
+        """Give the rows on screen their thumbnails, once each.
+
+        Building ten thousand QIcons up front costs seconds and most of them
+        are never looked at, so they load as rows scroll into view. Presets
+        with no thumbnail yet simply have none: the cache fills in as they are
+        watched, which is the point of it.
+        """
+        view = self._list.viewport().rect()
+        first = self._list.indexAt(view.topLeft()).row()
+        if first < 0:
+            return
+        last = self._list.indexAt(view.bottomLeft()).row()
+        if last < 0:
+            last = self._list.count() - 1
+        entries = getattr(self, "_entries", ())
+        for i in range(first, min(last + 2, self._list.count())):
+            if i in self._iconed or i >= len(entries):
+                continue
+            self._iconed.add(i)
+            path = thumb_path(entries[i][0])
+            if os.path.isfile(path):
+                self._list.item(i).setIcon(QIcon(path))
+                if self._list.iconSize().width() == 0:
+                    self._list.setIconSize(self.ICON_SIZE)
 
     def _highlight(self, pos: int):
         if 0 <= pos < self._list.count():

@@ -162,6 +162,7 @@ class MenuHost:
     def is_locked(self):          return False
     def is_borderless(self):      return False
     def is_fullscreen(self):      return False
+    def is_recording(self):       return False
     def _save_config(self, cfg):  self.saved = dict(cfg)
 
 

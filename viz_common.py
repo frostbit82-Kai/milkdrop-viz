@@ -1727,9 +1727,10 @@ pyqtSignal = Signal          # the shim modules beside this one still say this
 # it did when this was `from PyQt6.QtWidgets import ...`. The tuples are the
 # authoritative list of what this module and its shims use.
 for _mod, _names in (
-    (QtCore, ("Qt", "QObject", "QPoint", "QTimer", "QEvent", "QThread", "QUrl")),
+    (QtCore, ("Qt", "QObject", "QPoint", "QSize", "QTimer", "QEvent", "QThread",
+              "QUrl")),
     (QtGui,  ("QKeySequence", "QFont", "QCursor", "QAction", "QActionGroup",
-              "QPixmap", "QColor", "QDesktopServices")),
+              "QIcon", "QImage", "QPixmap", "QColor", "QDesktopServices")),
     (QtWidgets, ("QApplication", "QMenu", "QDialog", "QFormLayout",
                  "QVBoxLayout", "QHBoxLayout", "QPushButton", "QLabel",
                  "QSpinBox", "QDoubleSpinBox", "QComboBox", "QDialogButtonBox",
@@ -3574,6 +3575,71 @@ class _Recorder(threading.Thread):
                 f"ffmpeg exited {self._proc.returncode}"
 
 
+def thumbs_dir() -> str:
+    return os.path.join(user_data_dir(), "thumbs")
+
+
+def thumb_path(preset_name: str) -> str:
+    """Cache path for one preset's thumbnail.
+
+    Named by hash rather than by preset name: names come from packs assembled
+    by hundreds of different people and carry slashes, colons and characters
+    that are illegal in a filename on one platform or another. The two-hex
+    subdirectory keeps ten thousand files out of a single directory, which
+    some filesystems handle badly and every file manager handles slowly.
+    """
+    import hashlib
+    h = hashlib.sha1(preset_name.encode("utf-8", "replace")).hexdigest()
+    return os.path.join(thumbs_dir(), h[:2], h + ".jpg")
+
+
+class _ThumbWriter(threading.Thread):
+    """Scales captured frames down and writes them, off the render thread.
+
+    QImage is not a widget and its scaling and encoding are safe away from the
+    GUI thread; what is not safe is doing them in the render loop, where a
+    JPEG encode would land as a dropped frame.
+    """
+
+    WIDTH = 240
+
+    def __init__(self):
+        super().__init__(daemon=True)
+        import queue
+        self._q = queue.Queue(maxsize=4)
+
+    def submit(self, path: str, w: int, h: int, buf: bytes):
+        try:
+            self._q.put_nowait((path, w, h, buf))
+        except Exception:
+            pass          # a thumbnail is never worth waiting for
+
+    def run(self):
+        while True:
+            path, w, h, buf = self._q.get()
+            try:
+                os.makedirs(os.path.dirname(path), exist_ok=True)
+                img = QImage(buf, w, h, w * 3, QImage.Format.Format_RGB888)
+                # copy() because QImage does not own that buffer, and mirrored
+                # because glReadPixels hands back rows bottom-up.
+                img = img.copy().mirrored(False, True).scaledToWidth(
+                    self.WIDTH, Qt.TransformationMode.SmoothTransformation)
+                img.save(path, "JPG", 80)
+            except Exception as e:
+                print(f"[thumb] {path}: {e}", flush=True)
+
+
+_THUMB_WRITER = None
+
+
+def thumb_writer() -> "_ThumbWriter":
+    global _THUMB_WRITER
+    if _THUMB_WRITER is None:
+        _THUMB_WRITER = _ThumbWriter()
+        _THUMB_WRITER.start()
+    return _THUMB_WRITER
+
+
 # ─── renderer ─────────────────────────────────────────────────────────────────
 
 import ctypes as _ctypes
@@ -3745,6 +3811,7 @@ class Renderer:
         self._rec_size   = None    # the size ffmpeg was told; frames must match
         self._rec_last   = 0.0     # monotonic time of the last frame submitted
         self._rec_fps    = 30
+        self._thumb_done = True    # one attempt per preset; see _maybe_thumbnail
 
         self._audio = AudioCapture(cfg.get("audio_device", ""))
         self._audio.set_gain(cfg.get("audio_gain", 1.0))
@@ -4357,6 +4424,7 @@ class Renderer:
             # one's.
             if self._rec is not None:
                 self._capture_for_recording()
+            self._maybe_thumbnail()
             sdl2.SDL_GL_SwapWindow(self._window)
 
             elapsed_frame = _time.monotonic() - t0
@@ -4862,6 +4930,37 @@ class Renderer:
         self._bridge.show_toast.emit(
             f"⏹  Saved {os.path.basename(rec.path)}{note}")
 
+    # ── Thumbnails ────────────────────────────────────────────────────────
+
+    #: How long a preset must stay on screen before it is worth a thumbnail.
+    #: Long enough that the picture has settled and that a preset skipped past
+    #: never gets one -- the cache should fill with what was actually watched.
+    THUMB_AFTER = 5.0
+
+    def _maybe_thumbnail(self):
+        """Cache a picture of the current preset, once, after it has settled.
+
+        Deliberately passive: there is no batch pass over the library. Ten
+        thousand presets rendered for a second each is two hours of nobody's
+        time, and the thumbnails that matter are the ones for presets the
+        owner has actually sat through.
+        """
+        if self._thumb_done:
+            return
+        if _time.monotonic() - self._preset_start < self.THUMB_AFTER:
+            return
+        self._thumb_done = True
+        try:
+            name = self._pm.current_preset_name()
+            if not name or os.path.isfile(thumb_path(name)):
+                return
+            grab = self._grab_frame()
+            if grab:
+                w, h, buf = grab
+                thumb_writer().submit(thumb_path(name), w, h, buf)
+        except Exception as e:
+            print(f"[thumb] capture failed: {e}", flush=True)
+
     def _capture_for_recording(self):
         """Feed one frame to the encoder, at the recording frame rate."""
         now = _time.monotonic()
@@ -4947,6 +5046,7 @@ class Renderer:
     # ── Emit helpers ──────────────────────────────────────────────────────
 
     def _emit_current_preset(self):
+        self._thumb_done = False        # a new preset is worth a new picture
         name     = self._pm.current_preset_name()
         rating   = get_preset_rating(self._ratings, name)
         excluded = is_excluded(self._ratings, name)

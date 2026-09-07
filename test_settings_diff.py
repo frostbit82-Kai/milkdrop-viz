@@ -76,3 +76,10 @@ for name, fn in list(globals().items()):
             and getattr(fn, "__module__", None) == "__main__":
         check(name, fn)
 print("all settings-diff checks passed")
+# os._exit, not a normal return: PySide6 6.11 segfaults tearing an offscreen
+# QApplication down at interpreter exit, which turned every clean run of this
+# file into exit code 135. Measured on the commit before any of this session's
+# work, so it is Qt's teardown and not anything here. Failures still exit
+# non-zero -- check() lets the AssertionError out.
+sys.stdout.flush()
+os._exit(0)
