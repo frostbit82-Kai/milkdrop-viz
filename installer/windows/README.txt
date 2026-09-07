@@ -1,4 +1,4 @@
-MilkDrop Visualizer
+BomsAI Visualizer
 ===================
 
 A MilkDrop preset visualizer that reacts to whatever your speakers are already
@@ -45,7 +45,7 @@ CONTROLS
     scroll lock       lock the current preset
 
 A preset rated 0 stars is dropped from the rotation. Settings and ratings are
-kept in %APPDATA%\MilkDropVisualizer and survive uninstalling and upgrading.
+kept in %APPDATA%\BomsAIVisualizer and survive uninstalling and upgrading.
 
 
 THEME

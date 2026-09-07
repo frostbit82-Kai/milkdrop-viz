@@ -10,6 +10,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
 from viz_common import (
+    APP_SLUG,
     QUALITY_MESH,
     DEFAULT_KEYMAPS,
     load_config_from,
@@ -40,7 +41,7 @@ def _base_dir() -> Path:
         root = Path.home() / "Library/Application Support"
     else:
         root = Path(os.environ.get("XDG_CONFIG_HOME") or Path.home() / ".config")
-    d = root / "MilkDropVisualizer"
+    d = root / APP_SLUG
     d.mkdir(parents=True, exist_ok=True)
     return d
 

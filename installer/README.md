@@ -1,12 +1,12 @@
 # Installers
 
-Release packaging for MilkDrop Visualizer. Two platforms, one shared spec.
+Release packaging for BomsAI Visualizer. Two platforms, one shared spec.
 
     installer/
       build_linux.sh          build the Linux tarball  (run on Linux)
       build_linux_docker.sh   same, in an older-glibc container
       Dockerfile.linux        that container
-      milkdrop-viz.spec       PyInstaller spec, used by both platforms
+      bomsai-visualizer.spec       PyInstaller spec, used by both platforms
       vendor/linux/           prebuilt libprojectM-4 .so files, committed
       licenses/               projectM's LGPL-2.1 text, shipped with the app
       linux/                  what goes inside the tarball for the end user
@@ -16,9 +16,9 @@ Release packaging for MilkDrop Visualizer. Two platforms, one shared spec.
 
     bash installer/build_linux.sh
 
-Produces `installer/dist/MilkDropVisualizer-<version>-linux-x86_64.tar.gz` (~88 MB).
+Produces `installer/dist/BomsAIVisualizer-<version>-linux-x86_64.tar.gz` (~88 MB).
 The user extracts it and runs `./install.sh`: it installs to `~/.local` with no
-root, adds a menu entry and a `milkdrop-viz` command, and starts the app once to
+root, adds a menu entry and a `bomsai-viz` command, and starts the app once to
 check it runs before claiming success. `./uninstall.sh` reverses it and leaves
 settings and preset ratings alone.
 
@@ -68,7 +68,7 @@ Steam itself.
 
     powershell -ExecutionPolicy Bypass -File installer\build_windows.ps1
 
-Produces `installer\dist\MilkDropVisualizer-<version>-win64-setup.exe` and the
+Produces `installer\dist\BomsAIVisualizer-<version>-win64-setup.exe` and the
 portable tree beside it. It freezes with the same cross-platform spec the Linux
 build uses — the spec picks `SDL2.dll` over `libSDL2-2.0.so` and reads
 `PROJECTM_LIB_DIR` for `projectM-4.dll`, `projectM-4-playlist.dll` and

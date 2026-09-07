@@ -4,13 +4,13 @@
 #
 #   bash installer/build_linux.sh
 #
-# Output: installer/dist/MilkDropVisualizer-<version>-linux-x86_64.tar.gz
+# Output: installer/dist/BomsAIVisualizer-<version>-linux-x86_64.tar.gz
 set -euo pipefail
 
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 HERE="$REPO/installer"
 VERSION="$(cat "$REPO/VERSION")"
-NAME="MilkDropVisualizer-${VERSION}-linux-x86_64"
+NAME="BomsAIVisualizer-${VERSION}-linux-x86_64"
 BUILD="$HERE/build"
 OUT="$HERE/dist"
 
@@ -34,15 +34,15 @@ rm -rf "$BUILD" "$OUT/$NAME"
 MILKDROP_REPO="$REPO" PROJECTM_LIB_DIR="$PROJECTM_LIB_DIR" \
     "$VENV/bin/pyinstaller" --noconfirm --clean \
     --distpath "$BUILD/dist" --workpath "$BUILD/work" \
-    "$HERE/milkdrop-viz.spec"
+    "$HERE/bomsai-visualizer.spec"
 
 echo "==> [2/3] Assembling the package"
 STAGE="$OUT/$NAME"
 mkdir -p "$STAGE"
-cp -r "$BUILD/dist/MilkDropVisualizer" "$STAGE/app"
+cp -r "$BUILD/dist/BomsAIVisualizer" "$STAGE/app"
 cp "$HERE/linux/install.sh" "$HERE/linux/uninstall.sh" "$STAGE/"
 cp "$HERE/linux/README.txt" "$STAGE/"
-cp "$HERE/linux/milkdrop-visualizer.desktop" "$HERE/linux/milkdrop-visualizer.svg" "$STAGE/"
+cp "$HERE/linux/bomsai-visualizer.desktop" "$HERE/linux/bomsai-visualizer.svg" "$STAGE/"
 mkdir -p "$STAGE/licenses"
 cp "$HERE/licenses/"* "$STAGE/licenses/"
 chmod +x "$STAGE/install.sh" "$STAGE/uninstall.sh"

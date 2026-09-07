@@ -65,9 +65,9 @@ Done, on Windows, verified:
 Done, packaging:
 
 - [x] **Linux release package.** `installer/build_linux.sh` produces an 88 MB
-      `MilkDropVisualizer-<version>-linux-x86_64.tar.gz`; the user extracts it and
+      `BomsAIVisualizer-<version>-linux-x86_64.tar.gz`; the user extracts it and
       runs `./install.sh`, which installs to `~/.local` with no root, adds a menu
-      entry and a `milkdrop-viz` command, and smoke-tests the app before saying it
+      entry and a `bomsai-viz` command, and smoke-tests the app before saying it
       worked. Verified end to end: installed copy loads its own bundled
       libprojectM, 11,223 presets, parec bound to the sink monitor, presets
       rendering and switching. `uninstall.sh` reverses it and keeps settings
@@ -133,10 +133,10 @@ Done, Windows packaging:
 
 - [x] **Windows installer.** `installer/build_windows.ps1` freezes the app with
       the same cross-platform spec and hands it to Inno Setup 6, producing a
-      43.7 MB `MilkDropVisualizer-<version>-win64-setup.exe` plus the portable
-      tree. Installed to `C:\Program Files\MilkDrop Visualizer`, Start Menu
+      43.7 MB `BomsAIVisualizer-<version>-win64-setup.exe` plus the portable
+      tree. Installed to `C:\Program Files\BomsAI Visualizer`, Start Menu
       entry, optional desktop icon, uninstaller; settings and ratings live in
-      `%APPDATA%\MilkDropVisualizer` and survive uninstall. Verified end to end:
+      `%APPDATA%\BomsAIVisualizer` and survive uninstall. Verified end to end:
       silent install, launch from the installed path, bundled projectM loaded,
       11,223 presets, WASAPI loopback, presets rendering and switching, and the
       About dialog showing its logo and the `VERSION` file out of `sys._MEIPASS`

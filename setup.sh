@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# MilkDrop Visualizer — one-shot setup for a fresh Ubuntu install.
+# BomsAI Visualizer — one-shot setup for a fresh Ubuntu install.
 # Installs system deps, builds libprojectM-4 from source, creates the venv.
 set -euo pipefail
 

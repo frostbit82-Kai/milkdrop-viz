@@ -1,5 +1,5 @@
 # -*- mode: python ; coding: utf-8 -*-
-"""PyInstaller spec for MilkDrop Visualizer.
+"""PyInstaller spec for BomsAI Visualizer.
 
 Driven by installer/build_linux.sh, which sets the two environment variables
 below. It is not run directly: PROJECTM_LIB_DIR has to point at real .so files
@@ -83,7 +83,7 @@ pyz = PYZ(a.pure)
 exe = EXE(
     pyz, a.scripts, [],
     exclude_binaries=True,
-    name="MilkDropVisualizer",
+    name="BomsAIVisualizer",
     # Linux spawns no terminal either way, so the console build keeps the logs
     # readable. Windows would put a black console box behind the visualiser, so
     # the release build is windowed there -- which also means no log output at
@@ -91,7 +91,7 @@ exe = EXE(
     # MILKDROP_CONSOLE=1 forces a console build on Windows too -- the only way
     # to see why a frozen build failed once the release build stopped printing.
     console=sys.platform != "win32" or os.environ.get("MILKDROP_CONSOLE") == "1",
-    icon=str(REPO / "installer" / "windows" / "milkdrop-visualizer.ico")
+    icon=str(REPO / "installer" / "windows" / "bomsai-visualizer.ico")
          if sys.platform == "win32" else None,
     strip=False,
     upx=False,
@@ -100,5 +100,5 @@ COLLECT(
     exe, a.binaries, a.datas,
     strip=False,
     upx=False,
-    name="MilkDropVisualizer",
+    name="BomsAIVisualizer",
 )

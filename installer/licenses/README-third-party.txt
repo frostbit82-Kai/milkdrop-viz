@@ -1,4 +1,4 @@
-Third-party components shipped with MilkDrop Visualizer
+Third-party components shipped with BomsAI Visualizer
 =======================================================
 
 projectM 4 — LGPL-2.1

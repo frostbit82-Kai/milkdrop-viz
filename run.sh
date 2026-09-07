@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# MilkDrop Visualizer — launcher
+# BomsAI Visualizer — launcher
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 VENV="$SCRIPT_DIR/.venv"
 

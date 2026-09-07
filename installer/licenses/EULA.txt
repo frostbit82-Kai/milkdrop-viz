@@ -1,9 +1,9 @@
-MilkDrop Visualizer — End User Licence Agreement
+BomsAI Visualizer — End User Licence Agreement
 ================================================
 
 BomsAI Software ("we", "us")            Version 1.4.0 — 6 September 2026
 
-Read this before installing. Installing or using MilkDrop Visualizer (the
+Read this before installing. Installing or using BomsAI Visualizer (the
 "Software") means you accept it. If you do not accept it, do not install the
 Software, and request a refund under section 8.
 

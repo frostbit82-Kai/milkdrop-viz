@@ -77,11 +77,11 @@ docker run --rm -u "$(id -u):$(id -g)" -e HOME=/tmp -e "REBUILD_PM=$REBUILD_PM" 
     '
 
 echo "==> [3/3] Floor check"
-EXE="$HERE/build/dist/MilkDropVisualizer/MilkDropVisualizer"
+EXE="$HERE/build/dist/BomsAIVisualizer/BomsAIVisualizer"
 {
     objdump -T "$EXE" 2>/dev/null
-    cat "$HERE"/build/dist/MilkDropVisualizer/_internal/*.so* >/dev/null 2>&1 || true
-    for so in "$HERE"/build/dist/MilkDropVisualizer/_internal/*.so*; do
+    cat "$HERE"/build/dist/BomsAIVisualizer/_internal/*.so* >/dev/null 2>&1 || true
+    for so in "$HERE"/build/dist/BomsAIVisualizer/_internal/*.so*; do
         objdump -T "$so" 2>/dev/null
     done
 } | grep -oE 'GLIBC_[0-9]+\.[0-9]+' | sort -Vu | tail -1 |

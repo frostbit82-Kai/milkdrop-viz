@@ -1,4 +1,4 @@
-# Store listing — MilkDrop Visualizer
+# Store listing — BomsAI Visualizer
 
 Source of truth for every storefront. Written once, pasted into the Microsoft
 Store dashboard, the site's product page, and anywhere else. Keep it in sync
@@ -12,13 +12,15 @@ what this sells.
 
 ## Name
 
-Store name: **MilkDrop Visualizer**
+Store name: **BomsAI Visualizer**
+Subtitle: *A music visualizer for MilkDrop presets*
 
-> **Flagged, needs your decision — see "Naming risk" at the bottom before you
-> submit.** "MilkDrop" is Ryan Geiss's name for his own software. Every serious
-> project in this space uses it as a *description* ("plays MilkDrop presets")
-> and not as the product's name — projectM's Steam listing is "projectM Music
-> Visualizer" for exactly that reason.
+Settled. The app was called MilkDrop Visualizer until 2026-09-07; "MilkDrop" is
+Ryan Geiss's name for his own software, and using someone else's software name
+*as your product name* in a paid listing is what gets a listing pulled after it
+is already selling. MilkDrop now appears only where it belongs — as a
+description of what the app plays, which is normal and which every competitor
+does, projectM's own Steam listing included.
 
 ## Short description  (Microsoft Store — 500 char max)
 
@@ -35,7 +37,7 @@ Store name: **MilkDrop Visualizer**
 > thousand presets, an hour of watching, four or five that are genuinely
 > beautiful — and no way to ever find those five again.
 >
-> MilkDrop Visualizer is built around that problem. It plays MilkDrop presets,
+> BomsAI Visualizer is built around that problem. It plays MilkDrop presets,
 > reacting to whatever is coming out of your speakers, and it gives you the one
 > thing a ten-thousand-preset folder needs: a way to keep score.
 >
@@ -170,22 +172,15 @@ discount, and it burns the one sale event you get.
 
 ---
 
-## Naming risk — decide before submitting
+## Naming — settled 2026-09-07
 
-"MilkDrop" is Ryan Geiss's, and using someone else's software name *as your
-product name* in a paid store listing is the kind of thing that gets a listing
-pulled after it is selling, which is far worse than changing it now. The
-descriptive use — "plays MilkDrop presets", "MilkDrop 2 texture support" — is
-normal, and every competitor does it.
+Renamed from MilkDrop Visualizer to **BomsAI Visualizer**, with MilkDrop kept as
+the descriptor. The Inno Setup `AppId` GUID was deliberately NOT changed: it is
+what lets a future build upgrade an install rather than sitting beside it, and
+nothing had shipped, so there was no installed base to strand.
 
-The safe shape is a product name of your own plus MilkDrop as the descriptor,
-which is exactly what projectM does:
-
-> **BomsAI Visualizer** — a music visualizer for MilkDrop presets
-
-The cost of changing it is small right now and grows with every sale: the Inno
-Setup `AppId` GUID must **never** change, but `AppName` is just a string, and
-nothing is published yet. The cost of not changing it is a small chance of
-losing the listing and the reviews with it.
-
-My recommendation: rename the product, keep MilkDrop in the subtitle.
+What moved with the name, in case something looks wrong later: the Windows
+install folder and Start-menu entry, the frozen build's per-user config
+directory (`BomsAIVisualizer`), the preset-pack install directory, the download
+User-Agent, the Linux command (`bomsai-viz`), the desktop entry and icon
+(`bomsai-visualizer.*`), and both installer artifact names.

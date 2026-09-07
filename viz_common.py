@@ -1773,6 +1773,15 @@ def _asset_path(*parts) -> str:
     return os.path.join(root or os.path.dirname(os.path.abspath(__file__)), *parts)
 
 
+# The product name, in the two forms everything else needs. Kept here because
+# this file is shared with Bomsai Player: a literal spelled out at each use site
+# is how the two copies drift. APP_SLUG is the filename-safe form -- it names the
+# per-user data directory and the download User-Agent, so changing it moves
+# where installed preset packs live.
+APP_NAME = "BomsAI Visualizer"
+APP_SLUG = "BomsAIVisualizer"
+
+
 def user_data_dir() -> str:
     """Per-user data directory.
 
@@ -1789,7 +1798,7 @@ def user_data_dir() -> str:
     else:
         root = os.environ.get("XDG_DATA_HOME") or os.path.expanduser(
             "~/.local/share")
-    return os.path.join(root, "MilkDropVisualizer")
+    return os.path.join(root, APP_SLUG)
 
 
 def default_pack_dir(cfg: dict) -> str:
@@ -2611,7 +2620,7 @@ class AboutDialog(QDialog):
 
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.setWindowTitle("About MilkDrop Visualizer")
+        self.setWindowTitle(f"About {APP_NAME}")
         self.setStyleSheet(dialog_qss())
         self.setMinimumWidth(430)
 
@@ -2649,7 +2658,7 @@ class AboutDialog(QDialog):
             layout.addWidget(lab)
             return lab
 
-        line("MilkDrop Visualizer", size=18, weight=600)
+        line(APP_NAME, size=18, weight=600)
         line(f"Version {app_version()}", size=12, colour=muted, space_after=6)
         line("Created by <b>Adam Bom</b>", size=13)
         line(f'BomsAI Software &nbsp;·&nbsp; '
@@ -2881,7 +2890,7 @@ class _PackWorker(QThread):
 
     def _download(self, url: str, tmp: str):
         req = urllib.request.Request(
-            url, headers={"User-Agent": "MilkDropVisualizer"})
+            url, headers={"User-Agent": APP_SLUG})
         with urllib.request.urlopen(req, timeout=30) as r:
             # Absent on a chunked response; the bar goes indeterminate rather
             # than pretending to a percentage it cannot know.
@@ -3542,7 +3551,7 @@ class Renderer:
                  sdl2.SDL_WINDOW_RESIZABLE)
 
         self._window = sdl2.SDL_CreateWindow(
-            b"MilkDrop Visualizer",
+            APP_NAME.encode(),
             x, y, w, h, flags
         )
         if not self._window:

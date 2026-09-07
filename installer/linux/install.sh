@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# MilkDrop Visualizer — installer.
+# BomsAI Visualizer — installer.
 #
 #   ./install.sh              install for this user (no root needed)
 #   PREFIX=/opt ./install.sh  install somewhere else (may need sudo)
@@ -10,13 +10,13 @@ set -euo pipefail
 
 SRC="$(cd "$(dirname "$0")" && pwd)"
 PREFIX="${PREFIX:-$HOME/.local}"
-APPDIR="$PREFIX/share/MilkDropVisualizer"
+APPDIR="$PREFIX/share/BomsAIVisualizer"
 BINDIR="$PREFIX/bin"
 DESKTOP="$PREFIX/share/applications"
 ICONDIR="$PREFIX/share/icons/hicolor/scalable/apps"
-EXE="$APPDIR/MilkDropVisualizer"
+EXE="$APPDIR/BomsAIVisualizer"
 
-echo "MilkDrop Visualizer $(cat "$SRC/VERSION")"
+echo "BomsAI Visualizer $(cat "$SRC/VERSION")"
 echo "Installing to $APPDIR"
 echo
 
@@ -33,10 +33,10 @@ cp "$SRC/README.txt" "$APPDIR/"
 chmod +x "$EXE"
 
 echo "==> Adding the launcher and menu entry"
-ln -sf "$EXE" "$BINDIR/milkdrop-viz"
-cp "$SRC/milkdrop-visualizer.svg" "$ICONDIR/milkdrop-visualizer.svg"
-sed -e "s|@EXEC@|$EXE|" -e "s|@ICON@|milkdrop-visualizer|" \
-    "$SRC/milkdrop-visualizer.desktop" > "$DESKTOP/milkdrop-visualizer.desktop"
+ln -sf "$EXE" "$BINDIR/bomsai-viz"
+cp "$SRC/bomsai-visualizer.svg" "$ICONDIR/bomsai-visualizer.svg"
+sed -e "s|@EXEC@|$EXE|" -e "s|@ICON@|bomsai-visualizer|" \
+    "$SRC/bomsai-visualizer.desktop" > "$DESKTOP/bomsai-visualizer.desktop"
 command -v update-desktop-database >/dev/null && \
     update-desktop-database "$DESKTOP" 2>/dev/null || true
 command -v gtk-update-icon-cache >/dev/null && \
@@ -62,13 +62,13 @@ Note: `parec` was not found. It is the audio capture this app prefers on Linux;
 MSG
 case ":$PATH:" in
     *":$BINDIR:"*) ;;
-    *) echo "Note: $BINDIR is not on your PATH, so the \`milkdrop-viz\` command"
+    *) echo "Note: $BINDIR is not on your PATH, so the \`bomsai-viz\` command"
        echo "      will not be found. The menu entry works regardless." ;;
 esac
 
 cat <<MSG
 
-Installed. Launch it from your applications menu, or run:  milkdrop-viz
+Installed. Launch it from your applications menu, or run:  bomsai-viz
 
 Presets and textures are NOT included — they are other people's work and are
 downloaded separately. See README.txt (also copied to $APPDIR).

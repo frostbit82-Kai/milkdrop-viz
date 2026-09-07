@@ -1,4 +1,4 @@
-# MilkDrop Visualizer - one-shot setup for a fresh Windows install.
+# BomsAI Visualizer - one-shot setup for a fresh Windows install.
 # Windows counterpart to setup.sh: installs the toolchain, builds libprojectM-4,
 # creates the venv. winget handles elevation for the Build Tools install.
 #

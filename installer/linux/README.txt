@@ -1,4 +1,4 @@
-MilkDrop Visualizer
+BomsAI Visualizer
 ===================
 
 A MilkDrop preset visualizer that reacts to whatever your speakers are already
@@ -11,7 +11,7 @@ INSTALL
     ./install.sh
 
 Installs to ~/.local, no root needed. It adds an applications-menu entry and a
-`milkdrop-viz` command, then starts the app once to check it runs.
+`bomsai-viz` command, then starts the app once to check it runs.
 
 To install somewhere else:   PREFIX=/opt ./install.sh    (may need sudo)
 To remove:                   ./uninstall.sh
@@ -56,7 +56,7 @@ CONTROLS
     scroll lock       lock the current preset
 
 A preset rated 0 stars is dropped from the rotation. Ratings and settings are
-kept in ~/.config/MilkDropVisualizer and survive uninstalling.
+kept in ~/.config/BomsAIVisualizer and survive uninstalling.
 
 
 THEME
@@ -86,7 +86,7 @@ it is missing and the app falls back to PortAudio, which is bundled.
 IF IT DOES NOT START
 --------------------
 
-Run `milkdrop-viz` in a terminal — it prints why. The two usual causes are a
+Run `bomsai-viz` in a terminal — it prints why. The two usual causes are a
 missing OpenGL driver and a preset directory that has not been set yet.
 
 

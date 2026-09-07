@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-main.py — MilkDrop Visualizer
+main.py — BomsAI Visualizer
 ==============================
 Entry point. Wires together config, renderer, audio, and UI.
 
@@ -38,6 +38,7 @@ from renderer import Renderer
 # Qt comes through the ui shim, which gets it from viz_common -- that is where
 # the PySide6/PyQt6 choice is made, and naming a binding here would undo it.
 from ui import (Bridge, ContextMenu, ToastLabel, SettingsDialog, QDialog, QMessageBox,
+                APP_NAME,
                 QApplication, Signal, set_app_theme, browser_qss,
                 PresetPackDialog)
 
@@ -74,7 +75,7 @@ class App:
         self._keymaps = load_keymaps()
 
         self._qt_app = QApplication.instance() or QApplication(sys.argv)
-        self._qt_app.setApplicationName("MilkDrop Visualizer")
+        self._qt_app.setApplicationName(APP_NAME)
         self._qt_app.setQuitOnLastWindowClosed(False)
         # Before any dialog exists, so Qt's palette and the OS-drawn title
         # bars match the sheet the dialogs are about to use.
@@ -140,7 +141,7 @@ class App:
             return
         QMessageBox.warning(
             None, "Photosensitivity warning",
-            "MilkDrop Visualizer reacts to sound with rapidly changing, "
+            f"{APP_NAME} reacts to sound with rapidly changing, "
             "flashing and strobing images.\n\n"
             "A small number of people can have seizures when exposed to "
             "flashing lights or patterns, including people with no history "
@@ -221,7 +222,7 @@ class App:
 
 
 def main():
-    parser = argparse.ArgumentParser(description="MilkDrop Visualizer")
+    parser = argparse.ArgumentParser(description=APP_NAME)
     parser.add_argument("--geometry", default=None,
                         help="Window geometry: WxH+X+Y  e.g. 800x600+0+0")
     parser.add_argument("--borderless", action="store_true",

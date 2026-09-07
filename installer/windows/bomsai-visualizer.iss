@@ -1,4 +1,4 @@
-; Inno Setup script for MilkDrop Visualizer.
+; Inno Setup script for BomsAI Visualizer.
 ; Driven by installer\build_windows.ps1, which passes the four /D values below.
 ; Not run directly: StageDir has to point at a tree that build_windows.ps1 has
 ; already assembled.
@@ -7,8 +7,8 @@
   #error Run this through installer\build_windows.ps1
 #endif
 
-#define AppName    "MilkDrop Visualizer"
-#define AppExeName "MilkDropVisualizer.exe"
+#define AppName    "BomsAI Visualizer"
+#define AppExeName "BomsAIVisualizer.exe"
 #define Publisher  "BomsAI Software"
 #define SiteUrl    "https://bomsaisoftware.com"
 
@@ -26,7 +26,7 @@ UninstallDisplayIcon={app}\app\{#AppExeName}
 UninstallDisplayName={#AppName}
 OutputDir={#OutDir}
 OutputBaseFilename={#OutName}
-SetupIconFile={#SourcePath}\milkdrop-visualizer.ico
+SetupIconFile={#SourcePath}\bomsai-visualizer.ico
 Compression=lzma2/max
 SolidCompression=yes
 WizardStyle=modern
@@ -60,7 +60,7 @@ Name: "{autodesktop}\{#AppName}"; Filename: "{app}\app\{#AppExeName}"; Tasks: de
 [Run]
 Filename: "{app}\app\{#AppExeName}"; Description: "{cm:LaunchProgram,{#AppName}}"; Flags: nowait postinstall skipifsilent
 
-; Settings and ratings live in %APPDATA%\MilkDropVisualizer (config.py moves
+; Settings and ratings live in %APPDATA%\BomsAIVisualizer (config.py moves
 ; BASE_DIR there when frozen, because this directory is replaced on upgrade).
 ; They are deliberately left behind on uninstall, exactly as the Linux
 ; uninstall.sh leaves ~/.config alone.

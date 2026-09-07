@@ -1,7 +1,10 @@
-# MilkDrop Visualizer
+# BomsAI Visualizer
 
-Standalone MilkDrop-preset visualizer. Python + projectM 4 + SDL2 + PyQt6.
-Runs on Linux today; being ported to Windows to sell on Steam.
+Standalone MilkDrop-preset visualizer. Python + projectM 4 + SDL2 + PySide6
+(PyQt6 only as the fallback Bomsai Player needs -- see the binding note below).
+Ships on Linux and Windows. Sold, not free: Microsoft Store first, the site
+alongside it, Steam last. Renamed from "MilkDrop Visualizer" on 2026-09-07 --
+that name now appears only as a description of the presets it plays.
 
 ## Rules
 
@@ -55,7 +58,7 @@ tarball whose `install.sh` puts the app in `~/.local` with no root. See
 `installer/README.md` for the build, the vendored libprojectM and the glibc
 floor.
 
-`installer/build_windows.ps1` produces `MilkDropVisualizer-<version>-win64-setup.exe`
+`installer/build_windows.ps1` produces `BomsAIVisualizer-<version>-win64-setup.exe`
 through PyInstaller and Inno Setup 6, plus the portable tree beside it.
 `-SkipInstaller` stops after freezing. Inno Setup installs per-user under winget,
 so the script looks in `%LOCALAPPDATA%\Programs` as well as Program Files.

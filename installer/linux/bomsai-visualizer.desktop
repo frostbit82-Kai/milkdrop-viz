@@ -1,6 +1,6 @@
 [Desktop Entry]
 Type=Application
-Name=MilkDrop Visualizer
+Name=BomsAI Visualizer
 GenericName=Music Visualizer
 Comment=MilkDrop preset visualizer driven by whatever your speakers are playing
 Exec=@EXEC@
