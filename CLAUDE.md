@@ -37,11 +37,18 @@ When you copy it across, re-check the two things that made convergence non-trivi
 
 ## Layout
 
-`viz_common.py` is the whole application — 2,400 lines holding audio capture, the
-projectM ctypes binding, the SDL render loop, and every Qt dialog. The rest are thin
-per-install shims: `main.py` (entry point, CLI flags), `renderer.py` (save paths),
-`config.py` (defaults), `audio.py` / `projectm_wrapper.py` / `ui.py` (re-exports),
-`preset_browser.py`.
+`viz_common.py` is the whole application — about 5,300 lines holding audio capture,
+the projectM ctypes binding, the SDL render loop, frame capture (recording and
+thumbnails), the Windows wallpaper plumbing, and every Qt dialog. The rest are thin
+per-install shims: `main.py` (entry point, CLI flags, the Windows screensaver
+arguments), `renderer.py` (save paths), `config.py` (defaults), `audio.py` /
+`projectm_wrapper.py` / `ui.py` (re-exports), `preset_browser.py`.
+
+**ffmpeg is an optional runtime dependency**, for recording only. Found beside the
+executable first and on PATH second; absent, the menu says so and nothing else
+changes. The encoder is chosen from what that ffmpeg reports rather than named
+outright — see `video_codec_args`, and `store/listing.md` for why an LGPL build is
+the only one to bundle.
 
 **One clone per machine**: `~/Projects/milkdrop-viz` on Linux,
 `C:\Projects\milkdrop-viz` on Windows, and they meet on GitHub — commit, push,
@@ -80,6 +87,11 @@ the only way to see why a frozen build failed.
 
 ## Testing
 
+`test_*.py` in the repo root, each runnable on its own with
+`QT_QPA_PLATFORM=offscreen`: `browser_search`, `browser_title`, `display_picker`,
+`recording` (needs ffmpeg and ffprobe), `thumbnails`, `screensaver`, `wallpaper`,
+`packs`, `settings_diff`, `shuffle`, `theme`. All eleven must pass before a release.
+
 There is no display in an agent shell and SDL needs one, so:
 
 - Qt dialogs: `QT_QPA_PLATFORM=offscreen` and construct the widget directly.
@@ -96,6 +108,12 @@ There is no display in an agent shell and SDL needs one, so:
 - **Kill background helpers by PID.** `pkill -f "Xvfb :77"` also matches the
   agent's own shell command line, which contains that string, so it kills the
   shell running the test.
+- **Never build a test rig out of symlinks to the source files.** Python resolves
+  symlinks in `__file__` for *imported* modules but not for `__main__`, so a rig
+  whose `main.py` and `config.py` are links reads and writes the real repo's
+  `config.json` while looking isolated. Copy the files.
+- **Re-copy the rig after every edit.** A rig running last hour's `viz_common.py`
+  reports a feature missing that is sitting finished in the working tree.
 
 ## Traps already paid for
 
@@ -359,5 +377,23 @@ There is no display in an agent shell and SDL needs one, so:
   splits to `("pack", "")`, and reading that empty half as "no wrapper" left
   every real archive unstripped — which is how the MAX_PATH overflow survived
   its first fix.
+
+- **`threading.Thread.__init__` sets `self._args`.** A `Thread` subclass with a
+  method called `_args` never sees it — the instance attribute shadows it, and the
+  failure is `TypeError: 'tuple' object is not callable` at the call site rather
+  than anywhere near the definition. `_target`, `_kwargs` and `_name` are taken too.
+- **glReadPixels must run before `SDL_GL_SwapWindow`,** and needs
+  `glPixelStorei(GL_PACK_ALIGNMENT, 1)`. After the swap the back buffer holds the
+  frame before last; with the default alignment of 4, any width whose row length is
+  not a multiple of it comes back padded and the image shears.
+- **A strictly non-blocking hand-off to ffmpeg loses the start of every clip.**
+  ffmpeg needs a couple of hundred milliseconds to begin reading and one 720p frame
+  nearly fills the OS pipe buffer, so a `put_nowait` behind an 8-slot queue dropped
+  13 of the first 24 frames. The recorder waits for room during its first two
+  seconds and drops after that.
+- **PySide6 6.11 segfaults tearing an offscreen `QApplication` down.** A test file
+  that runs to completion still exits 135. `sys.stdout.flush()` then `os._exit(code)`
+  is the fix; it predates this session's work, so do not go looking for a cause in
+  the test.
 
 See PORTING.md for port status and the Windows setup recipe.
