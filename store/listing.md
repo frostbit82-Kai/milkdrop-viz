@@ -170,7 +170,7 @@ no ads, no in-app purchases, no gambling.
 - Support: `https://bomsaisoftware.com/contact`
 - Website: `https://bomsaisoftware.com`
 - EULA: paste `installer/licenses/EULA.txt` into the store's own field.
-  Fill in `[STATE]` in section 12 first.
+  Complete — section 12 names Wisconsin.
 
 ## Screenshots to capture  (Microsoft Store wants 1366×768 or larger, up to 10)
 

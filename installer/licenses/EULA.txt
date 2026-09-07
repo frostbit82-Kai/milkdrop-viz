@@ -148,7 +148,7 @@ and remove your copies. Sections 4, 5, 7, 8 and 12 survive.
 12. Law
 -------
 
-This agreement is governed by the laws of the State of [STATE], United States,
+This agreement is governed by the laws of the State of Wisconsin, United States,
 without regard to its conflict-of-law rules. If any part of it is
 unenforceable, the rest stays in force.
 
