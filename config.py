@@ -65,6 +65,8 @@ DEFAULT_CONFIG = {
     "width":                1280,
     "height":               720,
     "quality":              "high",
+    # Which monitor fullscreen uses. -1 = whichever one the window is on.
+    "fullscreen_display":   -1,
     # Dark, light, or "system" to follow the desktop. Dark was the only
     # look this app had, so it stays the default.
     "theme":                "dark",

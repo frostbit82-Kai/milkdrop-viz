@@ -3137,6 +3137,11 @@ class ContextMenu(QMenu):
         borderless = self._renderer.is_borderless()
         border_text = "☐   Show window border" if borderless else "▣   Borderless window"
         self.addAction(border_text, lambda: self._renderer.request_toggle_borderless())
+
+        full = self._renderer.is_fullscreen()
+        self.addAction("🗗   Leave fullscreen" if full else "⛶   Fullscreen",
+                       lambda: self._renderer.request_fullscreen())
+        self._build_display_menu()
         self.addSeparator()
 
         self._build_audio_menu()
@@ -3149,6 +3154,41 @@ class ContextMenu(QMenu):
         self.addSeparator()
 
         self.addAction("✕   Quit",             QApplication.quit)
+
+    def _build_display_menu(self):
+        """Which monitor fullscreen means.
+
+        Not shown on a single-monitor machine: the only answer there is the
+        one it already does, so the menu would be a question with no choices.
+        """
+        try:
+            displays = self._renderer.list_displays()
+        except Exception:
+            displays = []
+        if len(displays) < 2:
+            return
+        sub = self.addMenu("🖵   Fullscreen display")
+        sub.setStyleSheet(self.styleSheet())
+        group = QActionGroup(sub)
+        group.setExclusive(True)
+        current = int(self._cfg.get("fullscreen_display", -1))
+
+        def choose(idx: int):
+            self._cfg["fullscreen_display"] = idx
+            self._renderer._save_config(self._cfg)
+
+        rows = [(-1, "Follow the window")]
+        rows += [(i, f"{i + 1}.  {name}   {w}×{h}")
+                 for i, name, _x, _y, w, h in displays]
+        for idx, label in rows:
+            act = QAction(label, sub)
+            act.setCheckable(True)
+            act.setChecked(idx == current)
+            act.triggered.connect(lambda _, i=idx: choose(i))
+            group.addAction(act)
+            sub.addAction(act)
+            if idx == -1:
+                sub.addSeparator()
 
     def _build_audio_menu(self):
         """Source picker and sensitivity, without going through Settings.
@@ -3466,6 +3506,7 @@ class Renderer:
         self._req_goto                   = None   # jump to playlist index
         self._req_toggle_mode            = False  # shuffle/sequential toggle
         self._req_reload                 = False  # rebuild playlist from disk
+        self._req_fullscreen             = False  # toggle fullscreen
         self._rated                      = False  # favorite (rating-weighted) shuffle
         self._rated_history              = deque(maxlen=200)  # native indices for rated prev
 
@@ -3488,6 +3529,11 @@ class Renderer:
         #: HWND on Windows, X11 window id elsewhere. Only the frame theme
         #: uses it, and only on Windows.
         self._native_handle = 0
+        #: [(index, name, x, y, w, h), ...] for every monitor. Same reason as
+        #: _win_rect: SDL's video calls belong to the render thread, and the
+        #: Qt thread builds the display menu out of this cache.
+        self._displays = []
+        self._fullscreen = False
 
         self._audio = AudioCapture(cfg.get("audio_device", ""))
         self._audio.set_gain(cfg.get("audio_gain", 1.0))
@@ -3907,6 +3953,7 @@ class Renderer:
         if not self._init_projectm():
             return
 
+        self._refresh_displays()
         self._audio.start()
         self._running      = True
         self._preset_start = _time.monotonic()
@@ -4000,7 +4047,13 @@ class Renderer:
                     self._do_set_lock(self._req_lock_v)
                 if self._req_context_menu:
                     self._req_context_menu = False
+                    # The menu lists monitors and is about to be built on the
+                    # Qt thread, which cannot ask SDL for them itself.
+                    self._refresh_displays()
                     self._bridge.show_context_menu.emit()
+                if self._req_fullscreen:
+                    self._req_fullscreen = False
+                    self._toggle_fullscreen()
                 if self._req_borderless:
                     self._req_borderless = False
                     self._toggle_borderless()
@@ -4470,20 +4523,82 @@ class Renderer:
         sdl2.SDL_GetWindowPosition(self._window, ctypes.byref(x), ctypes.byref(y))
         sdl2.SDL_GetWindowSize(self._window, ctypes.byref(w), ctypes.byref(h))
         self._win_rect = (x.value, y.value, w.value, h.value)
+        self._fullscreen = bool(sdl2.SDL_GetWindowFlags(self._window)
+                                & sdl2.SDL_WINDOW_FULLSCREEN_DESKTOP)
 
     def window_rect(self):
         """(x, y, w, h) of the visualiser window, or None before it exists.
         Safe to call from any thread -- it reads the cache, not SDL."""
         return self._win_rect
 
+    # ── Displays ──────────────────────────────────────────────────────────
+
+    def _refresh_displays(self):
+        """Re-enumerate the monitors. Render thread only.
+
+        Called again on every right-click rather than once at startup, so a
+        monitor plugged in since launch is in the menu.
+        """
+        out = []
+        try:
+            for i in range(int(sdl2.SDL_GetNumVideoDisplays())):
+                rect = sdl2.SDL_Rect()
+                if sdl2.SDL_GetDisplayBounds(i, ctypes.byref(rect)) != 0:
+                    continue
+                raw = sdl2.SDL_GetDisplayName(i)
+                name = raw.decode("utf-8", "replace") if raw else ""
+                out.append((i, name or f"Display {i + 1}",
+                            rect.x, rect.y, rect.w, rect.h))
+        except Exception as e:
+            print(f"[renderer] display enumeration failed: {e}", flush=True)
+        if out:
+            self._displays = out
+
+    def list_displays(self):
+        """[(index, name, x, y, w, h), ...]. Reads the cache, so any thread."""
+        return list(self._displays)
+
+    def is_fullscreen(self) -> bool:
+        return self._fullscreen
+
+    def request_fullscreen(self):
+        """Toggle fullscreen (runs on the render thread)."""
+        with self._lock:
+            self._req_fullscreen = True
+
+    def _move_to_chosen_display(self):
+        """Put the window on the configured monitor before it goes fullscreen.
+
+        SDL has no "fullscreen on display N" call -- it takes a window
+        fullscreen on whichever display the window currently sits on -- so the
+        only way to choose is to move the window there first.
+        """
+        want = int(self._cfg.get("fullscreen_display", -1))
+        if want < 0:                       # follow the window, the old behaviour
+            return
+        self._refresh_displays()
+        for idx, _name, x, y, w, h in self._displays:
+            if idx != want:
+                continue
+            ww, wh = ctypes.c_int(), ctypes.c_int()
+            sdl2.SDL_GetWindowSize(self._window,
+                                   ctypes.byref(ww), ctypes.byref(wh))
+            sdl2.SDL_SetWindowPosition(self._window,
+                                       x + max(0, w - ww.value) // 2,
+                                       y + max(0, h - wh.value) // 2)
+            return
+
     def _toggle_fullscreen(self):
         flags = sdl2.SDL_GetWindowFlags(self._window)
         if flags & sdl2.SDL_WINDOW_FULLSCREEN_DESKTOP:
             sdl2.SDL_SetWindowFullscreen(self._window, 0)
+            self._fullscreen = False
         else:
+            self._move_to_chosen_display()
             sdl2.SDL_SetWindowFullscreen(
                 self._window, sdl2.SDL_WINDOW_FULLSCREEN_DESKTOP
             )
+            self._fullscreen = True
 
     def _toggle_borderless(self):
         self._borderless = not self._borderless
