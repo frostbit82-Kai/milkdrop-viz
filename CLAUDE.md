@@ -424,37 +424,53 @@ There is no display in an agent shell and SDL needs one, so:
   quietly no-ops without a context on Linux and raises `GL_INVALID_OPERATION`
   on Windows, so that suite could not run on the platform the feature is for.
 
-- **Wallpaper mode cannot put the visuals behind the icons on Windows 11.**
-  Measured on 11 Pro build 26200, against a plain solid-colour window so that
-  SDL and OpenGL were not variables, with a screen capture as the check.
+- **Wallpaper mode: two desktop layouts, and Windows 11 needs a layered
+  child.** Measured on 11 Pro build 26200 with screen captures as the check.
 
-  The technique `find_workerw` implements is the Windows 7-10 one: send Progman
-  0x052C, the icons end up in a WorkerW, and you draw into the sibling WorkerW
-  behind them. Here `SHELLDLL_DefView` stays a child of **Progman**, no WorkerW
-  appears after Progman in Z-order, and none of the 14 that exist is visible or
-  desktop-sized. Five spawns and four wParam/lParam variants of 0x052C changed
-  nothing, so it is not a race, and no third-party wallpaper app was holding the
-  layer.
+  Windows 7-10 answer Progman's `0x052C` by creating a second **top-level**
+  WorkerW behind the icons; a plain `WS_CHILD` window parented there is drawn,
+  which is what every wallpaper app (and `find_workerw`/`pick_workerw`) used.
+  `pick_desktop_host` still takes that path first and returns `layered=False`.
 
-  What *does* render, and is worth knowing before anyone retries this: a
-  `WS_CHILD` window parented into `SHELLDLL_DefView` **at the top of its
-  children** paints on the desktop, as does one parented into `SysListView32`.
-  Both sit *over* the icons. Every arrangement that puts the window under the
-  icons comes back blank: `SysListView32` already has `CLR_NONE` for its
-  background and still repaints the wallpaper across whatever is beneath it, so
-  pushing ourselves to `HWND_BOTTOM` inside DefView, or lifting the list view
-  above us, both end with the wallpaper drawn back over the top. Parenting into
-  Progman -- with or without `WS_CHILD`, at top or at `HWND_BOTTOM` -- never
-  renders at all.
+  Windows 11 (build 26200) creates no such window. Progman instead has a
+  WorkerW **child**, and *that* is the one painting the wallpaper -- confirmed
+  by asking each desktop window to `PrintWindow` itself onto a known
+  background: only the Progman-child WorkerW came back with wallpaper pixels;
+  `SHELLDLL_DefView` and `SysListView32` are transparent (icons only). Two
+  things stand between that WorkerW and a visible child, and missing either is
+  why this first looked impossible:
+  1. The WorkerW has **no `WS_CLIPCHILDREN`**, so it paints the wallpaper
+     straight over anything parented into it. Add the style (and restore it on
+     leave -- `_wp_host` remembers the old value; harmless to leave set, since
+     with no child there is nothing to clip).
+  2. A plain child of it is **never composited** -- you can `SwapWindow` into
+     it forever and nothing reaches the screen. `SHELLDLL_DefView`, the one
+     window in that tree that shows, is `WS_EX_LAYERED`; give our window the
+     same (plus `SetLayeredWindowAttributes(..., 255, LWA_ALPHA)` for full
+     opacity) and it composites too -- **behind the icons, taskbar and
+     widgets**, which is exactly what the store sells. `pick_desktop_host`
+     returns `layered=True` for this path.
 
-  So "visuals behind your icons" is not deliverable on this build by any of
-  these routes; "visuals over your icons" is. MilkDrop's own desktop mode and
-  VLC's `--video-wallpaper` are the same Progman/WorkerW family and are what
-  Windows 11 changed out from under. The context menu now shows the entry
-  disabled rather than spending a click to reach a toast, and
-  `_set_wallpaper_mode` prints as well as toasting. `test_wallpaper` passes
-  throughout because `pick_workerw` is tested against a hand-built Windows 10
-  window list.
+  Order that works in `_set_wallpaper_mode` (the two obvious rearrangements
+  were measured *not* to): set the layer + LWA, `SetParent`, clear
+  `WS_POPUP`/frame to make it a real child, then move the **HWND** with
+  `SetWindowPos` -- SDL updates its own bookkeeping but will not move a window
+  it did not parent (`SDL_GetWindowSize` reported 1920x1080 while the HWND was
+  still 900x600, and the visualiser drew in the top-left corner). `_fit_to_
+  wallpaper` then does SDL's side (border, GL viewport, projectM size).
+
+  `find_desktop_host` **polls** for the WorkerW: Explorer creates it on its own
+  message loop, seconds after `0x052C` returns (longest after an Explorer
+  restart). Looking once reported the mode unavailable on a machine that
+  supports it.
+
+  **A solid-colour test window will lie here.** DWM composites a layered
+  surface once at park time; a test that clears to one colour and never redraws
+  shows that first frame frozen forever and looks like failure. The real app
+  swaps every frame and stays live -- verify with the actual renderer (or a
+  test that keeps drawing *changing* frames), not a static clear.
+  `test_wallpaper` exercises `pick_desktop_host` for both the Win10 top-level
+  and the Win11 layered-child layouts against hand-built window lists.
 - **A screensaver must not open a dialog, and that includes the no-presets
   one.** `_warn_photosensitivity` already skips for this reason;
   `_on_no_presets` did not, so a fresh install that ticked "use as the Windows

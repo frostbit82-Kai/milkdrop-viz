@@ -1016,6 +1016,7 @@ DEFAULT_KEYMAPS = {
     "toggle_borderless": "b",
     "fullscreen_mouse": "DBLCLICK",
     "record":           "F9",
+    "toggle_wallpaper": "d",
 }
 
 
@@ -2470,6 +2471,7 @@ ACTION_LABELS = {
     "toggle_borderless": "Toggle borderless window",
     "fullscreen_mouse": "Toggle fullscreen (mouse)",
     "record":           "Start / stop recording a clip",
+    "toggle_wallpaper": "Desktop wallpaper mode on / off",
 }
 
 ACTION_NOTES = {
@@ -2478,6 +2480,7 @@ ACTION_NOTES = {
     "lock":             "SCROLLLOCK uses the Scroll Lock key",
     "rate_down":        "Rating 0 excludes preset from random rotation",
     "record":           "Needs ffmpeg; clips land in the clips folder",
+    "toggle_wallpaper": "Windows only; leave it again from the tray icon",
 }
 
 
@@ -3042,7 +3045,12 @@ class PresetPackDialog(QDialog):
         self._worker.progress.connect(self._on_progress)
         self._worker.finished_ok.connect(self._on_done)
         self._worker.failed.connect(self._on_failed)
-        self._worker.finished.connect(self._worker.deleteLater)
+        # No deleteLater on finished: the dialog asks the worker whether it is
+        # still running when it closes, and asking a QThread that Qt has
+        # already deleted raises out of reject() -- which is what both Close
+        # and the window's X call, so the dialog stayed on screen and a
+        # windowed build printed the traceback nowhere. It is parented here
+        # and goes when the dialog does.
         self._worker.start()
 
     def _on_progress(self, done: int, total: int, phase: str):
@@ -3176,18 +3184,22 @@ class ContextMenu(QMenu):
         if sys.platform != "win32":
             return
         on = self._renderer.is_wallpaper()
-        if not on and not find_workerw():
-            # Windows 11 does not create the WorkerW this needs -- see the trap
-            # in CLAUDE.md. Offering the entry anyway spends a click to reach a
-            # toast, so say so where the click would have been.
+        if on:
+            self.addAction("🖥   Leave wallpaper mode",
+                           lambda: self._renderer.request_wallpaper())
+            return
+        host, _layered = find_desktop_host(wait=0.3)
+        if not host:
+            # No Explorer desktop to draw into at all -- a third-party shell,
+            # or the desktop not up yet. Offering the entry anyway spends a
+            # click to reach a toast, so say so where the click would have been.
             dead = QAction("🖥   Desktop wallpaper — not available on this "
                            "version of Windows", self)
             dead.setEnabled(False)
             self.addAction(dead)
             return
-        self.addAction(
-            "🖥   Leave wallpaper mode" if on else "🖥   Set as desktop wallpaper",
-            lambda: self._renderer.request_wallpaper())
+        self.addAction("🖥   Set as desktop wallpaper",
+                       lambda: self._renderer.request_wallpaper())
 
     def _build_record_menu(self):
         """Record what is on screen to a clip.
@@ -3674,6 +3686,17 @@ class _Recorder(threading.Thread):
 #: application on Windows.
 _WM_SPAWN_WORKERW = 0x052C
 
+#: Window styles and SetWindowPos flags, for the Windows 11 route below.
+_GWL_STYLE, _GWL_EXSTYLE = -16, -20
+_WS_CHILD, _WS_POPUP, _WS_CLIPCHILDREN = 0x40000000, 0x80000000, 0x02000000
+#: Caption, sysmenu, thick frame and the two title-bar buttons. A desktop
+#: child keeps none of them.
+_WS_FRAME = 0x00C00000 | 0x00080000 | 0x00040000 | 0x00020000 | 0x00010000
+_WS_EX_LAYERED, _LWA_ALPHA = 0x00080000, 0x02
+_HWND_TOP = ctypes.c_void_p(0)
+_SWP_NOSIZE, _SWP_NOMOVE, _SWP_NOZORDER = 0x0001, 0x0002, 0x0004
+_SWP_FRAMECHANGED, _SWP_SHOWWINDOW = 0x0020, 0x0040
+
 
 def _user32():
     """user32 with handle-sized argument types set.
@@ -3690,6 +3713,14 @@ def _user32():
     u.EnumWindows.argtypes = (ctypes.c_void_p, ctypes.c_void_p)
     u.SendMessageTimeoutW.argtypes = (P, ctypes.c_uint, P, P,
                                       ctypes.c_uint, ctypes.c_uint, P)
+    u.GetWindowLongPtrW.restype, u.GetWindowLongPtrW.argtypes = P, (P, ctypes.c_int)
+    u.SetWindowLongPtrW.restype = P
+    u.SetWindowLongPtrW.argtypes = (P, ctypes.c_int, P)
+    u.SetWindowPos.argtypes = (P, P, ctypes.c_int, ctypes.c_int, ctypes.c_int,
+                               ctypes.c_int, ctypes.c_uint)
+    u.SetLayeredWindowAttributes.argtypes = (P, ctypes.c_uint, ctypes.c_ubyte,
+                                             ctypes.c_uint)
+    u.InvalidateRect.argtypes = (P, P, ctypes.c_bool)
     return u
 
 
@@ -3714,22 +3745,63 @@ def pick_workerw(u, top_level):
     return 0
 
 
-def find_workerw(u=None):
-    """The desktop window a wallpaper can be parented into, or 0. Windows."""
+def pick_desktop_host(u, top_level, progman):
+    """Where the visualiser goes, as (hwnd, layered). Windows.
+
+    Two desktop layouts, and the same feature reaches both:
+
+    Windows 7 to 10 answer 0x052C by creating a second *top-level* WorkerW
+    behind the icons. pick_workerw finds it and a plain child window parented
+    there is drawn, which is the technique every wallpaper app has used.
+
+    Windows 11 (measured on build 26200) creates no such window. Progman has
+    a WorkerW *child* instead, and it is the one painting the wallpaper --
+    verified by asking each desktop window to PrintWindow itself. Two things
+    stand between that and a visible window, and both are why this looked
+    impossible: the WorkerW has no WS_CLIPCHILDREN, so it paints the wallpaper
+    straight over anything parented into it, and a plain child of it is never
+    composited at all -- it can be drawn into continuously and nothing reaches
+    the screen. SHELLDLL_DefView, the one window in that tree that does show,
+    is WS_EX_LAYERED. Give our window the same and it composites too, behind
+    the icons where it belongs. That is what `layered` asks the caller for.
+    """
+    worker = pick_workerw(u, top_level)
+    if worker:
+        return worker, False
+    if progman:
+        child = u.FindWindowExW(progman, None, "WorkerW", None)
+        if child:
+            return child, True
+    return 0, False
+
+
+def find_desktop_host(u=None, wait=2.0):
+    """The desktop window to draw into, and whether it needs a layered child.
+
+    Explorer creates the WorkerW on its own message loop, so it is not there
+    when SendMessageTimeout returns -- measured at a couple of seconds after
+    an Explorer restart. Looking once reported the mode unavailable on a
+    machine that supports it; `wait` bounds how long to keep asking.
+    """
     u = u or _user32()
     progman = u.FindWindowW("Progman", None)
     if progman:
         u.SendMessageTimeoutW(progman, _WM_SPAWN_WORKERW, None, None,
                               0x0000, 1000, None)
-    tops = []
     proto = ctypes.WINFUNCTYPE(ctypes.c_bool, ctypes.c_void_p, ctypes.c_void_p)
+    deadline = _time.monotonic() + wait
+    while True:
+        tops = []
 
-    def _cb(hwnd, _lparam):
-        tops.append(hwnd)
-        return True
+        def _cb(hwnd, _lparam):
+            tops.append(hwnd)
+            return True
 
-    u.EnumWindows(proto(_cb), None)
-    return pick_workerw(u, tops)
+        u.EnumWindows(proto(_cb), None)
+        host = pick_desktop_host(u, tops, progman)
+        if host[0] or _time.monotonic() >= deadline:
+            return host
+        _time.sleep(0.05)
 
 
 def thumbs_dir() -> str:
@@ -3986,6 +4058,7 @@ class Renderer:
         self._rec_last   = 0.0     # monotonic time of the last frame submitted
         self._rec_fps    = 30
         self._wallpaper  = False
+        self._wp_host    = None    # (hwnd, style) of a WorkerW we clipped
         self._wp_restore = None    # (x, y, w, h, borderless) to come back to
         self._thumb_done = True    # one attempt per preset; see _maybe_thumbnail
 
@@ -4664,6 +4737,11 @@ class Renderer:
             self._do_toggle_mode()
         elif km("toggle_borderless", sym, scancode):
             self._toggle_borderless()
+        elif km("toggle_wallpaper", sym, scancode):
+            # Only ever turns it on from here: once the window is a desktop
+            # child it gets no keyboard, so the key cannot toggle it back --
+            # the tray icon does that, same as the menu entry.
+            self.request_wallpaper()
         elif km("fullscreen", sym, scancode) or km("fullscreen_alt", sym, scancode):
             self._toggle_fullscreen()
         elif km("rate_up", sym, scancode):
@@ -5047,29 +5125,83 @@ class Renderer:
             return
         try:
             u = _user32()
+            hwnd = ctypes.c_void_p(self._native_handle)
             if on:
-                worker = find_workerw(u)
-                if not worker:
-                    # Measured on Windows 11 build 26200: SHELLDLL_DefView
-                    # stays a child of Progman, no WorkerW is created after it,
-                    # and none of the ones that exist is visible or
-                    # desktop-sized. Printed as well as toasted, because a
-                    # toast is gone in three seconds and never reaches a log.
-                    print("[wallpaper] no WorkerW to draw into -- this Windows "
-                          "build does not create one", flush=True)
+                host, layered = find_desktop_host(u)
+                if not host:
+                    # Printed as well as toasted, because a toast is gone in
+                    # three seconds and never reaches a log.
+                    print("[wallpaper] no desktop window to draw into",
+                          flush=True)
                     self._bridge.show_toast.emit(
                         "Wallpaper mode is not available on this version of "
                         "Windows.")
                     return
                 self._track_window()
-                self._wp_restore = (self._win_rect, self._borderless)
-                u.SetParent(ctypes.c_void_p(self._native_handle), worker)
+                self._wp_restore = (
+                    self._win_rect, self._borderless,
+                    u.GetWindowLongPtrW(hwnd, _GWL_STYLE) or 0,
+                    u.GetWindowLongPtrW(hwnd, _GWL_EXSTYLE) or 0)
+                self._wp_host = None
+                host_style = u.GetWindowLongPtrW(host, _GWL_STYLE) or 0
+                if layered and not host_style & _WS_CLIPCHILDREN:
+                    # Left alone this WorkerW paints the wallpaper over its own
+                    # children. Nothing is lost by clipping it: with no child
+                    # of ours there is nothing to clip, so a crash in here
+                    # leaves the desktop exactly as it was found.
+                    u.SetWindowLongPtrW(host, _GWL_STYLE, ctypes.c_void_p(
+                        host_style | _WS_CLIPCHILDREN))
+                    self._wp_host = (host, host_style)
+                # The order below is the one that was measured to work, and
+                # the two obvious rearrangements were measured not to: SDL
+                # calls before the styles gave a window that never composited,
+                # and sizing through SDL alone left the HWND where it was.
+                if layered:
+                    # Fully opaque: the layer is what gets the window
+                    # composited at all, not an effect anyone should see.
+                    ex = u.GetWindowLongPtrW(hwnd, _GWL_EXSTYLE) or 0
+                    u.SetWindowLongPtrW(hwnd, _GWL_EXSTYLE,
+                                        ctypes.c_void_p(ex | _WS_EX_LAYERED))
+                    u.SetLayeredWindowAttributes(hwnd, 0, 255, _LWA_ALPHA)
+                u.SetParent(hwnd, host)
+                # A parented window that is still WS_POPUP is not drawn, and a
+                # child keeps no caption or frame.
+                st = u.GetWindowLongPtrW(hwnd, _GWL_STYLE) or 0
+                u.SetWindowLongPtrW(hwnd, _GWL_STYLE, ctypes.c_void_p(
+                    (st | _WS_CHILD) & ~(_WS_POPUP | _WS_FRAME)))
                 self._wallpaper = True
-                self._fit_to_wallpaper()
+                box = self._wallpaper_box()
+                if box:
+                    u.SetWindowPos(hwnd, _HWND_TOP, *box,
+                                   _SWP_FRAMECHANGED | _SWP_SHOWWINDOW)
+                else:
+                    u.SetWindowPos(hwnd, _HWND_TOP, 0, 0, 0, 0,
+                                   _SWP_NOMOVE | _SWP_NOSIZE |
+                                   _SWP_FRAMECHANGED | _SWP_SHOWWINDOW)
+                self._fit_to_wallpaper(box)
             else:
-                u.SetParent(ctypes.c_void_p(self._native_handle), None)
+                u.SetParent(hwnd, None)
                 self._wallpaper = False
-                rect, was_borderless = self._wp_restore or (None, False)
+                rect, was_borderless, style, exstyle = (
+                    self._wp_restore or (None, False, 0, 0))
+                if style:
+                    # Back to a top-level window: keeping WS_CHILD leaves SDL
+                    # with a window that has no parent to be a child of.
+                    u.SetWindowLongPtrW(hwnd, _GWL_STYLE, ctypes.c_void_p(style))
+                    u.SetWindowLongPtrW(hwnd, _GWL_EXSTYLE,
+                                        ctypes.c_void_p(exstyle))
+                    u.SetWindowPos(hwnd, None, 0, 0, 0, 0,
+                                   _SWP_NOMOVE | _SWP_NOSIZE | _SWP_NOZORDER |
+                                   _SWP_FRAMECHANGED | _SWP_SHOWWINDOW)
+                if self._wp_host:
+                    # Hand Explorer its window back as it was found, then ask
+                    # for a repaint: the clipped region is blank until
+                    # something draws the wallpaper into it again.
+                    host_hwnd, host_style = self._wp_host
+                    u.SetWindowLongPtrW(host_hwnd, _GWL_STYLE,
+                                        ctypes.c_void_p(host_style))
+                    u.InvalidateRect(host_hwnd, None, True)
+                    self._wp_host = None
                 if rect:
                     x, y, w, h = rect
                     sdl2.SDL_SetWindowPosition(self._window, x, y)
@@ -5088,11 +5220,12 @@ class Renderer:
             "Wallpaper mode ON — use the tray icon to leave it"
             if self._wallpaper else "Wallpaper mode OFF")
 
-    def _fit_to_wallpaper(self):
-        """Fill the chosen monitor, or the whole desktop when none is chosen.
+    def _wallpaper_box(self):
+        """Where the visualiser goes on the desktop: (x, y, w, h), or None.
 
-        Not SDL fullscreen: a fullscreen window is taken out of its parent and
-        put back on top, which is exactly what wallpaper mode is not.
+        The chosen monitor, or the whole desktop when none is chosen. Not SDL
+        fullscreen: a fullscreen window is taken out of its parent and put
+        back on top, which is exactly what wallpaper mode is not.
         """
         self._refresh_displays()
         want = int(self._cfg.get("fullscreen_display", -1))
@@ -5104,21 +5237,38 @@ class Renderer:
             y2 = max(d[3] + d[5] for d in self._displays)
             box = (-1, "", min(xs), min(ys), x2 - min(xs), y2 - min(ys))
         if box is None:
-            return
+            return None
         _i, _n, x, y, w, h = box
-        sdl2.SDL_SetWindowBordered(self._window, sdl2.SDL_FALSE)
-        self._borderless = True
         # Positions are relative to WorkerW, whose origin is the top-left of
         # the virtual desktop -- which is not (0, 0) when a monitor sits above
         # or left of the primary one.
         vx = min((d[2] for d in self._displays), default=0)
         vy = min((d[3] for d in self._displays), default=0)
-        sdl2.SDL_SetWindowPosition(self._window, x - vx, y - vy)
+        return (x - vx, y - vy, w, h)
+
+    def _fit_to_wallpaper(self, box=None):
+        """SDL's side of the desktop geometry: its own bookkeeping, the GL
+        viewport and projectM's idea of the window.
+
+        The caller moves the HWND itself. SDL takes a new size into its
+        bookkeeping and leaves a window it did not parent where it is --
+        measured, SDL_GetWindowSize answered 1920x1080 while the HWND was
+        still the 900x600 it started at, and the visualiser drew in the
+        top-left corner of the desktop.
+        """
+        box = box or self._wallpaper_box()
+        if box is None:
+            return None
+        x, y, w, h = box
+        sdl2.SDL_SetWindowBordered(self._window, sdl2.SDL_FALSE)
+        self._borderless = True
+        sdl2.SDL_SetWindowPosition(self._window, x, y)
         sdl2.SDL_SetWindowSize(self._window, w, h)
         glViewport(0, 0, w, h)
         if self._pm:
             self._pm.set_window_size(w, h)
         self._track_window()
+        return box
 
     # ── Screensaver ───────────────────────────────────────────────────────
 

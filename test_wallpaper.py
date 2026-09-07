@@ -12,7 +12,8 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import viz_common
-from viz_common import QApplication, Renderer, pick_workerw
+from viz_common import (QApplication, Renderer, pick_workerw,
+                        pick_desktop_host)
 
 TWO = [(0, "DP-1", 0, 0, 1920, 1080), (1, "HDMI-2", 1920, 0, 3840, 2160)]
 #: A monitor above and to the left of the primary — the virtual desktop then
@@ -26,8 +27,12 @@ class FakeUser32:
     `icons` is the WorkerW that owns SHELLDLL_DefView; `behind` is its next
     sibling, the one a wallpaper belongs in.
     """
-    def __init__(self, tops, icons=None, behind=None):
+    def __init__(self, tops, icons=None, behind=None, progman=None,
+                 child_worker=0):
         self.tops, self.icons, self.behind = tops, icons, behind
+        #: Windows 11 hangs the wallpaper WorkerW off Progman instead of
+        #: creating a top-level one.
+        self.progman, self.child_worker = progman, child_worker
 
     def FindWindowExW(self, parent, after, cls, _name):
         if cls == "SHELLDLL_DefView":
@@ -36,6 +41,8 @@ class FakeUser32:
             nxt = [h for h in self.tops if h > (after or 0)
                    and h in self.workers]
             return nxt[0] if nxt else 0
+        if cls == "WorkerW" and parent == self.progman:
+            return self.child_worker
         return 0
 
     workers = ()
@@ -192,22 +199,22 @@ class _MenuHost:
     def _save_config(self, cfg): pass
 
 
-def _wallpaper_entries(workerw):
-    """Build the menu with find_workerw stubbed, return its wallpaper items."""
-    real = viz_common.find_workerw
-    viz_common.find_workerw = lambda *a, **k: workerw
+def _wallpaper_entries(host, layered=False):
+    """Build the menu with the desktop lookup stubbed; its wallpaper items."""
+    real = viz_common.find_desktop_host
+    viz_common.find_desktop_host = lambda *a, **k: (host, layered)
     try:
         menu = viz_common.ContextMenu(renderer=_MenuHost(), cfg={},
                                       ratings={}, keymaps={})
         return [(a.text(), a.isEnabled()) for a in menu.actions()
                 if "wallpaper" in a.text().lower()]
     finally:
-        viz_common.find_workerw = real
+        viz_common.find_desktop_host = real
 
 
-def a_machine_with_no_workerw_is_told_so_in_the_menu():
-    """Windows 11 creates no WorkerW, so the entry cannot work. Offering it
-    anyway spends a click to reach a toast that vanishes."""
+def a_machine_with_no_desktop_is_told_so_in_the_menu():
+    """No Explorer desktop to draw into -- a third-party shell, say. Offering
+    the entry anyway spends a click to reach a toast that vanishes."""
     if sys.platform != "win32":
         return                      # the entry is Windows-only
     items = _wallpaper_entries(0)
@@ -226,6 +233,48 @@ def a_machine_with_a_workerw_gets_the_real_entry():
     assert enabled, f"the entry was disabled despite a WorkerW: {text!r}"
     assert "set as desktop wallpaper" in text.lower(), text
 
+def windows_10_is_still_offered_the_layer_behind_the_icons():
+    """A WorkerW behind the icons beats a DefView over them, wherever both
+    could be had."""
+    u = FakeUser32(tops=[0x10, 0x20, 0x30], icons=0x20, behind=0x30)
+    u.workers = (0x20, 0x30)
+    assert pick_desktop_host(u, u.tops, 0x99) == (0x30, False)
+
+def windows_11_uses_progmans_own_worker_and_asks_to_be_layered():
+    """No second top-level WorkerW is created there. The wallpaper is painted
+    by a WorkerW *child* of Progman, and a plain child window parented into it
+    is never composited -- only a layered one is."""
+    u = FakeUser32(tops=[0x10, 0x20], icons=None, progman=0x99,
+                   child_worker=0x77)
+    u.workers = (0x20,)
+    assert pick_desktop_host(u, u.tops, 0x99) == (0x77, True)
+
+def a_desktop_with_neither_gives_nothing():
+    u = FakeUser32(tops=[0x10, 0x20], icons=None, progman=0x99)
+    u.workers = (0x20,)
+    assert pick_desktop_host(u, u.tops, 0x99) == (0, False)
+
+
+def the_default_d_key_asks_for_wallpaper_mode():
+    """The keybinding the menu entry mirrors. Driven through the real
+    _handle_key and _KEY_LOOKUP so it is the shipped dispatch, not a copy."""
+    assert viz_common.DEFAULT_KEYMAPS.get("toggle_wallpaper") == "d", \
+        "default binding moved -- update the test and the docs together"
+    r = object.__new__(Renderer)
+    r._keymaps = dict(viz_common.DEFAULT_KEYMAPS)
+    r._km = Renderer._km.__get__(r)         # bound, but nothing else is touched
+    calls = []
+    r.request_wallpaper = lambda *a: calls.append(a)
+    sym, _sc = viz_common._KEY_LOOKUP["D"]
+    r._handle_key(sym, 0)
+    assert calls == [()], f"pressing d did not toggle wallpaper: {calls}"
+
+
+def the_wallpaper_action_is_in_the_editor():
+    """So it can be rebound like every other key."""
+    assert "toggle_wallpaper" in viz_common.ACTION_LABELS
+    assert "toggle_wallpaper" in viz_common.ACTION_NOTES
+
 
 for fn in (the_worker_behind_the_icons_is_chosen,
            a_desktop_with_no_defview_gives_nothing,
@@ -235,8 +284,13 @@ for fn in (the_worker_behind_the_icons_is_chosen,
            a_chosen_monitor_is_the_one_filled,
            with_no_choice_it_spans_every_monitor,
            positions_are_relative_to_the_virtual_desktop_origin,
-           a_machine_with_no_workerw_is_told_so_in_the_menu,
-           a_machine_with_a_workerw_gets_the_real_entry):
+           a_machine_with_no_desktop_is_told_so_in_the_menu,
+           a_machine_with_a_workerw_gets_the_real_entry,
+           windows_10_is_still_offered_the_layer_behind_the_icons,
+           windows_11_uses_progmans_own_worker_and_asks_to_be_layered,
+           a_desktop_with_neither_gives_nothing,
+           the_default_d_key_asks_for_wallpaper_mode,
+           the_wallpaper_action_is_in_the_editor):
     results.append(check(fn.__name__, fn))
 
 print("all wallpaper checks passed" if all(results) else "FAILURES")

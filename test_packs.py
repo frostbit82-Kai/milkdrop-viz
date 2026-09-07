@@ -9,6 +9,7 @@ the user chose.
 import os
 import sys
 import tempfile
+import time
 import zipfile
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
@@ -162,6 +163,34 @@ def a_pack_too_deep_for_windows_fails_before_writing_anything():
         raise AssertionError("a path past MAX_PATH was accepted")
 
 
+def the_dialog_closes_once_a_pack_is_installed():
+    """Reported from a real install: neither Close nor the window's X did
+    anything and the window had to be killed from Task Manager.
+
+    Both call reject(), which asked the worker whether it was still running --
+    and the worker had deleted itself on finished, so the question raised. An
+    exception out of reject() cancels the close, and a windowed build has
+    nowhere to print it.
+    """
+    app = v.QApplication.instance() or v.QApplication([])
+    with tempfile.TemporaryDirectory() as d:
+        archive = os.path.join(d, "pack.zip")
+        with zipfile.ZipFile(archive, "w") as zf:
+            zf.writestr("pack/Category/one.milk", "[preset00]")
+        dlg = v.PresetPackDialog({}, None)
+        dlg._dest.setText(os.path.join(d, "dest"))
+        dlg.show()
+        dlg._start(zip_path=archive)
+        deadline = time.time() + 30
+        while time.time() < deadline and "Installed" not in dlg._status.text():
+            app.processEvents()
+            time.sleep(0.01)
+        app.processEvents()             # where the deleteLater used to land
+        assert "Installed" in dlg._status.text(), dlg._status.text()
+        dlg.reject()
+        assert not dlg.isVisible(), "the dialog would not close after an install"
+
+
 def every_pack_has_a_page_and_a_sane_shape():
     for pack in v.PRESET_PACKS:
         assert pack["page"].startswith("https://"), pack["name"]
@@ -175,3 +204,7 @@ for _name, _fn in list(globals().items()):
             and getattr(_fn, "__module__", None) == "__main__":
         check(_name, _fn)
 print("all pack checks passed")
+# PySide6 6.11 segfaults tearing an offscreen QApplication down, and this
+# suite now builds one. See the trap in CLAUDE.md.
+sys.stdout.flush()
+os._exit(0)
