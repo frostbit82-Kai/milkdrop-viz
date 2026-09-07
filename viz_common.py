@@ -2015,6 +2015,12 @@ _BROWSER_QSS_TEMPLATE = """
     QPushButton:checked {
         background: @sel_bg@; color: @sel_fg@; border-color: @focus_border@;
     }
+    QLineEdit#search {
+        background: @list_bg@; color: @fg@;
+        border: 1px solid @list_border@; border-radius: 5px;
+        margin: 0 8px 6px 8px; padding: 5px 8px; font-size: 12px;
+    }
+    QLineEdit#search:focus { border-color: @focus_border@; }
 """
 
 

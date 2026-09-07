@@ -16,7 +16,7 @@ import logging
 from viz_common import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QListWidget,
     QListWidgetItem, QPushButton, QAbstractItemView, QMessageBox, QSizePolicy,
-    Qt, browser_qss,
+    QLineEdit, QTimer, Qt, browser_qss,
 )
 
 logger = logging.getLogger(__name__)
@@ -104,6 +104,21 @@ class PresetPlaylistWindow(QWidget):
         bar.addStretch(1)
         lay.addLayout(bar)
 
+        self._search = QLineEdit()
+        self._search.setObjectName("search")
+        self._search.setPlaceholderText("Search presets by name…")
+        self._search.setClearButtonEnabled(True)
+        # Debounced, not live. A library is ~10,000 rows and hiding every one
+        # of them takes long enough to swallow the next keystroke, so typing a
+        # word would land one letter behind. 150ms is under the gap between
+        # keystrokes while typing and shorter than the pause after finishing.
+        self._filter_timer = QTimer(self)
+        self._filter_timer.setSingleShot(True)
+        self._filter_timer.setInterval(150)
+        self._filter_timer.timeout.connect(self._apply_filter)
+        self._search.textChanged.connect(self._filter_timer.start)
+        lay.addWidget(self._search)
+
         self._list = QListWidget()
         self._list.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
         self._list.setUniformItemSizes(True)
@@ -158,6 +173,7 @@ class PresetPlaylistWindow(QWidget):
         self._btn_shuffle.blockSignals(True)
         self._btn_shuffle.setChecked(shuf)
         self._btn_shuffle.blockSignals(False)
+        self._apply_filter()          # rows were just replaced
         self._highlight(self._host.current_order_pos())
 
     # ── Internal ───────────────────────────────────────────────────────
@@ -192,11 +208,34 @@ class PresetPlaylistWindow(QWidget):
         super().resizeEvent(e)
         self._render_title()      # the elision budget just changed
 
+    def _apply_filter(self):
+        """Hide the rows that do not match the search box.
+
+        Hiding rather than rebuilding the list, so a row's index stays equal to
+        its playlist position. Every other method here -- jump_to_order,
+        _highlight, the double-click handler -- indexes by that position, and a
+        filtered rebuild would have needed a row/position map in all of them.
+        """
+        q = self._search.text().strip().lower()
+        shown = 0
+        for i in range(self._list.count()):
+            hit = (not q) or q in self._list.item(i).text().lower()
+            self._list.setRowHidden(i, not hit)
+            shown += hit
+        total = self._list.count()
+        self.setWindowTitle("Preset Browser" if shown == total
+                            else f"Preset Browser — {shown} of {total}")
+
     def _highlight(self, pos: int):
         if 0 <= pos < self._list.count():
             self._list.setCurrentRow(pos)
-            self._list.scrollToItem(self._list.item(pos),
-                                    QAbstractItemView.ScrollHint.PositionAtCenter)
+            # Not while it is filtered out: scrollToItem on a hidden row jumps
+            # the view to wherever it would have been, which reads as the list
+            # losing your place every time the preset rotates mid-search.
+            if not self._list.isRowHidden(pos):
+                self._list.scrollToItem(
+                    self._list.item(pos),
+                    QAbstractItemView.ScrollHint.PositionAtCenter)
             entries = getattr(self, "_entries", None)
             if entries and 0 <= pos < len(entries):
                 self._set_title(*entries[pos])
