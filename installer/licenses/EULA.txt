@@ -1,0 +1,163 @@
+MilkDrop Visualizer — End User Licence Agreement
+================================================
+
+BomsAI Software ("we", "us")            Version 1.4.0 — 6 September 2026
+
+Read this before installing. Installing or using MilkDrop Visualizer (the
+"Software") means you accept it. If you do not accept it, do not install the
+Software, and request a refund under section 8.
+
+This agreement is written to be read. Where it is plain, it is still binding.
+
+
+1. What you are buying
+----------------------
+
+A licence to use the Software, not the Software itself. We keep ownership of
+it. You keep ownership of everything you make with it, and of every preset,
+texture, rating and setting on your own machine — those are yours, we have no
+claim on them and no copy of them.
+
+
+2. What you may do
+------------------
+
+  * Install and use the Software on any machine you own or control, for as
+    long as you like. There is no activation, no seat count and no online
+    check.
+  * Use it personally or commercially. That includes streaming, recording,
+    performing live, and using the output in work you sell. We claim no share
+    of it and no credit in it.
+  * Make backup copies for yourself.
+
+
+3. What you may not do
+----------------------
+
+  * Sell, rent, sublicence, or give away copies of the Software, or make it
+    available for download by anyone else.
+  * Present it as your own work, or remove the notices identifying it as ours.
+  * Work around, disable or remove any licence or purchase check.
+
+Nothing in this section limits what the licences in section 4 permit. In
+particular, and notwithstanding anything above, you may reverse engineer,
+decompile and modify the LGPL-licensed components described in section 4, and
+reverse engineer the Software itself to the extent necessary to debug your
+modifications to those components. You may also replace those components with
+your own compatible builds. Where the law gives you a right that this
+agreement would otherwise remove, the law wins and the rest of this agreement
+stands.
+
+
+4. Components we did not write
+------------------------------
+
+The Software ships with third-party libraries that carry their own licences,
+which continue to govern those libraries and are not overridden by this
+agreement:
+
+  * projectM 4 — LGPL-2.1
+  * Qt 6 and PySide6 — LGPL-3.0
+  * GLEW — Modified BSD / MIT / SGI Free Software Licence B
+  * SDL2 — zlib · PyOpenGL — BSD · PortAudio — MIT · NumPy — BSD
+
+The full texts are installed beside the Software, in the "licenses" folder,
+along with a note on how each one is used. The LGPL libraries are shipped as
+separate shared library files and are loaded at runtime — never linked
+statically — so you can replace any of them with your own compatible build by
+swapping the file. That is your right under those licences and we have built
+the Software so that it works.
+
+
+5. Presets and textures are not included
+----------------------------------------
+
+The Software ships with no presets and no textures, deliberately. They are the
+work of their own authors, under their own terms, and are not ours to sell,
+bundle or license to you. The Software helps you download them from where
+their authors published them, and reads them from a folder you choose. What
+you may do with them is between you and whoever made them.
+
+
+6. Updates
+----------
+
+Updates are provided when we make them. We are not obliged to make any, to
+keep any feature working forever, or to support any particular version of
+Windows or Linux indefinitely. An update may change or remove a feature. If
+one does and you would rather not have it, you may keep using the version you
+have — nothing expires.
+
+
+7. No warranty
+--------------
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE IMPLIED WARRANTIES OF
+MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NON-INFRINGEMENT. WE DO
+NOT WARRANT THAT THE SOFTWARE WILL RUN UNINTERRUPTED, ERROR-FREE, OR ON ANY
+PARTICULAR HARDWARE OR DRIVER.
+
+In plainer terms: this is a graphics program that drives your GPU hard through
+a stack of other people's drivers. It works well on the machines we can test
+on, which are not every machine.
+
+8. Limit of liability
+---------------------
+
+TO THE MAXIMUM EXTENT PERMITTED BY LAW, OUR TOTAL LIABILITY UNDER THIS
+AGREEMENT IS LIMITED TO THE AMOUNT YOU PAID FOR THE SOFTWARE. WE ARE NOT
+LIABLE FOR INDIRECT, INCIDENTAL, SPECIAL OR CONSEQUENTIAL DAMAGES, OR FOR LOST
+PROFITS, LOST DATA OR LOST TIME, EVEN IF WE WERE TOLD THEY WERE POSSIBLE.
+
+Nothing here excludes liability that cannot legally be excluded — including
+liability for death or personal injury caused by negligence, or for fraud.
+Some jurisdictions do not allow the exclusions in sections 7 and 8, so they may
+not apply to you, and you may have rights that this agreement does not affect.
+
+
+9. Refunds
+----------
+
+If you bought the Software through a store — Microsoft Store, or any other —
+that store's refund policy applies, and you claim the refund from them, not
+from us.
+
+If you bought it directly from bomsaisoftware.com, you can ask for a full
+refund within 14 days of purchase, for any reason, by writing to us through
+the contact form on the site. Working presets are not a condition of the
+refund and you do not have to justify the request.
+
+
+10. Photosensitivity
+--------------------
+
+The Software produces rapidly changing, flashing and strobing images that may
+trigger seizures in people with photosensitive epilepsy. Read the warning
+shown on first run. If you or anyone who will see the display has a history of
+seizures or epilepsy, consult a doctor before use.
+
+
+11. If you break this agreement
+-------------------------------
+
+This licence ends if you breach it, and you must then stop using the Software
+and remove your copies. Sections 4, 5, 7, 8 and 12 survive.
+
+
+12. Law
+-------
+
+This agreement is governed by the laws of the State of [STATE], United States,
+without regard to its conflict-of-law rules. If any part of it is
+unenforceable, the rest stays in force.
+
+If you live somewhere with mandatory consumer protection law, that law applies
+to you regardless of this section, and this agreement does not take away any
+right it gives you.
+
+
+13. Contact
+-----------
+
+BomsAI Software — https://bomsaisoftware.com/contact

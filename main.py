@@ -37,7 +37,7 @@ from config import load_config, load_ratings, load_keymaps
 from renderer import Renderer
 # Qt comes through the ui shim, which gets it from viz_common -- that is where
 # the PySide6/PyQt6 choice is made, and naming a binding here would undo it.
-from ui import (Bridge, ContextMenu, ToastLabel, SettingsDialog, QDialog,
+from ui import (Bridge, ContextMenu, ToastLabel, SettingsDialog, QDialog, QMessageBox,
                 QApplication, Signal, set_app_theme, browser_qss,
                 PresetPackDialog)
 
@@ -124,8 +124,32 @@ class App:
         )
 
     def run(self) -> int:
+        self._warn_photosensitivity()
         self._render_thread.start()
         return self._qt_app.exec()
+
+    def _warn_photosensitivity(self):
+        """Shown once per install, before the first frame.
+
+        The visualiser strobes -- that is the product, not a defect -- and the
+        store age-rating questionnaires ask whether it does. Acknowledgement is
+        a config flag rather than a marker file so that wiping config.json
+        genuinely resets the app.
+        """
+        if self._cfg.get("seizure_warning_ack"):
+            return
+        QMessageBox.warning(
+            None, "Photosensitivity warning",
+            "MilkDrop Visualizer reacts to sound with rapidly changing, "
+            "flashing and strobing images.\n\n"
+            "A small number of people can have seizures when exposed to "
+            "flashing lights or patterns, including people with no history "
+            "of epilepsy. If you or anyone who will be watching has ever had "
+            "a seizure, consult a doctor before using it.\n\n"
+            "Stop watching immediately if you feel dizzy, disoriented, or "
+            "notice altered vision or involuntary movement.")
+        self._cfg["seizure_warning_ack"] = True
+        self._renderer._save_config(self._cfg)
 
     def _on_quit(self):
         self._renderer._running = False

@@ -36,7 +36,7 @@ ArchitecturesInstallIn64BitMode=x64compatible
 ; Program Files needs elevation; per-user would dodge it but Steam and the
 ; Start Menu both expect a normal machine-wide install.
 PrivilegesRequired=admin
-LicenseFile={#StageDir}\licenses\README-third-party.txt
+LicenseFile={#StageDir}\licenses\EULA.txt
 InfoAfterFile={#StageDir}\README.txt
 DisableProgramGroupPage=yes
 

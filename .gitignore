@@ -21,3 +21,8 @@ ponytail-main/
 # Installer output (the vendored libprojectM under installer/vendor IS tracked)
 installer/build/
 installer/dist/
+
+# Store media: regenerated from the app, large, and uploaded to the storefront
+# by hand. store/listing.md IS tracked -- it is the copy, not the media.
+store/demo.mp4
+store/screenshots/
