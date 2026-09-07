@@ -99,6 +99,41 @@ def our_own_long_options_are_not_mistaken_for_them():
         assert got == "", f"{argv} was read as screensaver mode {got!r}"
 
 
+class _FakeToast:
+    def __init__(self, log):   self._log = log
+    def show_message(self, *a): self._log.append("toast")
+
+
+class _FakeApp:
+    """Only what _on_no_presets touches."""
+    def __init__(self, screensaver):
+        self.log = []
+        self._screensaver = screensaver
+        self._asked_for_presets = False
+        self._toast = _FakeToast(self.log)
+
+    def _open_packs(self):
+        self.log.append("packs")
+
+
+def a_screensaver_does_not_open_the_get_presets_dialog():
+    """Any input ends a screensaver, so a modal there cannot be answered and
+    covers the thing it is meant to be showing. A fresh install that ticked
+    "use as screen saver" before choosing a preset folder is the ordinary way
+    to hit it -- measured on Windows, where Get Presets came up over the
+    fullscreen visualiser."""
+    app = _FakeApp(screensaver=True)
+    app_main.App._on_no_presets(app, "/nowhere")
+    assert app.log == [], f"screensaver opened {app.log}"
+
+
+def the_app_proper_still_asks():
+    """The guard must not silence the one dialog a first run depends on."""
+    app = _FakeApp(screensaver=False)
+    app_main.App._on_no_presets(app, "/nowhere")
+    assert "packs" in app.log, app.log
+
+
 for fn in (a_keypress_ends_it,
            a_click_ends_it,
            a_window_event_does_not,
@@ -107,7 +142,9 @@ for fn in (a_keypress_ends_it,
            a_real_move_ends_it,
            a_real_move_on_the_other_axis_ends_it,
            the_windows_arguments_are_recognised,
-           our_own_long_options_are_not_mistaken_for_them):
+           our_own_long_options_are_not_mistaken_for_them,
+           a_screensaver_does_not_open_the_get_presets_dialog,
+           the_app_proper_still_asks):
     results.append(check(fn.__name__, fn))
 
 print("all screensaver checks passed" if all(results) else "FAILURES")

@@ -424,4 +424,28 @@ There is no display in an agent shell and SDL needs one, so:
   quietly no-ops without a context on Linux and raises `GL_INVALID_OPERATION`
   on Windows, so that suite could not run on the platform the feature is for.
 
+- **Wallpaper mode does not work on Windows 11, and the failure is a toast.**
+  The classic technique `find_workerw` implements is a Windows 7-10 one: send
+  Progman 0x052C, and the desktop icons end up in a WorkerW with a sibling
+  WorkerW behind them to draw into. On Windows 11 (measured on 11 Pro 26200)
+  `SHELLDLL_DefView` stays a child of **Progman**, no WorkerW is created after
+  Progman in Z-order, and no visible desktop-sized WorkerW exists at all — so
+  `pick_workerw` returns 0 and `_set_wallpaper_mode` gives up with a toast that
+  never reaches a log. Parenting into Progman instead is not the fix: it works
+  as a reparent, but the window lands *in front of* `SHELLDLL_DefView` (covering
+  the icons) and nothing renders on the desktop anyway. `--wallpaper` is
+  therefore a no-op on Windows 11. `test_wallpaper` passes throughout because it
+  tests `pick_workerw` against a hand-built Windows 10 window list.
+- **A screensaver must not open a dialog, and that includes the no-presets
+  one.** `_warn_photosensitivity` already skips for this reason;
+  `_on_no_presets` did not, so a fresh install that ticked "use as the Windows
+  screen saver" before choosing a preset folder got the Get Presets dialog over
+  the fullscreen visualiser — unanswerable, because any input ends a
+  screensaver.
+- **Git Bash rewrites a lone `/p` or `/c` into a Windows path.** MSYS2 path
+  conversion turns `app.scr /c` into `app.scr C:/`, so the screensaver argument
+  tests appear to fail when the app is fine. Drive those from PowerShell, or
+  hard-code the flag inside the test script rather than passing it through the
+  shell.
+
 See PORTING.md for port status and the Windows setup recipe.

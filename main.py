@@ -221,6 +221,14 @@ class App:
         open the one dialog that fixes it. Once per launch: cancelling is an
         answer, not a reason to ask again.
         """
+        if self._screensaver:
+            # Same reason the photosensitivity warning is skipped above: any
+            # input ends a screensaver, so a modal here cannot be answered and
+            # covers the thing it is meant to be showing. Measured on Windows
+            # with a fresh config -- ticking "use as screen saver" in the
+            # installer before choosing a preset folder is the ordinary way in.
+            # The app proper still asks the first time it is opened.
+            return
         if self._asked_for_presets:
             return
         self._asked_for_presets = True
