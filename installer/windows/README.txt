@@ -72,8 +72,9 @@ captured -- and are written to:
 
     %LOCALAPPDATA%\BomsAIVisualizer\clips
 
-Recording needs ffmpeg. If it is not on your PATH, put ffmpeg.exe in the app
-folder beside BomsAIVisualizer.exe and the app will find it there first.
+Recording needs ffmpeg, and a copy ships with the app -- there is nothing to
+install. If you would rather use your own, put ffmpeg.exe in the app folder
+beside BomsAIVisualizer.exe; that is the first place the app looks.
 
 
 FULLSCREEN AND MULTIPLE MONITORS

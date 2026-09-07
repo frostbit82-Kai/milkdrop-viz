@@ -424,18 +424,37 @@ There is no display in an agent shell and SDL needs one, so:
   quietly no-ops without a context on Linux and raises `GL_INVALID_OPERATION`
   on Windows, so that suite could not run on the platform the feature is for.
 
-- **Wallpaper mode does not work on Windows 11, and the failure is a toast.**
-  The classic technique `find_workerw` implements is a Windows 7-10 one: send
-  Progman 0x052C, and the desktop icons end up in a WorkerW with a sibling
-  WorkerW behind them to draw into. On Windows 11 (measured on 11 Pro 26200)
-  `SHELLDLL_DefView` stays a child of **Progman**, no WorkerW is created after
-  Progman in Z-order, and no visible desktop-sized WorkerW exists at all — so
-  `pick_workerw` returns 0 and `_set_wallpaper_mode` gives up with a toast that
-  never reaches a log. Parenting into Progman instead is not the fix: it works
-  as a reparent, but the window lands *in front of* `SHELLDLL_DefView` (covering
-  the icons) and nothing renders on the desktop anyway. `--wallpaper` is
-  therefore a no-op on Windows 11. `test_wallpaper` passes throughout because it
-  tests `pick_workerw` against a hand-built Windows 10 window list.
+- **Wallpaper mode cannot put the visuals behind the icons on Windows 11.**
+  Measured on 11 Pro build 26200, against a plain solid-colour window so that
+  SDL and OpenGL were not variables, with a screen capture as the check.
+
+  The technique `find_workerw` implements is the Windows 7-10 one: send Progman
+  0x052C, the icons end up in a WorkerW, and you draw into the sibling WorkerW
+  behind them. Here `SHELLDLL_DefView` stays a child of **Progman**, no WorkerW
+  appears after Progman in Z-order, and none of the 14 that exist is visible or
+  desktop-sized. Five spawns and four wParam/lParam variants of 0x052C changed
+  nothing, so it is not a race, and no third-party wallpaper app was holding the
+  layer.
+
+  What *does* render, and is worth knowing before anyone retries this: a
+  `WS_CHILD` window parented into `SHELLDLL_DefView` **at the top of its
+  children** paints on the desktop, as does one parented into `SysListView32`.
+  Both sit *over* the icons. Every arrangement that puts the window under the
+  icons comes back blank: `SysListView32` already has `CLR_NONE` for its
+  background and still repaints the wallpaper across whatever is beneath it, so
+  pushing ourselves to `HWND_BOTTOM` inside DefView, or lifting the list view
+  above us, both end with the wallpaper drawn back over the top. Parenting into
+  Progman -- with or without `WS_CHILD`, at top or at `HWND_BOTTOM` -- never
+  renders at all.
+
+  So "visuals behind your icons" is not deliverable on this build by any of
+  these routes; "visuals over your icons" is. MilkDrop's own desktop mode and
+  VLC's `--video-wallpaper` are the same Progman/WorkerW family and are what
+  Windows 11 changed out from under. The context menu now shows the entry
+  disabled rather than spending a click to reach a toast, and
+  `_set_wallpaper_mode` prints as well as toasting. `test_wallpaper` passes
+  throughout because `pick_workerw` is tested against a hand-built Windows 10
+  window list.
 - **A screensaver must not open a dialog, and that includes the no-presets
   one.** `_warn_photosensitivity` already skips for this reason;
   `_on_no_presets` did not, so a fresh install that ticked "use as the Windows

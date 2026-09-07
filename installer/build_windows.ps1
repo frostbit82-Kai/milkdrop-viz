@@ -7,8 +7,9 @@
 #         installer\dist\BomsAIVisualizer-<version>-win64\   (the portable tree)
 #
 # -SkipInstaller stops after freezing, which is what you want when iterating on
-# the app rather than on packaging.
-param([switch]$SkipInstaller)
+# the app rather than on packaging. -NoFfmpeg leaves the recorder's ffmpeg out,
+# which halves the installer while iterating.
+param([switch]$SkipInstaller, [switch]$NoFfmpeg)
 
 $ErrorActionPreference = 'Stop'
 
@@ -27,6 +28,45 @@ foreach ($dll in 'projectM-4.dll', 'projectM-4-playlist.dll', 'glew32.dll') {
     if (-not (Test-Path (Join-Path $env:PROJECTM_LIB_DIR $dll))) {
         throw "No $dll in $env:PROJECTM_LIB_DIR (build one with setup_windows.ps1)"
     }
+}
+
+# ffmpeg is bundled so that recording works on a machine that has never heard
+# of ffmpeg -- which is nearly all of them. It MUST be an LGPL build: libx264
+# is GPL and cannot ship inside a paid closed-source application, and
+# video_codec_args() already falls back to h264_mf, which LGPL Windows builds
+# carry and which is hardware accelerated. That is checked below rather than
+# trusted, because the GPL and LGPL archives differ by one word in the name.
+$FfmpegUrl = 'https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-win64-lgpl.zip'
+$Ffmpeg = if ($env:FFMPEG_EXE) { $env:FFMPEG_EXE } else { Join-Path $Here 'vendor\windows\ffmpeg.exe' }
+if (-not $NoFfmpeg) {
+    if (-not (Test-Path $Ffmpeg)) {
+        Write-Host "==> Fetching an LGPL ffmpeg (once; ~140 MB)"
+        $zip = Join-Path $env:TEMP 'ffmpeg-lgpl.zip'
+        $tmp = Join-Path $env:TEMP 'ffmpeg-lgpl'
+        # IPv6 on this box advertises without working, and the resulting
+        # failure looks like DNS -- see the trap in CLAUDE.md.
+        curl.exe -4 -sL --retry 3 -o $zip $FfmpegUrl
+        if ($LASTEXITCODE -ne 0) {
+            throw "Could not download ffmpeg. Put an LGPL ffmpeg.exe at $Ffmpeg, or pass -NoFfmpeg."
+        }
+        Remove-Item $tmp -Recurse -Force -EA SilentlyContinue
+        Expand-Archive -Path $zip -DestinationPath $tmp -Force
+        $found = Get-ChildItem $tmp -Recurse -Filter 'ffmpeg.exe' | Select-Object -First 1
+        if (-not $found) { throw "No ffmpeg.exe inside $zip" }
+        New-Item -ItemType Directory -Force -Path (Split-Path $Ffmpeg -Parent) | Out-Null
+        Copy-Item $found.FullName $Ffmpeg
+        Remove-Item $zip, $tmp -Recurse -Force -EA SilentlyContinue
+    }
+    # The licence check. A GPL build carries libx264; an LGPL one does not.
+    $encoders = & $Ffmpeg -hide_banner -loglevel error -encoders 2>$null | Out-String
+    if ($LASTEXITCODE -ne 0) { throw "$Ffmpeg would not run" }
+    if ($encoders -match 'libx264') {
+        throw "$Ffmpeg is a GPL build (it has libx264). Only an LGPL ffmpeg may ship in this app."
+    }
+    if ($encoders -notmatch 'h264_mf') {
+        throw "$Ffmpeg has neither libx264 nor h264_mf, so recorded clips would fall back to mpeg4."
+    }
+    Write-Host "    ffmpeg: $Ffmpeg (LGPL, h264_mf present)"
 }
 
 $Venv   = if ($env:VENV) { $env:VENV } else { Join-Path $Repo '.venv' }
@@ -53,6 +93,11 @@ Copy-Item (Join-Path $Build 'dist\BomsAIVisualizer') (Join-Path $Stage 'app') -R
 # reads that and the other screen-saver arguments before argparse runs.
 Copy-Item (Join-Path $Stage 'app\BomsAIVisualizer.exe') `
           (Join-Path $Stage 'app\BomsAIVisualizer.scr')
+# Beside the exe, which is the first place find_ffmpeg() looks in a frozen
+# build -- ahead of PATH, so the bundled copy wins over whatever the host has.
+if (-not $NoFfmpeg) {
+    Copy-Item $Ffmpeg (Join-Path $Stage 'app\ffmpeg.exe')
+}
 Copy-Item (Join-Path $Here 'windows\README.txt') $Stage
 New-Item -ItemType Directory -Force -Path (Join-Path $Stage 'licenses') | Out-Null
 Copy-Item (Join-Path $Here 'licenses\*') (Join-Path $Stage 'licenses')

@@ -20,6 +20,16 @@ GLEW — Modified BSD / MIT / SGI Free Software Licence B
     and never initialises it, so the app calls glewInit() itself -- which
     only works while both look at the same shared copy.
 
+FFmpeg — LGPL-3.0 (an LGPL build; no GPL components)
+    FFMPEG-LGPL-3.0.txt
+    Shipped as ffmpeg.exe beside the application and run as a separate
+    process, never linked into it. It is an unmodified upstream build with
+    no GPL components -- notably no libx264, which is why recorded clips use
+    Media Foundation (h264_mf) for H.264. The build is packaged by
+    https://github.com/BtbN/FFmpeg-Builds from unmodified FFmpeg sources at
+    https://git.ffmpeg.org/ffmpeg.git ; replacing ffmpeg.exe with your own
+    LGPL build of the same version is a matter of swapping that file.
+
 SDL2 — zlib licence
 PyOpenGL — BSD
 PortAudio (via sounddevice) — MIT

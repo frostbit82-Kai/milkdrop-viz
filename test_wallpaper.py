@@ -181,6 +181,52 @@ def positions_are_relative_to_the_virtual_desktop_origin():
     assert fake.size == (1920, 1080), fake.size
 
 
+class _MenuHost:
+    """Only what ContextMenu asks a renderer for."""
+    def is_locked(self):      return False
+    def is_borderless(self):  return False
+    def is_fullscreen(self):  return False
+    def is_recording(self):   return False
+    def is_wallpaper(self):   return False
+    def list_displays(self):  return list(TWO)
+    def _save_config(self, cfg): pass
+
+
+def _wallpaper_entries(workerw):
+    """Build the menu with find_workerw stubbed, return its wallpaper items."""
+    real = viz_common.find_workerw
+    viz_common.find_workerw = lambda *a, **k: workerw
+    try:
+        menu = viz_common.ContextMenu(renderer=_MenuHost(), cfg={},
+                                      ratings={}, keymaps={})
+        return [(a.text(), a.isEnabled()) for a in menu.actions()
+                if "wallpaper" in a.text().lower()]
+    finally:
+        viz_common.find_workerw = real
+
+
+def a_machine_with_no_workerw_is_told_so_in_the_menu():
+    """Windows 11 creates no WorkerW, so the entry cannot work. Offering it
+    anyway spends a click to reach a toast that vanishes."""
+    if sys.platform != "win32":
+        return                      # the entry is Windows-only
+    items = _wallpaper_entries(0)
+    assert items, "no wallpaper entry at all"
+    text, enabled = items[0]
+    assert not enabled, f"offered a wallpaper entry that cannot work: {text!r}"
+    assert "not available" in text.lower(), text
+
+
+def a_machine_with_a_workerw_gets_the_real_entry():
+    if sys.platform != "win32":
+        return
+    items = _wallpaper_entries(12345)
+    assert items, "no wallpaper entry"
+    text, enabled = items[0]
+    assert enabled, f"the entry was disabled despite a WorkerW: {text!r}"
+    assert "set as desktop wallpaper" in text.lower(), text
+
+
 for fn in (the_worker_behind_the_icons_is_chosen,
            a_desktop_with_no_defview_gives_nothing,
            a_defview_with_no_sibling_gives_nothing,
@@ -188,7 +234,9 @@ for fn in (the_worker_behind_the_icons_is_chosen,
            asking_for_the_mode_it_is_already_in_does_nothing,
            a_chosen_monitor_is_the_one_filled,
            with_no_choice_it_spans_every_monitor,
-           positions_are_relative_to_the_virtual_desktop_origin):
+           positions_are_relative_to_the_virtual_desktop_origin,
+           a_machine_with_no_workerw_is_told_so_in_the_menu,
+           a_machine_with_a_workerw_gets_the_real_entry):
     results.append(check(fn.__name__, fn))
 
 print("all wallpaper checks passed" if all(results) else "FAILURES")

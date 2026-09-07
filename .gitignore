@@ -18,6 +18,10 @@ kai_workflows.db
 # Vendored tooling that belongs to its own project
 ponytail-main/
 
+# Fetched by installer/build_windows.ps1 on first build; 110 MB, so unlike the
+# libprojectM binaries beside it this one is not worth carrying in the history.
+installer/vendor/windows/ffmpeg.exe
+
 # Installer output (the vendored libprojectM under installer/vendor IS tracked)
 installer/build/
 installer/dist/

@@ -3176,6 +3176,15 @@ class ContextMenu(QMenu):
         if sys.platform != "win32":
             return
         on = self._renderer.is_wallpaper()
+        if not on and not find_workerw():
+            # Windows 11 does not create the WorkerW this needs -- see the trap
+            # in CLAUDE.md. Offering the entry anyway spends a click to reach a
+            # toast, so say so where the click would have been.
+            dead = QAction("🖥   Desktop wallpaper — not available on this "
+                           "version of Windows", self)
+            dead.setEnabled(False)
+            self.addAction(dead)
+            return
         self.addAction(
             "🖥   Leave wallpaper mode" if on else "🖥   Set as desktop wallpaper",
             lambda: self._renderer.request_wallpaper())
@@ -5041,9 +5050,16 @@ class Renderer:
             if on:
                 worker = find_workerw(u)
                 if not worker:
+                    # Measured on Windows 11 build 26200: SHELLDLL_DefView
+                    # stays a child of Progman, no WorkerW is created after it,
+                    # and none of the ones that exist is visible or
+                    # desktop-sized. Printed as well as toasted, because a
+                    # toast is gone in three seconds and never reaches a log.
+                    print("[wallpaper] no WorkerW to draw into -- this Windows "
+                          "build does not create one", flush=True)
                     self._bridge.show_toast.emit(
-                        "Could not find the desktop window. Wallpaper mode "
-                        "needs Explorer to be drawing the desktop.")
+                        "Wallpaper mode is not available on this version of "
+                        "Windows.")
                     return
                 self._track_window()
                 self._wp_restore = (self._win_rect, self._borderless)
