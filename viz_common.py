@@ -1738,7 +1738,7 @@ for _mod, _names in (
                  "QHeaderView", "QLineEdit", "QSizePolicy", "QMessageBox",
                  "QFileDialog", "QSlider", "QWidget", "QWidgetAction",
                  "QListWidget", "QListWidgetItem", "QAbstractItemView",
-                 "QProgressBar")),
+                 "QProgressBar", "QSystemTrayIcon")),
 ):
     for _n in _names:
         globals()[_n] = getattr(_mod, _n)
@@ -1759,6 +1759,7 @@ class Bridge(QObject):
     close_context_menu = pyqtSignal()           # host should dismiss its menu
     playlist_changed   = pyqtSignal()           # order/contents changed (sort, delete, mode)
     no_presets         = pyqtSignal(str)        # nothing loaded; arg is the directory tried
+    wallpaper_changed  = pyqtSignal(bool)       # window is/is not the desktop
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1806,6 +1807,11 @@ def user_data_dir() -> str:
 def default_pack_dir(cfg: dict) -> str:
     """Where the Get Presets dialog offers to install."""
     return os.path.join(user_data_dir(), "presets")
+
+
+def app_icon():
+    """The application's icon, for the window and the tray."""
+    return QIcon(_asset_path("assets", "bomsai-logo.png"))
 
 
 def app_version() -> str:
@@ -3149,6 +3155,7 @@ class ContextMenu(QMenu):
         self.addSeparator()
 
         self._build_record_menu()
+        self._build_wallpaper_entry()
         self.addSeparator()
 
         self._build_audio_menu()
@@ -3161,6 +3168,17 @@ class ContextMenu(QMenu):
         self.addSeparator()
 
         self.addAction("✕   Quit",             QApplication.quit)
+
+    def _build_wallpaper_entry(self):
+        """Windows only. Nothing on Linux draws behind the desktop icons in a
+        way an application can ask for, so an entry there would be a promise
+        the platform cannot keep."""
+        if sys.platform != "win32":
+            return
+        on = self._renderer.is_wallpaper()
+        self.addAction(
+            "🖥   Leave wallpaper mode" if on else "🖥   Set as desktop wallpaper",
+            lambda: self._renderer.request_wallpaper())
 
     def _build_record_menu(self):
         """Record what is on screen to a clip.
@@ -3575,6 +3593,72 @@ class _Recorder(threading.Thread):
                 f"ffmpeg exited {self._proc.returncode}"
 
 
+# ─── desktop wallpaper (Windows) ──────────────────────────────────────────────
+
+#: Undocumented Progman message that makes Explorer split the desktop into a
+#: SHELLDLL_DefView holding the icons and a WorkerW behind it holding the
+#: wallpaper. Documented nowhere by Microsoft, relied on by every wallpaper
+#: application on Windows.
+_WM_SPAWN_WORKERW = 0x052C
+
+
+def _user32():
+    """user32 with handle-sized argument types set.
+
+    Not optional: ctypes defaults every unspecified return type to C int, so
+    on 64-bit Windows an HWND comes back truncated to its low 32 bits and the
+    next call is handed a window that does not exist.
+    """
+    u = ctypes.WinDLL("user32", use_last_error=True)
+    P, W = ctypes.c_void_p, ctypes.c_wchar_p
+    u.FindWindowW.restype, u.FindWindowW.argtypes = P, (W, W)
+    u.FindWindowExW.restype, u.FindWindowExW.argtypes = P, (P, P, W, W)
+    u.SetParent.restype, u.SetParent.argtypes = P, (P, P)
+    u.EnumWindows.argtypes = (ctypes.c_void_p, ctypes.c_void_p)
+    u.SendMessageTimeoutW.argtypes = (P, ctypes.c_uint, P, P,
+                                      ctypes.c_uint, ctypes.c_uint, P)
+    return u
+
+
+def pick_workerw(u, top_level):
+    """Given the top-level windows, the WorkerW a wallpaper belongs in, or 0.
+
+    Explorer paints the wallpaper on a window of class WorkerW. Sending
+    Progman 0x052C makes it create a second one, and the two are siblings: the
+    FIRST WorkerW owns SHELLDLL_DefView, which is the desktop icons, and the
+    one to draw into is the NEXT sibling after it -- behind the icons rather
+    than over them. Parenting into the first instead is the classic way to get
+    this wrong and covers the icons up.
+
+    Split out from find_workerw so the choice can be tested off Windows;
+    everything around it is ctypes calls into user32.
+    """
+    for hwnd in top_level:
+        if u.FindWindowExW(hwnd, None, "SHELLDLL_DefView", None):
+            sibling = u.FindWindowExW(None, hwnd, "WorkerW", None)
+            if sibling:
+                return sibling
+    return 0
+
+
+def find_workerw(u=None):
+    """The desktop window a wallpaper can be parented into, or 0. Windows."""
+    u = u or _user32()
+    progman = u.FindWindowW("Progman", None)
+    if progman:
+        u.SendMessageTimeoutW(progman, _WM_SPAWN_WORKERW, None, None,
+                              0x0000, 1000, None)
+    tops = []
+    proto = ctypes.WINFUNCTYPE(ctypes.c_bool, ctypes.c_void_p, ctypes.c_void_p)
+
+    def _cb(hwnd, _lparam):
+        tops.append(hwnd)
+        return True
+
+    u.EnumWindows(proto(_cb), None)
+    return pick_workerw(u, tops)
+
+
 def thumbs_dir() -> str:
     return os.path.join(user_data_dir(), "thumbs")
 
@@ -3780,6 +3864,7 @@ class Renderer:
         self._req_reload                 = False  # rebuild playlist from disk
         self._req_fullscreen             = False  # toggle fullscreen
         self._req_record                 = None   # 'mp4' | 'gif' | 'stop'
+        self._req_wallpaper              = None   # True/False: be the desktop
         self._rated                      = False  # favorite (rating-weighted) shuffle
         self._rated_history              = deque(maxlen=200)  # native indices for rated prev
 
@@ -3815,6 +3900,8 @@ class Renderer:
         self._rec_size   = None    # the size ffmpeg was told; frames must match
         self._rec_last   = 0.0     # monotonic time of the last frame submitted
         self._rec_fps    = 30
+        self._wallpaper  = False
+        self._wp_restore = None    # (x, y, w, h, borderless) to come back to
         self._thumb_done = True    # one attempt per preset; see _maybe_thumbnail
 
         self._audio = AudioCapture(cfg.get("audio_device", ""))
@@ -4345,6 +4432,10 @@ class Renderer:
                 if self._req_fullscreen:
                     self._req_fullscreen = False
                     self._toggle_fullscreen()
+                if self._req_wallpaper is not None:
+                    want = self._req_wallpaper
+                    self._req_wallpaper = None
+                    self._set_wallpaper_mode(want)
                 if self._req_record is not None:
                     kind = self._req_record
                     self._req_record = None
@@ -4840,6 +4931,102 @@ class Renderer:
         """(x, y, w, h) of the visualiser window, or None before it exists.
         Safe to call from any thread -- it reads the cache, not SDL."""
         return self._win_rect
+
+    # ── Desktop wallpaper ─────────────────────────────────────────────────
+
+    def is_wallpaper(self) -> bool:
+        return self._wallpaper
+
+    def request_wallpaper(self, on: bool = None):
+        """Become the desktop wallpaper, or stop (render thread)."""
+        with self._lock:
+            self._req_wallpaper = (not self._wallpaper) if on is None else bool(on)
+
+    def _set_wallpaper_mode(self, on: bool):
+        """Parent the visualiser window into Explorer's wallpaper window.
+
+        Windows only. There is no equivalent anywhere else that is worth
+        shipping: X11 desktops each place the wallpaper differently and
+        Wayland gives an application no way to reach behind the desktop at all.
+
+        A window parented into WorkerW receives no keyboard or mouse input --
+        that is Explorer's, not ours -- so the tray icon the host puts up is
+        the only way back out. wallpaper_changed is what tells it to.
+        """
+        if on == self._wallpaper:
+            return
+        if sys.platform != "win32":
+            self._bridge.show_toast.emit(
+                "Wallpaper mode is Windows only — Linux desktops give an "
+                "application no way to draw behind the icons")
+            return
+        try:
+            u = _user32()
+            if on:
+                worker = find_workerw(u)
+                if not worker:
+                    self._bridge.show_toast.emit(
+                        "Could not find the desktop window. Wallpaper mode "
+                        "needs Explorer to be drawing the desktop.")
+                    return
+                self._track_window()
+                self._wp_restore = (self._win_rect, self._borderless)
+                u.SetParent(ctypes.c_void_p(self._native_handle), worker)
+                self._wallpaper = True
+                self._fit_to_wallpaper()
+            else:
+                u.SetParent(ctypes.c_void_p(self._native_handle), None)
+                self._wallpaper = False
+                rect, was_borderless = self._wp_restore or (None, False)
+                if rect:
+                    x, y, w, h = rect
+                    sdl2.SDL_SetWindowPosition(self._window, x, y)
+                    sdl2.SDL_SetWindowSize(self._window, w, h)
+                sdl2.SDL_SetWindowBordered(
+                    self._window,
+                    sdl2.SDL_FALSE if was_borderless else sdl2.SDL_TRUE)
+                self._borderless = was_borderless
+                self._track_window()
+        except Exception as e:
+            print(f"[wallpaper] {e}", flush=True)
+            self._bridge.show_toast.emit(f"Wallpaper mode failed: {e}")
+            return
+        self._bridge.wallpaper_changed.emit(self._wallpaper)
+        self._bridge.status_message.emit(
+            "Wallpaper mode ON — use the tray icon to leave it"
+            if self._wallpaper else "Wallpaper mode OFF")
+
+    def _fit_to_wallpaper(self):
+        """Fill the chosen monitor, or the whole desktop when none is chosen.
+
+        Not SDL fullscreen: a fullscreen window is taken out of its parent and
+        put back on top, which is exactly what wallpaper mode is not.
+        """
+        self._refresh_displays()
+        want = int(self._cfg.get("fullscreen_display", -1))
+        box = next((d for d in self._displays if d[0] == want), None)
+        if box is None and self._displays:
+            xs = [d[2] for d in self._displays]
+            ys = [d[3] for d in self._displays]
+            x2 = max(d[2] + d[4] for d in self._displays)
+            y2 = max(d[3] + d[5] for d in self._displays)
+            box = (-1, "", min(xs), min(ys), x2 - min(xs), y2 - min(ys))
+        if box is None:
+            return
+        _i, _n, x, y, w, h = box
+        sdl2.SDL_SetWindowBordered(self._window, sdl2.SDL_FALSE)
+        self._borderless = True
+        # Positions are relative to WorkerW, whose origin is the top-left of
+        # the virtual desktop -- which is not (0, 0) when a monitor sits above
+        # or left of the primary one.
+        vx = min((d[2] for d in self._displays), default=0)
+        vy = min((d[3] for d in self._displays), default=0)
+        sdl2.SDL_SetWindowPosition(self._window, x - vx, y - vy)
+        sdl2.SDL_SetWindowSize(self._window, w, h)
+        glViewport(0, 0, w, h)
+        if self._pm:
+            self._pm.set_window_size(w, h)
+        self._track_window()
 
     # ── Screensaver ───────────────────────────────────────────────────────
 

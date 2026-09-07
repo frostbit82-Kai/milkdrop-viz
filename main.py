@@ -14,6 +14,7 @@ Extra CLI args accepted by this launcher:
   --no-audio            — skip audio capture (useful when embedded)
   --preset-dir PATH     — override preset directory
   --screensaver         — fullscreen, and any real input quits
+  --wallpaper           — draw on the desktop, behind the icons (Windows)
 
 Windows screensaver arguments are accepted too: /s runs it, /c opens settings,
 /p draws the little preview. They arrive with a slash rather than a dash and
@@ -43,8 +44,8 @@ from renderer import Renderer
 # Qt comes through the ui shim, which gets it from viz_common -- that is where
 # the PySide6/PyQt6 choice is made, and naming a binding here would undo it.
 from ui import (Bridge, ContextMenu, ToastLabel, SettingsDialog, QDialog, QMessageBox,
-                APP_NAME,
-                QApplication, Signal, set_app_theme, browser_qss,
+                APP_NAME, app_icon,
+                QApplication, QSystemTrayIcon, Signal, set_app_theme, browser_qss,
                 PresetPackDialog)
 
 
@@ -70,7 +71,7 @@ class AppBridge(Bridge):
 
 class App:
     def __init__(self, cfg_overrides: dict = None, start_borderless: bool = False,
-                 screensaver: bool = False):
+                 screensaver: bool = False, wallpaper: bool = False):
         signal.signal(signal.SIGINT, signal.SIG_DFL)
 
         self._cfg     = load_config()
@@ -82,6 +83,7 @@ class App:
 
         self._qt_app = QApplication.instance() or QApplication(sys.argv)
         self._qt_app.setApplicationName(APP_NAME)
+        self._qt_app.setWindowIcon(app_icon())
         self._qt_app.setQuitOnLastWindowClosed(False)
         # Before any dialog exists, so Qt's palette and the OS-drawn title
         # bars match the sheet the dialogs are about to use.
@@ -105,6 +107,8 @@ class App:
         self._screensaver = screensaver
         if screensaver:
             self._renderer._screensaver = True
+        self._start_wallpaper = wallpaper
+        self._tray = None
 
         self._menu = None
         self._asked_for_presets = False
@@ -126,6 +130,7 @@ class App:
         # a banner every thirty seconds is not a status update.
         self._bridge.status_message.connect(self._toast.show_message)
         self._bridge.no_presets.connect(self._on_no_presets)
+        self._bridge.wallpaper_changed.connect(self._on_wallpaper_changed)
         self._bridge.lock_changed.connect(
             lambda locked: self._toast.show_message(
                 "Preset locked" if locked else "Preset unlocked"))
@@ -137,7 +142,26 @@ class App:
     def run(self) -> int:
         self._warn_photosensitivity()
         self._render_thread.start()
+        if self._start_wallpaper:
+            self._renderer.request_wallpaper(True)
         return self._qt_app.exec()
+
+    def _on_wallpaper_changed(self, on: bool):
+        """Raise a tray icon while the window is the desktop.
+
+        A window parented into Explorer's WorkerW receives no keyboard or
+        mouse input at all — the desktop keeps it — so without this there is
+        no way to reach the menu, change preset, or quit.
+        """
+        if on:
+            if self._tray is None:
+                self._tray = QSystemTrayIcon(app_icon(), self._qt_app)
+                self._tray.setToolTip(f"{APP_NAME} — click for the menu")
+                self._tray.activated.connect(
+                    lambda _reason: self._bridge.show_context_menu.emit())
+            self._tray.show()
+        elif self._tray is not None:
+            self._tray.hide()
 
     def _warn_photosensitivity(self):
         """Shown once per install, before the first frame.
@@ -285,6 +309,8 @@ def main():
                         help="Override preset directory")
     parser.add_argument("--screensaver", action="store_true",
                         help="Fullscreen; any key or real mouse movement quits")
+    parser.add_argument("--wallpaper", action="store_true",
+                        help="Draw on the desktop behind the icons (Windows)")
     args, _unknown = parser.parse_known_args()
 
     cfg_overrides = {}
@@ -306,7 +332,8 @@ def main():
         cfg_overrides["preset_dir"] = args.preset_dir
 
     app = App(cfg_overrides=cfg_overrides, start_borderless=args.borderless,
-              screensaver=args.screensaver or mode == "s")
+              screensaver=args.screensaver or mode == "s",
+              wallpaper=args.wallpaper)
     exit_code = app.run()
     sys.exit(exit_code)
 
