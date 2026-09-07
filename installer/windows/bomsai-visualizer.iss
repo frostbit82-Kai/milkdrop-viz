@@ -45,6 +45,7 @@ Name: "english"; MessagesFile: "compiler:Default.isl"
 
 [Tasks]
 Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{cm:AdditionalIcons}"; Flags: unchecked
+Name: "screensaver"; Description: "Use {#AppName} as the Windows screen saver"; GroupDescription: "Optional:"; Flags: unchecked
 
 [Files]
 Source: "{#StageDir}\app\*"; DestDir: "{app}\app"; Flags: ignoreversion recursesubdirs createallsubdirs
@@ -56,6 +57,14 @@ Source: "{#StageDir}\VERSION"; DestDir: "{app}"; Flags: ignoreversion
 Name: "{group}\{#AppName}"; Filename: "{app}\app\{#AppExeName}"
 Name: "{group}\{cm:UninstallProgram,{#AppName}}"; Filename: "{uninstallexe}"
 Name: "{autodesktop}\{#AppName}"; Filename: "{app}\app\{#AppExeName}"; Tasks: desktopicon
+
+[Registry]
+; The Screen Saver Settings dropdown only lists .scr files under %SystemRoot%,
+; and this one cannot go there -- it is a PyInstaller onedir build and has to
+; stay beside its _internal directory. Naming it here is what right-click ->
+; Install on a .scr does, and it works from any path.
+Root: HKCU; Subkey: "Control Panel\Desktop"; ValueType: string; ValueName: "SCRNSAVE.EXE"; ValueData: "{app}\app\BomsAIVisualizer.scr"; Tasks: screensaver
+Root: HKCU; Subkey: "Control Panel\Desktop"; ValueType: string; ValueName: "ScreenSaveActive"; ValueData: "1"; Tasks: screensaver
 
 [Run]
 Filename: "{app}\app\{#AppExeName}"; Description: "{cm:LaunchProgram,{#AppName}}"; Flags: nowait postinstall skipifsilent

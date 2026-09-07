@@ -3786,6 +3786,10 @@ class Renderer:
         self._locked              = False
         self._borderless          = False
         self._borderless_on_start = False   # set by main.py --borderless flag
+        #: Screensaver mode: fullscreen at once, and any real input quits.
+        #: Set by main.py before run(), from /s or --screensaver.
+        self._screensaver         = False
+        self._ss_origin           = None    # first pointer position seen
         self._menu_open           = False   # host's context menu is on screen
         self._shuffle             = False  # list order is as loaded
         self._running             = False
@@ -4241,6 +4245,11 @@ class Renderer:
             self._borderless = True
             sdl2.SDL_SetWindowBordered(self._window, sdl2.SDL_FALSE)
 
+        if self._screensaver:
+            self._toggle_fullscreen()
+            sdl2.SDL_ShowCursor(sdl2.SDL_DISABLE)
+            self._cursor_hidden = True
+
         event      = sdl2.SDL_Event()
 
         self._emit_current_preset()
@@ -4266,6 +4275,10 @@ class Renderer:
                         sdl2.SDL_MOUSEBUTTONDOWN, sdl2.SDL_KEYDOWN):
                     self._bridge.close_context_menu.emit()
                     continue
+
+                elif self._screensaver and self._ss_should_quit(event):
+                    self._running = False
+                    break
 
                 elif event.type == sdl2.SDL_KEYDOWN:
                     sym      = event.key.keysym.sym
@@ -4827,6 +4840,29 @@ class Renderer:
         """(x, y, w, h) of the visualiser window, or None before it exists.
         Safe to call from any thread -- it reads the cache, not SDL."""
         return self._win_rect
+
+    # ── Screensaver ───────────────────────────────────────────────────────
+
+    #: How far the pointer must travel before it counts as the user coming
+    #: back. Windows uses a few pixels for the same reason: a mouse sitting on
+    #: a soft surface reports motion on its own, and a screensaver that quits
+    #: on the first stray event never stays up.
+    SS_SLACK_PX = 12
+
+    def _ss_should_quit(self, event) -> bool:
+        """Does this event mean the user is back? Screensaver mode only."""
+        if event.type in (sdl2.SDL_KEYDOWN, sdl2.SDL_MOUSEBUTTONDOWN):
+            return True
+        if event.type != sdl2.SDL_MOUSEMOTION:
+            return False
+        x, y = event.motion.x, event.motion.y
+        if self._ss_origin is None:
+            # The first motion event is where the pointer already was, not a
+            # move -- taking it as one closes the screensaver instantly.
+            self._ss_origin = (x, y)
+            return False
+        ox, oy = self._ss_origin
+        return abs(x - ox) > self.SS_SLACK_PX or abs(y - oy) > self.SS_SLACK_PX
 
     # ── Displays ──────────────────────────────────────────────────────────
 

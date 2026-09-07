@@ -13,6 +13,11 @@ Extra CLI args accepted by this launcher:
   --borderless          — start with window decorations removed
   --no-audio            — skip audio capture (useful when embedded)
   --preset-dir PATH     — override preset directory
+  --screensaver         — fullscreen, and any real input quits
+
+Windows screensaver arguments are accepted too: /s runs it, /c opens settings,
+/p draws the little preview. They arrive with a slash rather than a dash and
+argparse would silently ignore them, so they are read before it runs.
 """
 
 import sys
@@ -64,7 +69,8 @@ class AppBridge(Bridge):
 
 
 class App:
-    def __init__(self, cfg_overrides: dict = None, start_borderless: bool = False):
+    def __init__(self, cfg_overrides: dict = None, start_borderless: bool = False,
+                 screensaver: bool = False):
         signal.signal(signal.SIGINT, signal.SIG_DFL)
 
         self._cfg     = load_config()
@@ -95,6 +101,10 @@ class App:
         # Apply borderless immediately if requested
         if start_borderless:
             self._renderer._borderless_on_start = True
+
+        self._screensaver = screensaver
+        if screensaver:
+            self._renderer._screensaver = True
 
         self._menu = None
         self._asked_for_presets = False
@@ -138,6 +148,11 @@ class App:
         genuinely resets the app.
         """
         if self._cfg.get("seizure_warning_ack"):
+            return
+        if self._screensaver:
+            # A screensaver that opens a modal dialog is a screensaver that
+            # never starts. Left unacknowledged on purpose, so the app proper
+            # still asks the first time it is opened.
             return
         QMessageBox.warning(
             None, "Photosensitivity warning",
@@ -221,7 +236,44 @@ class App:
             self._browser.activateWindow()
 
 
+def _screensaver_arg(argv) -> str:
+    """Which Windows screensaver mode was asked for: "s", "p", "c" or "".
+
+    Windows passes /s, /p <hwnd> or /c[:hwnd], and some callers use a dash
+    instead of a slash. argparse treats a slash argument as a positional and
+    drops it, so this runs first.
+    """
+    for a in argv:
+        if len(a) >= 2 and a[0] in "/-" and a[1] != "-" and a[1].lower() in "spc":
+            return a[1].lower()
+    return ""
+
+
+def _run_settings_only() -> int:
+    """The /c branch: show Settings, save, and exit without a visualiser."""
+    app = QApplication.instance() or QApplication(sys.argv)
+    app.setApplicationName(APP_NAME)
+    cfg = load_config()
+    set_app_theme(cfg.get("theme", "dark"))
+    dlg = SettingsDialog(cfg)
+    if dlg.exec() == QDialog.DialogCode.Accepted:
+        from config import save_config
+        cfg.update(dlg.changed_config())
+        save_config(cfg)
+    return 0
+
+
 def main():
+    mode = _screensaver_arg(sys.argv[1:])
+    if mode == "c":
+        sys.exit(_run_settings_only())
+    if mode == "p":
+        # The preview pane. Drawing into the handle Windows passes means
+        # reparenting an SDL/OpenGL window into a 150x100 box on somebody
+        # else's message loop, for a thumbnail nobody chooses a screensaver
+        # from. A blank preview is what several shipped screensavers do.
+        sys.exit(0)
+
     parser = argparse.ArgumentParser(description=APP_NAME)
     parser.add_argument("--geometry", default=None,
                         help="Window geometry: WxH+X+Y  e.g. 800x600+0+0")
@@ -231,6 +283,8 @@ def main():
                         help="Disable audio capture")
     parser.add_argument("--preset-dir", default=None,
                         help="Override preset directory")
+    parser.add_argument("--screensaver", action="store_true",
+                        help="Fullscreen; any key or real mouse movement quits")
     args, _unknown = parser.parse_known_args()
 
     cfg_overrides = {}
@@ -251,7 +305,8 @@ def main():
     if args.preset_dir:
         cfg_overrides["preset_dir"] = args.preset_dir
 
-    app = App(cfg_overrides=cfg_overrides, start_borderless=args.borderless)
+    app = App(cfg_overrides=cfg_overrides, start_borderless=args.borderless,
+              screensaver=args.screensaver or mode == "s")
     exit_code = app.run()
     sys.exit(exit_code)
 

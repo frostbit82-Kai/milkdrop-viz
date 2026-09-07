@@ -47,6 +47,12 @@ Write-Host "==> [2/3] Assembling the package"
 $Stage = Join-Path $Out $Name
 New-Item -ItemType Directory -Force -Path $Stage | Out-Null
 Copy-Item (Join-Path $Build 'dist\BomsAIVisualizer') (Join-Path $Stage 'app') -Recurse
+# A Windows screen saver is an ordinary executable with a .scr extension, and
+# this one is a PyInstaller onedir build, so the copy has to sit beside
+# _internal rather than in System32. Windows launches it as "...scr /s"; main.py
+# reads that and the other screen-saver arguments before argparse runs.
+Copy-Item (Join-Path $Stage 'app\BomsAIVisualizer.exe') `
+          (Join-Path $Stage 'app\BomsAIVisualizer.scr')
 Copy-Item (Join-Path $Here 'windows\README.txt') $Stage
 New-Item -ItemType Directory -Force -Path (Join-Path $Stage 'licenses') | Out-Null
 Copy-Item (Join-Path $Here 'licenses\*') (Join-Path $Stage 'licenses')
