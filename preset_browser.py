@@ -15,8 +15,8 @@ import logging
 # would load a second Qt into the process.
 from viz_common import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QListWidget,
-    QListWidgetItem, QPushButton, QAbstractItemView, QMessageBox, Qt,
-    browser_qss,
+    QListWidgetItem, QPushButton, QAbstractItemView, QMessageBox, QSizePolicy,
+    Qt, browser_qss,
 )
 
 logger = logging.getLogger(__name__)
@@ -43,7 +43,22 @@ class PresetPlaylistWindow(QWidget):
 
         self._title = QLabel("—")
         self._title.setObjectName("title")
-        self._title.setWordWrap(True)
+        # Deliberately NOT word-wrapped. A wrapping title grows to two lines on
+        # a long preset name and shoves the toolbar -- and every list row --
+        # down by a line, so buttons move out from under the pointer as presets
+        # rotate. The name is elided to fit instead; the full text is the
+        # tooltip, and the list row below always carries it in full.
+        self._title.setWordWrap(False)
+        # Ignored width, so the label takes whatever the layout gives it and
+        # never asks for more. Without this a non-wrapping QLabel reports the
+        # full text width as its size hint and *widens the window* to fit a long
+        # preset name -- which changes the elision budget, which changes the
+        # text, which changes the hint again. The window would settle at a
+        # different width per preset and the elision was wrong every other one.
+        self._title.setSizePolicy(QSizePolicy.Policy.Ignored,
+                                  QSizePolicy.Policy.Fixed)
+        self._title.setMinimumWidth(0)
+        self._title_parts = None       # (name, rating), rendered on resize too
         lay.addWidget(self._title)
 
         bar = QHBoxLayout()
@@ -133,6 +148,7 @@ class PresetPlaylistWindow(QWidget):
             return
 
         entries = self._host.get_preset_playlist()
+        self._entries = entries        # _highlight needs the rating, not row text
         self._list.clear()
         self._list.addItems([f"{name}    {r}/10" for name, r in entries])
         try:
@@ -146,19 +162,51 @@ class PresetPlaylistWindow(QWidget):
 
     # ── Internal ───────────────────────────────────────────────────────
 
+    def _set_title(self, name: str, rating: int):
+        self._title_parts = (name, int(rating))
+        self._render_title()
+
+    def _render_title(self):
+        """Fit 'name  ★★★★★☆☆☆☆☆  7/10' onto one line, eliding only the name.
+
+        The rating is the half that must survive, so the suffix is measured
+        first and the name gets whatever is left.
+        """
+        if not self._title_parts:
+            return
+        name, rating = self._title_parts
+        suffix = f"    {_stars(rating)}  {rating}/10"
+        fm = self._title.fontMetrics()
+        # contentsRect() accounts for the stylesheet's padding; width() does not.
+        box = self._title.contentsRect().width() or (self._title.width() - 20)
+        # The 8px is slack, not superstition: reserving exactly the measured
+        # suffix width left one pixel spare and the final glyph still clipped,
+        # and Windows renders this line in a different face whose star glyphs
+        # measure differently again.
+        avail = max(40, box - fm.horizontalAdvance(suffix) - 8)
+        elided = fm.elidedText(name, Qt.TextElideMode.ElideRight, avail)
+        self._title.setText(elided + suffix)
+        self._title.setToolTip(name)
+
+    def resizeEvent(self, e):
+        super().resizeEvent(e)
+        self._render_title()      # the elision budget just changed
+
     def _highlight(self, pos: int):
         if 0 <= pos < self._list.count():
             self._list.setCurrentRow(pos)
             self._list.scrollToItem(self._list.item(pos),
                                     QAbstractItemView.ScrollHint.PositionAtCenter)
-            self._title.setText(self._list.item(pos).text())
+            entries = getattr(self, "_entries", None)
+            if entries and 0 <= pos < len(entries):
+                self._set_title(*entries[pos])
 
     def _on_activate(self, item: QListWidgetItem):
         self._host.jump_to_order(self._list.row(item))
 
     def _on_preset_changed(self, name: str, rating: int):
         self._current_row_text = f"{name}    {rating}/10"
-        self._title.setText(f"{name}    {_stars(rating)}  {rating}/10")
+        self._set_title(name, rating)
         try:
             if self._host.is_rated():
                 self._list.clear()
