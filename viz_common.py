@@ -1015,6 +1015,7 @@ DEFAULT_KEYMAPS = {
     "toggle_mode":      "m",
     "toggle_borderless": "b",
     "fullscreen_mouse": "DBLCLICK",
+    "record":           "F9",
 }
 
 
@@ -2461,6 +2462,7 @@ ACTION_LABELS = {
     "toggle_mode":      "Shuffle the playlist order on / off",
     "toggle_borderless": "Toggle borderless window",
     "fullscreen_mouse": "Toggle fullscreen (mouse)",
+    "record":           "Start / stop recording a clip",
 }
 
 ACTION_NOTES = {
@@ -2468,6 +2470,7 @@ ACTION_NOTES = {
     "toggle_borderless": "Drops the title bar; the window stays its size",
     "lock":             "SCROLLLOCK uses the Scroll Lock key",
     "rate_down":        "Rating 0 excludes preset from random rotation",
+    "record":           "Needs ffmpeg; clips land in the clips folder",
 }
 
 
@@ -3144,6 +3147,9 @@ class ContextMenu(QMenu):
         self._build_display_menu()
         self.addSeparator()
 
+        self._build_record_menu()
+        self.addSeparator()
+
         self._build_audio_menu()
         self.addSeparator()
 
@@ -3154,6 +3160,38 @@ class ContextMenu(QMenu):
         self.addSeparator()
 
         self.addAction("✕   Quit",             QApplication.quit)
+
+    def _build_record_menu(self):
+        """Record what is on screen to a clip.
+
+        A GIF is here beside the MP4 because a GIF is what gets posted, and a
+        clip someone posts is the cheapest advertising this app has.
+        """
+        if self._renderer.is_recording():
+            self.addAction("⏹   Stop recording",
+                           lambda: self._renderer.request_record())
+            return
+        sub = self.addMenu("⏺   Record clip")
+        sub.setStyleSheet(self.styleSheet())
+        if find_ffmpeg():
+            sub.addAction("🎬   Video (MP4)",
+                          lambda: self._renderer.request_record("mp4"))
+            sub.addAction("🖼   Animation (GIF)",
+                          lambda: self._renderer.request_record("gif"))
+        else:
+            act = QAction("ffmpeg not found — install it to record", sub)
+            act.setEnabled(False)
+            sub.addAction(act)
+        sub.addSeparator()
+        sub.addAction("📂   Open clips folder", self._open_clips)
+
+    def _open_clips(self):
+        d = clips_dir()
+        try:
+            os.makedirs(d, exist_ok=True)
+        except Exception:
+            pass
+        QDesktopServices.openUrl(QUrl.fromLocalFile(d))
 
     def _build_display_menu(self):
         """Which monitor fullscreen means.
@@ -3370,6 +3408,172 @@ class ContextMenu(QMenu):
             pass
 
 
+# ─── frame capture ────────────────────────────────────────────────────────────
+
+def find_ffmpeg() -> str:
+    """Path to an ffmpeg binary, or "" when there is none.
+
+    Beside the app first, so a bundled copy wins over whatever the host has --
+    an installed build must behave the same on every machine. PATH is the
+    fallback, which is what a source checkout uses.
+    """
+    import shutil
+    exe = "ffmpeg.exe" if sys.platform == "win32" else "ffmpeg"
+    here = [_asset_path(exe), _asset_path("bin", exe)]
+    if getattr(sys, "frozen", False):
+        here.insert(0, os.path.join(os.path.dirname(sys.executable), exe))
+    for cand in here:
+        if os.path.isfile(cand) and os.access(cand, os.X_OK):
+            return cand
+    return shutil.which(exe) or ""
+
+
+def clips_dir() -> str:
+    """Where recordings land. Created on demand, not at import."""
+    return os.path.join(user_data_dir(), "clips")
+
+
+class _Recorder(threading.Thread):
+    """Raw RGB frames in, an MP4 or GIF out, ffmpeg doing the work.
+
+    A thread with a bounded queue rather than writing to ffmpeg's stdin from
+    the render loop: at 720p a frame is 2.7MB, and a pipe that blocks for one
+    encode blocks the visualiser. When the queue is full the frame is dropped
+    and counted -- a clip that skips is better than a visualiser that stutters
+    while it records.
+    """
+
+    #: Deliberately small. A deep queue would just buy latency and RAM before
+    #: dropping anyway -- at 720p a slot costs 2.7MB -- and the drop is what
+    #: protects the frame rate.
+    MAX_PENDING = 8
+    #: How long after starting ffmpeg a submit may wait for room, and the cap
+    #: once it is running. See _grace().
+    STARTUP_S, STARTUP_WAIT, RUNNING_WAIT = 2.0, 0.5, 0.005
+
+    def __init__(self, path: str, size: tuple, fps: int, kind: str = "mp4"):
+        super().__init__(daemon=True)
+        import queue
+        self.path    = path
+        self.kind    = kind
+        self._size   = size
+        self._fps    = max(5, min(60, int(fps)))
+        self._q      = queue.Queue(maxsize=self.MAX_PENDING)
+        self._proc   = None
+        self._t0     = 0.0
+        self.frames  = 0
+        self.dropped = 0
+        self.error   = ""
+
+    # ── ffmpeg ────────────────────────────────────────────────────────────
+
+    def _ffmpeg_args(self, ffmpeg: str) -> list:
+        # Not _args: threading.Thread.__init__ sets self._args, and an instance
+        # attribute shadows the method of the same name.
+        w, h = self._size
+        base = [ffmpeg, "-y", "-loglevel", "error",
+                "-f", "rawvideo", "-pixel_format", "rgb24",
+                "-video_size", f"{w}x{h}", "-framerate", str(self._fps),
+                "-i", "-"]
+        if self.kind == "gif":
+            # One pass, not the usual two: the palette is generated from the
+            # same stream it is applied to via split, so there is no temporary
+            # file and nothing to clean up. Needs -filter_complex -- split has
+            # two outputs and -vf only takes a straight chain.
+            return base + [
+                "-filter_complex",
+                "[0:v]vflip,fps=15,scale=480:-2:flags=lanczos,split[a][b];"
+                "[a]palettegen=stats_mode=diff[p];[b][p]paletteuse=dither=bayer",
+                "-loop", "0", self.path]
+        # trunc(/2)*2 because H.264 will not take an odd width or height, and
+        # the window is whatever the user dragged it to.
+        return base + [
+            "-vf", "vflip,scale=trunc(iw/2)*2:trunc(ih/2)*2",
+            "-c:v", "libx264", "-preset", "veryfast", "-crf", "20",
+            "-pix_fmt", "yuv420p", "-movflags", "+faststart", self.path]
+
+    def start_encoder(self) -> str:
+        """Spawn ffmpeg. Returns "" on success, else the reason it failed."""
+        ffmpeg = find_ffmpeg()
+        if not ffmpeg:
+            return ("ffmpeg was not found. Install it, or put ffmpeg beside "
+                    "the application, to record clips.")
+        try:
+            os.makedirs(os.path.dirname(self.path), exist_ok=True)
+            self._proc = _subprocess.Popen(
+                self._ffmpeg_args(ffmpeg),
+                stdin=_subprocess.PIPE,
+                stdout=_subprocess.DEVNULL,
+                stderr=_subprocess.PIPE,
+                creationflags=(_subprocess.CREATE_NO_WINDOW
+                               if sys.platform == "win32" else 0),
+            )
+        except Exception as e:
+            return f"could not start ffmpeg: {e}"
+        self._t0 = _time.monotonic()
+        self.start()
+        return ""
+
+    # ── Producer side (render thread) ─────────────────────────────────────
+
+    def _grace(self) -> float:
+        """How long submit() may wait for a queue slot.
+
+        ffmpeg takes a couple of hundred milliseconds to start reading, and at
+        720p a single frame nearly fills the OS pipe buffer -- so with a
+        strictly non-blocking submit the opening second of every clip went
+        into the drop counter (measured: 13 of 24 frames). A wide window at
+        the start buys those back and costs one brief hitch at the moment you
+        press record; the encoder keeps up easily after that, so the running
+        cap is short enough to lose a frame rather than stutter the visuals.
+        """
+        return (self.STARTUP_WAIT
+                if _time.monotonic() - self._t0 < self.STARTUP_S
+                else self.RUNNING_WAIT)
+
+    def submit(self, frame: bytes):
+        try:
+            self._q.put(frame, timeout=self._grace())
+        except Exception:
+            self.dropped += 1
+
+    def finish(self, timeout: float = 20.0) -> str:
+        """Stop, let ffmpeg drain, return "" or the reason it failed."""
+        self._q.put(None)
+        self.join(timeout)
+        if self._proc is not None:
+            try:
+                self._proc.wait(timeout=timeout)
+            except Exception:
+                self._proc.kill()
+        return self.error
+
+    # ── Consumer side ─────────────────────────────────────────────────────
+
+    def run(self):
+        stdin = self._proc.stdin
+        while True:
+            frame = self._q.get()
+            if frame is None:
+                break
+            try:
+                stdin.write(frame)
+                self.frames += 1
+            except Exception as e:
+                # A broken pipe means ffmpeg died -- keep draining the queue so
+                # the render thread's put_nowait never starts blocking on it.
+                if not self.error:
+                    self.error = f"ffmpeg stopped: {e}"
+        try:
+            stdin.close()
+        except Exception:
+            pass
+        if not self.error and self._proc.wait() not in (0, None):
+            err = (self._proc.stderr.read() or b"").decode("utf-8", "replace")
+            self.error = err.strip().splitlines()[-1] if err.strip() else \
+                f"ffmpeg exited {self._proc.returncode}"
+
+
 # ─── renderer ─────────────────────────────────────────────────────────────────
 
 import ctypes as _ctypes
@@ -3404,7 +3608,9 @@ from sdl2 import (
     SDL_GL_CONTEXT_MAJOR_VERSION,
     SDL_GL_CONTEXT_MINOR_VERSION,
 )
-from OpenGL.GL import glViewport, glClear, GL_COLOR_BUFFER_BIT
+from OpenGL.GL import (glViewport, glClear, GL_COLOR_BUFFER_BIT,
+                       glReadPixels, glPixelStorei, GL_PACK_ALIGNMENT,
+                       GL_RGB, GL_UNSIGNED_BYTE)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -3507,6 +3713,7 @@ class Renderer:
         self._req_toggle_mode            = False  # shuffle/sequential toggle
         self._req_reload                 = False  # rebuild playlist from disk
         self._req_fullscreen             = False  # toggle fullscreen
+        self._req_record                 = None   # 'mp4' | 'gif' | 'stop'
         self._rated                      = False  # favorite (rating-weighted) shuffle
         self._rated_history              = deque(maxlen=200)  # native indices for rated prev
 
@@ -3534,6 +3741,10 @@ class Renderer:
         #: Qt thread builds the display menu out of this cache.
         self._displays = []
         self._fullscreen = False
+        self._rec        = None    # a _Recorder while a clip is being taken
+        self._rec_size   = None    # the size ffmpeg was told; frames must match
+        self._rec_last   = 0.0     # monotonic time of the last frame submitted
+        self._rec_fps    = 30
 
         self._audio = AudioCapture(cfg.get("audio_device", ""))
         self._audio.set_gain(cfg.get("audio_gain", 1.0))
@@ -4054,6 +4265,13 @@ class Renderer:
                 if self._req_fullscreen:
                     self._req_fullscreen = False
                     self._toggle_fullscreen()
+                if self._req_record is not None:
+                    kind = self._req_record
+                    self._req_record = None
+                    if kind == "stop":
+                        self._stop_recording()
+                    else:
+                        self._start_recording(kind)
                 if self._req_borderless:
                     self._req_borderless = False
                     self._toggle_borderless()
@@ -4134,6 +4352,11 @@ class Renderer:
             # ── Render ────────────────────────────────────────────────────
             t0 = _time.monotonic()
             self._pm.render_frame()
+            # Before the swap, always: glReadPixels reads the back buffer, and
+            # after SDL_GL_SwapWindow that is last frame's content, not this
+            # one's.
+            if self._rec is not None:
+                self._capture_for_recording()
             sdl2.SDL_GL_SwapWindow(self._window)
 
             elapsed_frame = _time.monotonic() - t0
@@ -4146,6 +4369,10 @@ class Renderer:
                 _time.sleep(sleep_t)
 
         # ── Cleanup ───────────────────────────────────────────────────────
+        # Before the GL context goes: an unfinished recording leaves a
+        # zero-byte file that no player will open.
+        if self._rec is not None:
+            self._stop_recording()
         self._audio.stop()
         if self._pm:
             self._pm.destroy()
@@ -4166,6 +4393,8 @@ class Renderer:
             self._do_next(hard=True)
         elif km("prev", sym, scancode):
             self._do_prev(hard=True)
+        elif km("record", sym, scancode):
+            self.request_record("mp4")
         elif km("hard_cut_next", sym, scancode):
             self._do_next(hard=True)
         elif km("random", sym, scancode):
@@ -4565,6 +4794,93 @@ class Renderer:
         """Toggle fullscreen (runs on the render thread)."""
         with self._lock:
             self._req_fullscreen = True
+
+    # ── Recording ─────────────────────────────────────────────────────────
+
+    def request_record(self, kind: str = "mp4"):
+        """Start recording, or stop the one running (render thread)."""
+        with self._lock:
+            self._req_record = "stop" if self._rec else (
+                kind if kind in ("mp4", "gif") else "mp4")
+
+    def is_recording(self) -> bool:
+        return self._rec is not None
+
+    def _grab_frame(self):
+        """(width, height, RGB bytes) of the frame just rendered.
+
+        Render thread only, and it has to run BEFORE SDL_GL_SwapWindow -- after
+        the swap the back buffer holds whatever was there two frames ago. The
+        drawable size, not the window size: they differ on a HiDPI display and
+        glReadPixels works in pixels. Rows come out bottom-up, which is why
+        every ffmpeg filter chain here starts with vflip.
+        """
+        w, h = ctypes.c_int(), ctypes.c_int()
+        sdl2.SDL_GL_GetDrawableSize(self._window,
+                                    ctypes.byref(w), ctypes.byref(h))
+        if w.value <= 0 or h.value <= 0:
+            return None
+        # Default pack alignment is 4, which pads every row whose length is not
+        # a multiple of it -- a window 1 pixel off would shear the whole image.
+        glPixelStorei(GL_PACK_ALIGNMENT, 1)
+        data = glReadPixels(0, 0, w.value, h.value, GL_RGB, GL_UNSIGNED_BYTE)
+        buf = data.tobytes() if hasattr(data, "tobytes") else bytes(data)
+        return w.value, h.value, buf
+
+    def _start_recording(self, kind: str):
+        grab = self._grab_frame()
+        if grab is None:
+            return
+        w, h, _ = grab
+        stamp = _time.strftime("%Y-%m-%d_%H-%M-%S")
+        path  = os.path.join(clips_dir(), f"{APP_SLUG}_{stamp}.{kind}")
+        rec   = _Recorder(path, (w, h), self._rec_fps, kind)
+        why   = rec.start_encoder()
+        if why:
+            print(f"[record] {why}", flush=True)
+            self._bridge.show_toast.emit(why)
+            return
+        self._rec      = rec
+        self._rec_size = (w, h)
+        self._rec_last = 0.0
+        print(f"[record] recording to {path}", flush=True)
+        self._bridge.show_toast.emit(
+            f"⏺  Recording {kind.upper()} — press the record key again to stop")
+
+    def _stop_recording(self):
+        rec, self._rec, self._rec_size = self._rec, None, None
+        if rec is None:
+            return
+        err = rec.finish()
+        if err:
+            print(f"[record] {err}", flush=True)
+            self._bridge.show_toast.emit(f"Recording failed: {err}")
+            return
+        note = f"  ({rec.dropped} frames dropped)" if rec.dropped else ""
+        print(f"[record] wrote {rec.path}  {rec.frames} frames{note}",
+              flush=True)
+        self._bridge.show_toast.emit(
+            f"⏹  Saved {os.path.basename(rec.path)}{note}")
+
+    def _capture_for_recording(self):
+        """Feed one frame to the encoder, at the recording frame rate."""
+        now = _time.monotonic()
+        if now - self._rec_last < 1.0 / self._rec_fps:
+            return
+        self._rec_last = now
+        grab = self._grab_frame()
+        if grab is None:
+            return
+        w, h, buf = grab
+        if (w, h) != self._rec_size:
+            # ffmpeg was told one frame size and cannot be told another. Every
+            # later frame would be dropped, so the clip would freeze here
+            # anyway -- ending it says so instead of looking like a hang.
+            self._stop_recording()
+            self._bridge.show_toast.emit(
+                "⏹  Recording stopped — the window was resized")
+            return
+        self._rec.submit(buf)
 
     def _move_to_chosen_display(self):
         """Put the window on the configured monitor before it goes fullscreen.
