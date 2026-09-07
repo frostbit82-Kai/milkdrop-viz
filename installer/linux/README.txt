@@ -49,6 +49,7 @@ CONTROLS
     space             hard cut to the next preset
     r                 random preset
     f  or  F11        fullscreen        (double-click also works)
+    F9                start / stop recording a clip
     escape            quit
     + / -             rate the current preset up or down
     h                 hard cuts on/off
@@ -57,6 +58,53 @@ CONTROLS
 
 A preset rated 0 stars is dropped from the rotation. Ratings and settings are
 kept in ~/.config/BomsAIVisualizer and survive uninstalling.
+
+
+FINDING PRESETS
+---------------
+
+The preset browser (right-click -> Preset browser) has a search box. Type any
+part of a name and the list narrows to what matches; the window title shows how
+many. Sorting, rating and the shuffle buttons all keep working on the results.
+
+Presets you have watched for more than a few seconds get a thumbnail, captured
+from the frame that was on screen, and it appears beside the name in the list.
+There is no batch pass over the library on purpose: ten thousand presets at a
+second each is two hours, and the pictures worth having are of the presets you
+actually sat through. A fresh install has none and fills in as you use it.
+
+
+RECORDING
+---------
+
+F9 starts and stops a recording; the right-click menu offers MP4 or GIF and a
+shortcut to the folder they land in. Clips are silent — only the visuals are
+captured — and are written to:
+
+    ~/.local/share/BomsAIVisualizer/clips
+
+Recording needs ffmpeg. Install it from your package manager (`ffmpeg` on
+Debian and Ubuntu, `ffmpeg` on Fedora and Arch), or drop the binary beside the
+application.
+
+
+FULLSCREEN AND MULTIPLE MONITORS
+--------------------------------
+
+With more than one monitor connected, the right-click menu gains a Fullscreen
+display picker. "Follow the window" is the default and behaves as before.
+
+
+SCREEN SAVER
+------------
+
+`bomsai-viz --screensaver` runs fullscreen and quits on any key or real mouse
+movement, which is the contract xscreensaver and similar expect. There is no
+automatic integration — desktops differ too much — so wire it in yourself if
+you want it.
+
+Desktop wallpaper mode is Windows only: X11 desktops each place the wallpaper
+differently and Wayland gives an application no way to draw behind the icons.
 
 
 THEME

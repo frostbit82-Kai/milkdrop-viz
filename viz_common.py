@@ -3447,6 +3447,40 @@ def find_ffmpeg() -> str:
     return shutil.which(exe) or ""
 
 
+_VIDEO_CODEC_CACHE = {}
+
+
+def video_codec_args(ffmpeg: str) -> list:
+    """The best H.264 settings this particular ffmpeg can actually do.
+
+    libx264 is GPL. An LGPL ffmpeg -- the kind that can be shipped inside a
+    paid application without a licence argument -- does not have it, so asking
+    for it would fail on exactly the build worth bundling. Media Foundation
+    (h264_mf) is present in LGPL Windows builds and is hardware accelerated;
+    mpeg4 is in every build and is the last resort. The quality flags differ
+    per encoder, which is why this returns the whole group and not a name.
+    """
+    if ffmpeg in _VIDEO_CODEC_CACHE:
+        return list(_VIDEO_CODEC_CACHE[ffmpeg])
+    have = ""
+    try:
+        have = _subprocess.run(
+            [ffmpeg, "-hide_banner", "-loglevel", "error", "-encoders"],
+            capture_output=True, text=True, timeout=15,
+            creationflags=(_subprocess.CREATE_NO_WINDOW
+                           if sys.platform == "win32" else 0)).stdout
+    except Exception as e:
+        print(f"[record] could not list encoders: {e}", flush=True)
+    if " libx264" in have:
+        args = ["-c:v", "libx264", "-preset", "veryfast", "-crf", "20"]
+    elif " h264_mf" in have:
+        args = ["-c:v", "h264_mf", "-b:v", "8M"]
+    else:
+        args = ["-c:v", "mpeg4", "-q:v", "3"]
+    _VIDEO_CODEC_CACHE[ffmpeg] = args
+    return list(args)
+
+
 def clips_dir() -> str:
     """Where recordings land. Created on demand, not at import."""
     return os.path.join(user_data_dir(), "clips")
@@ -3508,7 +3542,7 @@ class _Recorder(threading.Thread):
         # the window is whatever the user dragged it to.
         return base + [
             "-vf", "vflip,scale=trunc(iw/2)*2:trunc(ih/2)*2",
-            "-c:v", "libx264", "-preset", "veryfast", "-crf", "20",
+        ] + video_codec_args(ffmpeg) + [
             "-pix_fmt", "yuv420p", "-movflags", "+faststart", self.path]
 
     def start_encoder(self) -> str:

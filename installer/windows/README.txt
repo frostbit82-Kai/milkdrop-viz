@@ -38,6 +38,7 @@ CONTROLS
     r                 random preset
     f  or  F11        fullscreen        (double-click also works)
     b                 borderless window
+    F9                start / stop recording a clip
     escape            quit
     + / -             rate the current preset up or down
     h                 hard cuts on/off
@@ -46,6 +47,64 @@ CONTROLS
 
 A preset rated 0 stars is dropped from the rotation. Settings and ratings are
 kept in %APPDATA%\BomsAIVisualizer and survive uninstalling and upgrading.
+
+
+FINDING PRESETS
+---------------
+
+The preset browser (right-click -> Preset browser) has a search box. Type any
+part of a name and the list narrows to what matches; the window title shows how
+many. Sorting, rating and the shuffle buttons all keep working on the results.
+
+Presets you have watched for more than a few seconds get a thumbnail, captured
+from the frame that was on screen, and it appears beside the name in the list.
+There is no batch pass over the library on purpose: ten thousand presets at a
+second each is two hours, and the pictures worth having are of the presets you
+actually sat through. A fresh install has none and fills in as you use it.
+
+
+RECORDING
+---------
+
+F9 starts and stops a recording; the right-click menu offers MP4 or GIF and a
+shortcut to the folder they land in. Clips are silent -- only the visuals are
+captured -- and are written to:
+
+    %LOCALAPPDATA%\BomsAIVisualizer\clips
+
+Recording needs ffmpeg. If it is not on your PATH, put ffmpeg.exe in the app
+folder beside BomsAIVisualizer.exe and the app will find it there first.
+
+
+FULLSCREEN AND MULTIPLE MONITORS
+--------------------------------
+
+With more than one monitor connected, the right-click menu gains a Fullscreen
+display picker. "Follow the window" is the default and behaves as before.
+
+
+SCREEN SAVER
+------------
+
+The installer offers to set BomsAI Visualizer as your screen saver. To change
+it later, use Settings -> Personalisation -> Lock screen -> Screen saver, or
+tick the box again by re-running the installer.
+
+Any key or a real mouse movement ends it. Small movements are ignored, so a
+mouse resting on a soft surface does not wake it.
+
+
+DESKTOP WALLPAPER
+-----------------
+
+Right-click -> Set as desktop wallpaper draws the visuals on the desktop,
+behind your icons. Windows hands all input on the desktop to Explorer, so while
+this is on the visualiser cannot be clicked -- a tray icon appears instead, and
+clicking it opens the same menu. Use it to change preset, rate, or leave
+wallpaper mode.
+
+With a monitor chosen under Fullscreen display it fills that one; otherwise it
+spans every monitor.
 
 
 THEME

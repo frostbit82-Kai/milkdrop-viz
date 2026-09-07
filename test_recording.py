@@ -147,6 +147,37 @@ def the_startup_window_waits_rather_than_dropping():
     rec._t0 = time.monotonic() - rec.STARTUP_S - 1
     assert rec._grace() == rec.RUNNING_WAIT, rec._grace()
 
+def the_encoder_is_chosen_from_what_ffmpeg_actually_has():
+    """libx264 is GPL, so an LGPL build — the one worth bundling in a paid
+    application — does not have it and asking for it by name would fail."""
+    class Run:
+        def __init__(self, out): self.stdout = out
+    real_run, real_cache = viz_common._subprocess.run, viz_common._VIDEO_CODEC_CACHE
+    try:
+        for listing, want in ((" V....D libx264  H.264\n V..... h264_mf x\n", "libx264"),
+                              (" V..... h264_mf  H.264 via MF\n", "h264_mf"),
+                              (" V..... mpeg4  MPEG-4 part 2\n", "mpeg4"),
+                              ("", "mpeg4")):
+            viz_common._VIDEO_CODEC_CACHE = {}
+            viz_common._subprocess.run = lambda *a, **k: Run(listing)
+            got = viz_common.video_codec_args("ffmpeg")
+            assert got[1] == want, f"{listing!r} chose {got[1]}, wanted {want}"
+    finally:
+        viz_common._subprocess.run = real_run
+        viz_common._VIDEO_CODEC_CACHE = real_cache
+
+def the_fallback_encoder_also_produces_a_playable_file():
+    """Proves the mpeg4 branch is not just syntactically plausible."""
+    real = viz_common._VIDEO_CODEC_CACHE
+    viz_common._VIDEO_CODEC_CACHE = {find_ffmpeg(): ["-c:v", "mpeg4", "-q:v", "3"]}
+    try:
+        path, _rec = record("mp4")
+    finally:
+        viz_common._VIDEO_CODEC_CACHE = real
+    w, h, _raw, count = decode(path)
+    assert (w, h) == (W, H), f"{w}x{h}"
+    assert count >= N - 2, f"only {count} of {N} frames survived"
+
 def a_missing_ffmpeg_is_a_message_not_a_crash():
     real = viz_common.find_ffmpeg
     viz_common.find_ffmpeg = lambda: ""
@@ -182,6 +213,8 @@ for fn in (an_mp4_comes_out_playable,
            a_gif_comes_out_a_gif,
            a_full_queue_drops_instead_of_blocking,
            the_startup_window_waits_rather_than_dropping,
+           the_encoder_is_chosen_from_what_ffmpeg_actually_has,
+           the_fallback_encoder_also_produces_a_playable_file,
            a_missing_ffmpeg_is_a_message_not_a_crash,
            a_dead_encoder_is_reported):
     results.append(check(fn.__name__, fn))

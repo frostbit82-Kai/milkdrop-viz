@@ -5,8 +5,8 @@ Store dashboard, the site's product page, and anywhere else. Keep it in sync
 rather than rewriting per store.
 
 **The positioning, in one line:** projectM's own player is free, well reviewed
-and plays the same presets. It does not help you find the good ones. That is
-what this sells.
+and plays the same presets. It does not help you find the good ones, keep a
+clip of them, or put them on your desktop. That is what this sells.
 
 ---
 
@@ -25,11 +25,12 @@ does, projectM's own Steam listing included.
 ## Short description  (Microsoft Store — 500 char max)
 
 > Ten thousand MilkDrop presets, and maybe forty you actually like. Rate them
-> as they play, sort by rating, delete the duds for good, then shuffle only the
-> ones you kept. A music visualizer that reacts to whatever your PC is playing,
-> with a library that gets better instead of bigger.
+> as they play, search them by name, sort by rating, delete the duds for good,
+> then shuffle only the ones you kept. Record a clip of the good ones or run
+> them as your wallpaper. A visualizer that reacts to whatever your PC is
+> playing, with a library that gets better instead of bigger.
 
-*(315 characters.)*
+*(371 characters.)*
 
 ## Description  (10,000 char max)
 
@@ -52,6 +53,30 @@ does, projectM's own Steam listing included.
 >
 > **The browser shows where you are.** A live list of the whole playlist with
 > the current preset highlighted and its stars beside it. Jump to any of them.
+>
+> **Search ten thousand presets by name.** Type part of a name and the list
+> narrows as you go. Everything else — sorting, rating, shuffle — keeps working
+> on what is left.
+>
+> **The library grows its own thumbnails.** Watch a preset for a few seconds
+> and its picture is kept, taken from the frame that was actually on screen,
+> and shown beside its name from then on. There is no two-hour batch render
+> over your whole folder; the pictures that appear are of the presets you sat
+> through, which are the ones you were going to look for again.
+>
+> **Keep a clip.** One key starts recording what is on screen; another stops
+> it. MP4 for a video, GIF for something to post. The presets that made you
+> stop and stare are now something you can send to somebody.
+>
+> **Put it on your desktop.** Wallpaper mode draws the visuals on the Windows
+> desktop, behind your icons, reacting to whatever you are playing. A tray icon
+> keeps the menu and your ratings a click away.
+>
+> **Or leave it as your screen saver.** The installer will set it up, and any
+> key or a real mouse movement brings you back.
+>
+> **Every monitor is a choice.** With more than one screen connected, pick
+> which one fullscreen and wallpaper mode use.
 >
 > **It reacts to everything.** Audio is captured from your system output, so it
 > visualises Spotify, YouTube, a game, a DAW, a Zoom call — anything that makes
@@ -91,26 +116,33 @@ does, projectM's own Steam listing included.
 ## Feature bullets  (Microsoft Store — up to 20, 200 char each)
 
 1. Rate any preset 0–10 with a single keypress while it plays
-2. Sort a ten-thousand-preset library by your own rating
-3. Rated shuffle — play only the presets you actually liked
-4. Delete every 0-rated preset in one action and never see them again
-5. Live preset browser showing where you are in the playlist
-6. Visualises system audio: any player, any game, any browser tab
-7. Follows your default output device when you switch it mid-song
-8. Full MilkDrop 2 texture support — the good presets look right
-9. Loads nested preset packs recursively, exactly as downloaded
-10. Downloads and installs a curated preset pack from inside the app
-11. Lock a preset so the rotation leaves it alone
-12. Every key rebindable
-13. Dark and light themes, or follow the system
-14. Adjustable beat sensitivity, mesh quality and frame rate
-15. No account, no sign-in, no online check — works fully offline
-16. No telemetry and no crash reporting, ever
+2. Search ten thousand presets by name as you type
+3. Sort a ten-thousand-preset library by your own rating
+4. Rated shuffle — play only the presets you actually liked
+5. Delete every 0-rated preset in one action and never see them again
+6. Thumbnails build themselves from the presets you watch — no batch render
+7. Record what is on screen to MP4, or to a GIF you can post
+8. Desktop wallpaper mode, behind your icons, with a tray icon for the menu
+9. Doubles as a Windows screen saver, set up by the installer
+10. Pick which monitor fullscreen and wallpaper mode use
+11. Live preset browser showing where you are in the playlist
+12. Visualises system audio: any player, any game, any browser tab
+13. Follows your default output device when you switch it mid-song
+14. Full MilkDrop 2 texture support — the good presets look right
+15. Loads nested preset packs recursively, exactly as downloaded
+16. Downloads and installs a curated preset pack from inside the app
+17. Lock a preset so the rotation leaves it alone
+18. Every key rebindable
+19. Dark and light themes, or follow the system
+20. No account, no sign-in, no telemetry — works fully offline, forever
 
 ## Search terms  (7 max)
 
-`music visualizer` · `milkdrop` · `audio visualizer` · `winamp` ·
+`music visualizer` · `milkdrop` · `audio visualizer` · `live wallpaper` ·
 `preset visualizer` · `music reactive` · `screensaver`
+
+(`winamp` dropped for `live wallpaper` now that wallpaper mode ships — it is a
+far larger search term and the one Wallpaper Engine's audience uses.)
 
 ## System requirements
 
@@ -118,6 +150,7 @@ does, projectM's own Steam listing included.
 - A GPU with OpenGL 3.3 support (any card from roughly 2012 onward)
 - 4 GB RAM
 - ~200 MB installed, plus whatever your preset and texture folders take
+- Recording needs ffmpeg — on PATH, or dropped into the application folder
 - Presets and textures are downloaded separately — the app will fetch a pack
 
 ## Age rating questionnaire — answer honestly
@@ -148,27 +181,55 @@ Shoot these in order — they tell the story in the order the description does:
 3. The preset browser open beside the visualiser, ratings visible in the list.
 4. The browser sorted by rating — the top of the list, all high scores.
 5. The delete-0★ confirmation, with the count of what is about to go.
-6. Settings, showing the preset and texture folder rows.
-7. Get presets, mid-download, progress bar visible.
+6. The browser with thumbnails filled in — the clearest single picture of
+   what this app is for.
+7. The search box with a name typed and the list narrowed.
+8. Wallpaper mode: the desktop, icons over the visuals, tray icon visible.
+9. Settings, showing the preset and texture folder rows.
+10. Get presets, mid-download, progress bar visible.
+
+A short recorded clip is also the best possible store video — the app now makes
+one of itself.
 
 ## Pricing — recommendation
 
-**$4.99, no trial, no subscription.**
+**$7.99, no trial, no subscription.**
 
-The comparables: Wallpaper Engine at $3.99 with tens of millions of owners is
-the proof the price band works. Overture at $3.99 with 45 reviews in seven
-years is the proof the band does not save a shallow product. projectM's own
-player is free, which sets the floor: this has to be worth paying for *next to
-free*, which is why every line of the copy above is about curation and not
-about playing presets.
+Was $4.99 while the app was curation alone. Recording and wallpaper mode are
+what move it: nothing free does curation *and* recording *and* wallpaper, and
+wallpaper in particular puts it in the same sentence as Wallpaper Engine
+($3.99, tens of millions of owners) rather than next to a free preset player.
 
-Below $4.99 you are signalling "toy" against a free competitor, which is the
-wrong fight. Above about $9.99 people compare you to Wallpaper Engine's whole
-workshop and you lose. $4.99 is the highest price that still reads as an
-impulse buy.
+The floor is still set by projectM's own free player, which plays the same
+presets — so the copy stays about what that player cannot do. The ceiling is
+around $9.99, where people start comparing this to Wallpaper Engine's entire
+workshop and it loses. $7.99 sits above impulse-buy noise while staying an
+easy yes.
+
+$9.99 becomes defensible once wallpaper mode has been tested on real Windows
+hardware and the store video is a clip the app recorded of itself.
 
 Do not discount at launch. A launch discount off an unknown price is not a
 discount, and it burns the one sale event you get.
+
+---
+
+## ffmpeg — a decision still to make
+
+Recording shells out to ffmpeg. Right now the app looks for it beside the
+executable first and on PATH second, and says so in the menu when there is
+none. Asking a paying customer to install ffmpeg is the weakest thing in the
+product.
+
+Bundling it is the fix, and the licence is the only real question. **Ship an
+LGPL build, never a GPL one.** The GPL builds are the ones that carry libx264,
+and shipping GPL code inside a paid product is an argument nobody needs to
+have. An LGPL Windows build has `h264_mf` — H.264 through Media Foundation,
+hardware accelerated — which is as good as libx264 for this. The app already
+asks ffmpeg what encoders it has and picks libx264, then h264_mf, then mpeg4,
+so an LGPL build works with no code change.
+
+Roughly 40–80 MB depending on the build. That is the whole cost.
 
 ---
 
