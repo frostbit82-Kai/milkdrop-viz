@@ -172,6 +172,21 @@ def the_wallpaper_flag_reaches_the_desktop_file():
         v.set_autostart(False)
 
 
+def no_menu_label_carries_a_bare_ampersand():
+    """Qt reads a single "&" in an action label as the mnemonic marker and
+    eats it. "Back up ratings & collections…" shipped as "ratings
+    _collections…" with the c underlined, and only a screenshot found it."""
+    import re
+    with open(os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                           "viz_common.py"), encoding="utf-8") as f:
+        src = f.read()
+    bad = [m for m in re.findall(r'(?:addAction|addMenu|setText|setTitle|'
+                                 r'setWindowTitle|QAction|QPushButton|'
+                                 r'QCheckBox|QRadioButton)\("([^"]*)"', src)
+           if re.search(r'(?<!&)&(?!&)', m)]
+    assert not bad, bad
+
+
 for name, fn in list(globals().items()):
     if callable(fn) and not name.startswith(("_", "check")) \
             and getattr(fn, "__module__", None) == "__main__":

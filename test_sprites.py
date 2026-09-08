@@ -145,25 +145,39 @@ def an_unknown_movement_or_blend_falls_back_rather_than_raising():
     """The list is written into config.json, and a config from a later
     version can name a movement this one has never heard of."""
     text = v.sprite_code({"image": "spr_a", "motion": "disco", "blend": "neon"})
-    assert "blendmode=0" in text
+    assert "blendmode=4" in text
     assert "code_1=" not in text
 
 
-def a_wide_picture_is_not_stretched_into_a_square():
-    """sx and sy scale a square quad, so equal values squash a 2:1 photo."""
-    real = v.sprite_aspect
-    try:
-        v.sprite_aspect = lambda _stem: 0.5           # twice as wide as tall
-        init = [l for l in v.sprite_code(
-            {"image": "spr_a", "size": 0.6}).splitlines()
-            if l.startswith("init_1=")][0]
-        assert "sx=0.6000" in init and "sy=0.3000" in init, init
-    finally:
-        v.sprite_aspect = real
+def the_pictures_own_shape_is_left_to_projectm():
+    """projectM scales the sprite quad by the picture's width/height itself
+    before drawing it. This code used to scale sy by the same ratio as well,
+    which squashed a 2:1 picture to 4:1 -- measured on screen at 630x160 for
+    a 400x200 picture, where 630x320 was right."""
+    init = [l for l in v.sprite_code(
+        {"image": "spr_a", "size": 0.6}).splitlines()
+        if l.startswith("init_1=")][0]
+    assert "sx=0.6000" in init and "sy=0.6000" in init, init
+    for key, _label, code in v.SPRITE_MOTIONS:
+        assert "{ar" not in code, key
 
 
-def an_unreadable_picture_is_treated_as_square():
-    assert v.sprite_aspect("spr_does_not_exist") == 1.0
+def the_blend_names_match_what_the_engine_does():
+    """Mode 0 ignores the picture's alpha channel and mode 4 is the one that
+    honours it -- the opposite of what their MilkDrop names suggest. The
+    label a user picks has to be the behaviour they get."""
+    blends = {k: b for k, _l, b in v.SPRITE_BLENDS}
+    assert blends["normal"] == 4, blends
+    assert blends["add"] == 2, blends
+    assert blends["solid"] == 0, blends
+    labels = {k: l for k, l, _b in v.SPRITE_BLENDS}
+    assert "black is clear" not in labels["normal"].lower()
+
+
+def a_blend_written_by_the_older_build_still_loads():
+    """"key" was this mode's name before it got an honest one."""
+    text = v.sprite_code({"image": "spr_a", "blend": "key"})
+    assert "blendmode=4" in text, text
 
 
 # ── the panel ─────────────────────────────────────────────────────────────

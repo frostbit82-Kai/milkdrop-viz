@@ -2232,30 +2232,48 @@ def texture_overrides() -> list:
 #: the path; this one deliberately trails it.
 SPRITE_PREFIX = "spr_"
 
-#: (key, label, per-frame code). The code is what `code_1=` gets. `{sx}` and
-#: `{ar}` are filled in per sprite -- a motion that drives sx every frame
-#: overwrites whatever init set, so the chosen size has to be baked into the
-#: expression rather than left in init_1 to be trampled.
+#: (key, label, per-frame code). The code is what `code_1=` gets, with `{sx}`
+#: filled in per sprite -- a motion that drives sx every frame overwrites
+#: whatever init set, so the chosen size has to be baked into the expression
+#: rather than left in init_1 to be trampled.
+#:
+#: sy is always set equal to sx. projectM scales the sprite quad by the
+#: picture's own width/height before it draws (MilkdropSprite.cpp, "First
+#: aspect ratio"), so correcting for it here as well squashed a 2:1 picture
+#: to 4:1 -- measured on screen, not read off the source.
 SPRITE_MOTIONS = (
     ("still", "Still", ""),
     ("spin", "Spinning", "rot = time * 0.6;"),
     ("pulse", "Pulsing to the beat",
-     "sx = {sx:.4f} * (0.80 + 0.35 * bass_att); sy = sx * {ar:.4f};"),
+     "sx = {sx:.4f} * (0.80 + 0.35 * bass_att); sy = sx;"),
     ("drift", "Drifting about",
      "x = 0.5 + 0.22 * sin(time * 0.7); y = 0.5 + 0.13 * cos(time * 0.9);"),
     ("spinpulse", "Spinning and pulsing",
      "rot = time * 0.6; sx = {sx:.4f} * (0.80 + 0.35 * bass_att); "
-     "sy = sx * {ar:.4f};"),
+     "sy = sx;"),
 )
 
-#: (key, label, MilkDrop blendmode). Additive is the one that reads well over
-#: a visualiser -- it lights the picture up with the preset behind it instead
-#: of punching a rectangle through the middle of the render.
+#: (key, label, MilkDrop blendmode). The labels are what these modes do in
+#: projectM's own sprite shader, which is not what their MilkDrop names
+#: suggest:
+#:   0 ignores the picture's alpha channel entirely, so a cut-out PNG draws
+#:     as a solid rectangle;
+#:   2 adds the picture to what is behind it, which makes black vanish and
+#:     bright parts glow;
+#:   4 multiplies vertex alpha by texture alpha -- the only mode that keeps a
+#:     PNG's own transparency. MilkDrop called it colour keying and projectM
+#:     says so in a comment: "Milkdrop actually changed color keying to using
+#:     texture alpha. The color key is ignored." Labelling it "black is clear"
+#:     promised something no mode here does.
 SPRITE_BLENDS = (
-    ("normal", "Normal", 0),
-    ("add", "Additive", 2),
-    ("key", "Colour key (black is clear)", 4),
+    ("normal", "Normal — keeps the picture's own transparency", 4),
+    ("add", "Additive — black turns clear, bright parts glow", 2),
+    ("solid", "Solid — the whole rectangle, transparency ignored", 0),
 )
+
+#: Blend keys written by an older build. "key" was mode 4 there and is mode 4
+#: here; it just has an honest name now.
+SPRITE_BLEND_ALIASES = {"key": "normal"}
 
 #: More than this and the picture is the visualiser. projectM's own default
 #: is 16; there is no reason to raise it.
@@ -2324,25 +2342,6 @@ def remove_sprite_image(stem: str) -> bool:
     return gone
 
 
-def sprite_aspect(stem: str) -> float:
-    """height/width of a sprite's picture, or 1.0 if it cannot be read.
-
-    The sprite quad is square in projectM's coordinates, so a 16:9 photograph
-    with sx == sy comes out stretched tall. Scaling sy by this puts it back.
-    """
-    for _s, path in sprite_images():
-        if _s != stem:
-            continue
-        try:
-            img = QImage(path)
-            if not img.isNull() and img.width() > 0:
-                return max(0.05, min(20.0, img.height() / img.width()))
-        except Exception:
-            pass
-        break
-    return 1.0
-
-
 def sprite_code(entry: dict) -> str:
     """The MilkDrop sprite definition for one configured sprite.
 
@@ -2354,19 +2353,21 @@ def sprite_code(entry: dict) -> str:
     """
     motions = {k: c for k, _l, c in SPRITE_MOTIONS}
     blends = {k: b for k, _l, b in SPRITE_BLENDS}
+    default_blend = SPRITE_BLENDS[0][2]
     stem = entry.get("image", "")
     size = float(entry.get("size", 0.5))
     alpha = float(entry.get("alpha", 1.0))
-    blend = blends.get(entry.get("blend", "normal"), 0)
-    ar = sprite_aspect(stem)
+    want = entry.get("blend", "normal")
+    want = SPRITE_BLEND_ALIASES.get(want, want)
+    blend = blends.get(want, default_blend)
     code = motions.get(entry.get("motion", "still"), "")
     lines = [
         f"img={stem}",
-        f"init_1=x=0.5; y=0.5; sx={size:.4f}; sy={size * ar:.4f}; "
+        f"init_1=x=0.5; y=0.5; sx={size:.4f}; sy={size:.4f}; "
         f"a={alpha:.4f}; blendmode={blend}; done=0;",
     ]
     if code:
-        lines.append("code_1=" + code.format(sx=size, ar=ar))
+        lines.append("code_1=" + code.format(sx=size))
     return "\n".join(lines) + "\n"
 
 
@@ -4108,7 +4109,10 @@ class ContextMenu(QMenu):
         """
         sub = self.addMenu("💾   Backup")
         sub.setStyleSheet(self.styleSheet())
-        sub.addAction("⬆   Back up ratings & collections…", self._do_backup)
+        # "&&" not "&": Qt reads a single ampersand in an action label as the
+        # keyboard mnemonic marker, so this row rendered as "ratings
+        # _collections…" with the c underlined.
+        sub.addAction("⬆   Back up ratings && collections…", self._do_backup)
         sub.addAction("⬇   Restore from a backup…", self._do_restore)
 
     def _default_backup_name(self) -> str:
