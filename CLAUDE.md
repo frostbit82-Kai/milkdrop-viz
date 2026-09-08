@@ -102,8 +102,8 @@ the only way to see why a frozen build failed.
 `QT_QPA_PLATFORM=offscreen`: `browser_search`, `browser_title`, `display_picker`,
 `recording` (needs ffmpeg and ffprobe), `clip_audio` (same), `thumbnails`,
 `screensaver`, `wallpaper`, `packs`, `settings_diff`, `shuffle`, `theme`,
-`idle_pause`, `collections`, `backup`, `tweak`. All sixteen must pass before a
-release.
+`idle_pause`, `collections`, `backup`, `tweak`, `sprites`. All seventeen must
+pass before a release.
 
 There is no display in an agent shell and SDL needs one, so:
 
@@ -127,6 +127,12 @@ There is no display in an agent shell and SDL needs one, so:
   `config.json` while looking isolated. Copy the files.
 - **Re-copy the rig after every edit.** A rig running last hour's `viz_common.py`
   reports a feature missing that is sitting finished in the working tree.
+- **A Qt panel must never rebuild itself inside a signal it is handling.** The
+  rebuild replaces every widget in the tab, the sender included, and the binding
+  frees a live sender under itself: the process vanishes with no traceback,
+  because no Python exception is involved. Defer with `QTimer.singleShot(0, ...)`
+  -- `TweakPanel._rebuild_later`. Measured: changing a sprite's movement killed
+  the app every time, and only the live run could see it.
 
 ## Traps already paid for
 

@@ -1386,6 +1386,58 @@ def _load_libraries(config_dir=None):
     return core, playlist
 
 
+#: Kept alive at module scope on purpose. ctypes does not own a CFUNCTYPE
+#: instance, so a callback handed to a C library and then dropped is a use
+#: after free the next time the library logs -- which here would be inside
+#: projectM, on the render thread, at whatever moment a preset failed.
+_LOG_CB = None
+
+#: projectm_log_level. WARN and above are the ones worth a line: a preset
+#: whose shader would not compile is a thing users report as "some presets are
+#: black", and until this callback existed the reason went nowhere at all.
+_PM_LOG_WARN = 4
+_PM_LOG_NAMES = {4: "warn", 5: "error", 6: "fatal"}
+
+
+def _install_projectm_logging(core) -> bool:
+    """Route libprojectM's own log at WARN and above to stdout. Once."""
+    global _LOG_CB
+    if _LOG_CB is not None:
+        return True
+    try:
+        proto = ctypes.CFUNCTYPE(None, ctypes.c_char_p, ctypes.c_int,
+                                 ctypes.c_void_p)
+        core.projectm_set_log_callback.restype = None
+        core.projectm_set_log_callback.argtypes = [proto, ctypes.c_bool,
+                                                   ctypes.c_void_p]
+        core.projectm_set_log_level.restype = None
+        core.projectm_set_log_level.argtypes = [ctypes.c_int, ctypes.c_bool]
+    except AttributeError:
+        return False
+
+    def _on_log(message, level, _user):
+        try:
+            text = (message or b"").decode("utf-8", "replace").strip()
+            if text:
+                print(f"[projectm:{_PM_LOG_NAMES.get(level, level)}] {text}",
+                      flush=True)
+        except Exception:
+            pass                      # a logger must never take the app down
+
+    _LOG_CB = proto(_on_log)
+    try:
+        # False: every thread. projectM renders on one thread and is created
+        # on another, and a message pinned to the calling thread would miss
+        # the half that matters.
+        core.projectm_set_log_callback(_LOG_CB, False, None)
+        core.projectm_set_log_level(_PM_LOG_WARN, False)
+        return True
+    except Exception as e:
+        _LOG_CB = None
+        print(f"[projectm_wrapper] log callback failed: {e}", flush=True)
+        return False
+
+
 class ProjectM4:
 
     def __init__(self, core: ctypes.CDLL, playlist):
@@ -1402,6 +1454,7 @@ class ProjectM4:
         self._setup_core_signatures()
         if playlist:
             self._setup_playlist_signatures()
+        _install_projectm_logging(core)
 
     # ── Signature setup ───────────────────────────────────────────────────
 
@@ -1523,6 +1576,38 @@ class ProjectM4:
             self.can_reset_textures = True
         except AttributeError:
             self.can_reset_textures = False
+
+        # User sprites: a picture laid over the preset, moved by MilkDrop
+        # sprite code. Only on libprojectM master -- the 4.1.x releases have
+        # none of this -- so it is guarded like everything else optional, and
+        # the whole tab disappears rather than the app failing to start.
+        try:
+            C.projectm_sprite_create.restype  = ctypes.c_uint32
+            C.projectm_sprite_create.argtypes = [ctypes.c_void_p,
+                                                  ctypes.c_char_p,
+                                                  ctypes.c_char_p]
+            C.projectm_sprite_destroy_all.restype  = None
+            C.projectm_sprite_destroy_all.argtypes = [ctypes.c_void_p]
+            C.projectm_sprite_get_sprite_count.restype  = ctypes.c_uint32
+            C.projectm_sprite_get_sprite_count.argtypes = [ctypes.c_void_p]
+            C.projectm_sprite_set_max_sprites.restype  = None
+            C.projectm_sprite_set_max_sprites.argtypes = [ctypes.c_void_p,
+                                                           ctypes.c_uint32]
+            self.can_sprites = True
+        except AttributeError:
+            self.can_sprites = False
+
+        # Whether a new preset inherits the last frame of the old one. The
+        # inheritance is projectM's default and is usually what people want;
+        # it also means a preset that starts dark takes a moment to shed the
+        # bright one before it, which some people read as a glitch.
+        try:
+            C.projectm_set_preset_start_clean.restype  = None
+            C.projectm_set_preset_start_clean.argtypes = [ctypes.c_void_p,
+                                                           ctypes.c_bool]
+            self.can_start_clean = True
+        except AttributeError:
+            self.can_start_clean = False
 
         # Preset-switched callback (used to track current name)
         C.projectm_set_preset_switch_requested_event_callback.restype  = None
@@ -1744,6 +1829,40 @@ class ProjectM4:
             return True
         except Exception as e:
             print(f"[projectm_wrapper] reset_textures failed: {e}", flush=True)
+            return False
+
+    def set_sprites(self, definitions) -> int:
+        """Replace every sprite with this list of definitions. Render thread.
+
+        Replace rather than add: the panel hands over the whole configured
+        list after any change, so there is one code path and no way for the
+        screen and the configuration to drift apart. Returns how many the
+        library accepted -- a definition naming a picture the texture manager
+        cannot find fails inside projectM, which is exactly the case worth
+        reporting back rather than leaving as an invisible no-op.
+        """
+        if not self._pm or not getattr(self, "can_sprites", False):
+            return 0
+        try:
+            self._core.projectm_sprite_destroy_all(self._pm)
+            self._core.projectm_sprite_set_max_sprites(self._pm, MAX_SPRITES)
+            for text in definitions:
+                self._core.projectm_sprite_create(
+                    self._pm, b"milkdrop", text.encode("utf-8"))
+            return int(self._core.projectm_sprite_get_sprite_count(self._pm))
+        except Exception as e:
+            print(f"[projectm_wrapper] set_sprites failed: {e}", flush=True)
+            return 0
+
+    def set_preset_start_clean(self, on: bool) -> bool:
+        if not self._pm or not getattr(self, "can_start_clean", False):
+            return False
+        try:
+            self._core.projectm_set_preset_start_clean(self._pm, bool(on))
+            return True
+        except Exception as e:
+            print(f"[projectm_wrapper] set_preset_start_clean failed: {e}",
+                  flush=True)
             return False
 
     def render_frame(self):
@@ -2099,6 +2218,156 @@ def texture_overrides() -> list:
                        if os.path.splitext(f)[1].lower() in TEXTURE_EXTENSIONS})
     except OSError:
         return []
+
+
+# ─── sprites ─────────────────────────────────────────────────────────────────
+# A picture laid over whatever preset is playing, moved by a few lines of
+# MilkDrop sprite code. libprojectM parses that code itself; all this end has
+# to do is put the image somewhere the texture manager will find it and hand
+# over the text.
+
+#: Prefixed so a sprite image can never be mistaken for a preset's own
+#: texture, and kept in a directory that goes LAST in the search path so even
+#: a collision could not shadow one. The override directory deliberately leads
+#: the path; this one deliberately trails it.
+SPRITE_PREFIX = "spr_"
+
+#: (key, label, per-frame code). The code is what `code_1=` gets. `{sx}` and
+#: `{ar}` are filled in per sprite -- a motion that drives sx every frame
+#: overwrites whatever init set, so the chosen size has to be baked into the
+#: expression rather than left in init_1 to be trampled.
+SPRITE_MOTIONS = (
+    ("still", "Still", ""),
+    ("spin", "Spinning", "rot = time * 0.6;"),
+    ("pulse", "Pulsing to the beat",
+     "sx = {sx:.4f} * (0.80 + 0.35 * bass_att); sy = sx * {ar:.4f};"),
+    ("drift", "Drifting about",
+     "x = 0.5 + 0.22 * sin(time * 0.7); y = 0.5 + 0.13 * cos(time * 0.9);"),
+    ("spinpulse", "Spinning and pulsing",
+     "rot = time * 0.6; sx = {sx:.4f} * (0.80 + 0.35 * bass_att); "
+     "sy = sx * {ar:.4f};"),
+)
+
+#: (key, label, MilkDrop blendmode). Additive is the one that reads well over
+#: a visualiser -- it lights the picture up with the preset behind it instead
+#: of punching a rectangle through the middle of the render.
+SPRITE_BLENDS = (
+    ("normal", "Normal", 0),
+    ("add", "Additive", 2),
+    ("key", "Colour key (black is clear)", 4),
+)
+
+#: More than this and the picture is the visualiser. projectM's own default
+#: is 16; there is no reason to raise it.
+MAX_SPRITES = 16
+
+
+def sprite_dir() -> str:
+    """Where pictures used as sprites are kept."""
+    return os.path.join(user_data_dir(), "sprites")
+
+
+def sprite_images() -> list:
+    """(stem, full path) for every picture available as a sprite."""
+    out = []
+    try:
+        for f in sorted(os.listdir(sprite_dir())):
+            if os.path.splitext(f)[1].lower() in TEXTURE_EXTENSIONS:
+                out.append((os.path.splitext(f)[0],
+                            os.path.join(sprite_dir(), f)))
+    except OSError:
+        pass
+    return out
+
+
+def add_sprite_image(image_path: str) -> tuple:
+    """Copy a picture in for use as a sprite. (stem, "") or ("", why).
+
+    The stem is what `img=` matches on, so it is derived from the file name,
+    prefixed, and made unique -- dropping two different pictures both called
+    "logo.png" in here would otherwise leave which one renders to whichever
+    the directory scan reached first.
+    """
+    import re
+    import shutil
+    ext = os.path.splitext(image_path)[1].lower()
+    if ext not in TEXTURE_EXTENSIONS:
+        return ("", f"{ext or 'That file'} is not a picture format projectM "
+                    f"reads. Use one of: "
+                    + ", ".join(e.lstrip(".") for e in TEXTURE_EXTENSIONS))
+    base = re.sub(r"[^a-z0-9]+", "_",
+                  os.path.splitext(os.path.basename(image_path))[0].lower())
+    base = base.strip("_") or "picture"
+    taken = {s for s, _ in sprite_images()}
+    stem = SPRITE_PREFIX + base
+    n = 2
+    while stem in taken:
+        stem = f"{SPRITE_PREFIX}{base}_{n}"
+        n += 1
+    try:
+        os.makedirs(sprite_dir(), exist_ok=True)
+        shutil.copyfile(image_path, os.path.join(sprite_dir(), stem + ext))
+        return (stem, "")
+    except Exception as e:
+        return ("", str(e))
+
+
+def remove_sprite_image(stem: str) -> bool:
+    """Delete the picture behind a sprite. True if there was one."""
+    gone = False
+    for ext in TEXTURE_EXTENSIONS:
+        try:
+            os.remove(os.path.join(sprite_dir(), stem + ext))
+            gone = True
+        except OSError:
+            pass
+    return gone
+
+
+def sprite_aspect(stem: str) -> float:
+    """height/width of a sprite's picture, or 1.0 if it cannot be read.
+
+    The sprite quad is square in projectM's coordinates, so a 16:9 photograph
+    with sx == sy comes out stretched tall. Scaling sy by this puts it back.
+    """
+    for _s, path in sprite_images():
+        if _s != stem:
+            continue
+        try:
+            img = QImage(path)
+            if not img.isNull() and img.width() > 0:
+                return max(0.05, min(20.0, img.height() / img.width()))
+        except Exception:
+            pass
+        break
+    return 1.0
+
+
+def sprite_code(entry: dict) -> str:
+    """The MilkDrop sprite definition for one configured sprite.
+
+    Regenerated from scratch whenever anything about the sprite changes and
+    the sprite recreated, rather than poking `projectm_sprite_set_var`: half
+    the motions drive sx or x from per-frame code, so a variable set from
+    outside would be overwritten before the next frame drew. Recreating is
+    cheap here -- unlike a preset, there is no shader to compile.
+    """
+    motions = {k: c for k, _l, c in SPRITE_MOTIONS}
+    blends = {k: b for k, _l, b in SPRITE_BLENDS}
+    stem = entry.get("image", "")
+    size = float(entry.get("size", 0.5))
+    alpha = float(entry.get("alpha", 1.0))
+    blend = blends.get(entry.get("blend", "normal"), 0)
+    ar = sprite_aspect(stem)
+    code = motions.get(entry.get("motion", "still"), "")
+    lines = [
+        f"img={stem}",
+        f"init_1=x=0.5; y=0.5; sx={size:.4f}; sy={size * ar:.4f}; "
+        f"a={alpha:.4f}; blendmode={blend}; done=0;",
+    ]
+    if code:
+        lines.append("code_1=" + code.format(sx=size, ar=ar))
+    return "\n".join(lines) + "\n"
 
 
 # ─── ui ───────────────────────────────────────────────────────────────────────
@@ -2748,6 +3017,14 @@ class SettingsDialog(QDialog):
         self._soft_cut.setSuffix("  sec")
         layout.addRow("Blend duration:", self._soft_cut)
 
+        self._start_clean = QCheckBox("Start each visual on a black frame")
+        self._start_clean.setChecked(bool(cfg.get("preset_start_clean")))
+        self._start_clean.setToolTip(
+            "Off, a new visual inherits the last frame of the one before and "
+            "grows out of it. On, it starts from nothing — which suits a dark "
+            "visual following a bright one.")
+        layout.addRow("Hand-over:", self._start_clean)
+
         # Beat sensitivity
         self._beat = QDoubleSpinBox()
         self._beat.setRange(0.1, 4.0)
@@ -2889,6 +3166,7 @@ class SettingsDialog(QDialog):
             "mesh_x":               mx,
             "mesh_y":               my,
             "soft_cut_duration":    round(self._soft_cut.value(), 1),
+            "preset_start_clean":   self._start_clean.isChecked(),
             "beat_sensitivity":     round(self._beat.value(), 1),
             "hard_cuts_enabled":    self._hard_cuts.isChecked(),
             "hard_cut_sensitivity": round(self._hcs.value(), 1),
@@ -5017,6 +5295,7 @@ class Renderer:
         self._req_collection             = None   # name to play, "" = all
         self._req_preset_data            = None   # preset text to play now
         self._req_reset_textures         = False  # rescan after a swap
+        self._req_sprites                = False  # rebuild the overlay list
         self._rated                      = False  # favorite (rating-weighted) shuffle
         self._rated_history              = deque(maxlen=200)  # native indices for rated prev
 
@@ -5262,7 +5541,25 @@ class Renderer:
 
         preset_dir = self._cfg.get("preset_dir", "")
 
+        # Created before the paths are handed over, not when the first picture
+        # is added: the search path is fixed when projectM builds its texture
+        # manager, a directory that did not exist is dropped from the list,
+        # and no later rescan can put it back. A cache miss does rescan the
+        # directories it knows about, which is why nothing else is needed to
+        # pick up a picture added while running.
+        try:
+            os.makedirs(sprite_dir(), exist_ok=True)
+        except OSError:
+            pass
+
         self._apply_texture_paths()
+        # Overlays outlive a restart. Requested rather than applied straight
+        # away: this runs before the first frame, and the sprite's picture is
+        # resolved through the texture manager, which wants the search paths
+        # in place -- they are, one line up, but the queue is the one path
+        # every other sprite change already takes.
+        if self.sprites():
+            self._req_sprites = True
 
         count = 0
         if not os.path.isdir(preset_dir):
@@ -5303,6 +5600,11 @@ class Renderer:
             os.path.join(preset_dir, "textures"),
             os.path.expanduser("~/projectm-textures"),
             preset_dir,
+            # Last, and that matters: a sprite is a picture the user dropped
+            # in, and it must never win a stem match against a texture a
+            # preset actually asks for. The spr_ prefix makes a collision
+            # unlikely; being last makes it harmless.
+            sprite_dir(),
         ) if p and os.path.isdir(p)]
         if tex_paths:
             self._pm.set_texture_search_paths(tex_paths)
@@ -5324,6 +5626,7 @@ class Renderer:
         self._pm.set_soft_cut_duration(cfg.get("soft_cut_duration", 3.0))
         _fps = cfg.get("fps", 60)
         self._pm.set_fps(_fps if _fps and _fps > 0 else 120)
+        self._pm.set_preset_start_clean(bool(cfg.get("preset_start_clean")))
 
     # ── Public thread-safe requests ───────────────────────────────────────
 
@@ -5678,6 +5981,85 @@ class Renderer:
         with self._lock:
             self._req_reset_textures = True
 
+    # ── Sprites ───────────────────────────────────────────────────────────
+    # Pictures laid over whatever is playing. Configuration is the list in
+    # config.json; the screen is rebuilt from it wholesale on any change, so
+    # the two cannot disagree.
+
+    def can_sprites(self) -> bool:
+        return bool(self._pm and getattr(self._pm, "can_sprites", False))
+
+    def sprites(self) -> list:
+        """The configured overlays, in draw order."""
+        out = []
+        for e in self._cfg.get("sprites", []) or []:
+            if isinstance(e, dict) and e.get("image"):
+                out.append(dict(e))
+        return out
+
+    def _save_sprites(self, entries: list):
+        self._cfg["sprites"] = entries
+        self._save_config(self._cfg)
+        with self._lock:
+            self._req_sprites = True
+
+    def add_sprite(self, image_path: str, motion: str = "still",
+                   size: float = 0.5, alpha: float = 1.0,
+                   blend: str = "normal") -> str:
+        """Copy a picture in and lay it over the render. "" or why not."""
+        entries = self.sprites()
+        if len(entries) >= MAX_SPRITES:
+            return f"That is already {MAX_SPRITES} pictures on screen."
+        stem, why = add_sprite_image(image_path)
+        if why:
+            return why
+        entries.append({"image": stem, "motion": motion, "size": size,
+                        "alpha": alpha, "blend": blend})
+        self._save_sprites(entries)
+        return ""
+
+    def update_sprite(self, index: int, **fields) -> bool:
+        entries = self.sprites()
+        if not 0 <= index < len(entries):
+            return False
+        entries[index].update(fields)
+        self._save_sprites(entries)
+        return True
+
+    def remove_sprite(self, index: int) -> bool:
+        entries = self.sprites()
+        if not 0 <= index < len(entries):
+            return False
+        gone = entries.pop(index)
+        # Only when nothing else still points at it: the same picture can be
+        # laid on twice, spinning one and still the other.
+        if not any(e.get("image") == gone.get("image") for e in entries):
+            remove_sprite_image(gone.get("image", ""))
+        self._save_sprites(entries)
+        return True
+
+    def clear_sprites(self) -> int:
+        entries = self.sprites()
+        for e in entries:
+            remove_sprite_image(e.get("image", ""))
+        self._save_sprites([])
+        return len(entries)
+
+    def _do_apply_sprites(self):
+        """Render thread. Rebuild every sprite from the configuration."""
+        if not self._pm:
+            return
+        entries = self.sprites()
+        wanted = len(entries)
+        got = self._pm.set_sprites([sprite_code(e) for e in entries])
+        if got != wanted:
+            # Almost always a picture the texture manager could not find,
+            # which projectM reports by refusing the sprite and nothing else.
+            print(f"[sprite] {got}/{wanted} accepted — the rest name a "
+                  f"picture projectM could not load", flush=True)
+        elif wanted:
+            print(f"[sprite] {wanted} on screen", flush=True)
+
     def _do_reset_textures(self):
         """Render thread. Re-point projectM at the search paths and make it
         forget what it scanned, then reload the preset -- textures are
@@ -5915,6 +6297,9 @@ class Renderer:
                 if self._req_reset_textures:
                     self._req_reset_textures = False
                     self._do_reset_textures()
+                if self._req_sprites:
+                    self._req_sprites = False
+                    self._do_apply_sprites()
                 if self._req_preset_data is not None:
                     text = self._req_preset_data
                     self._req_preset_data = None

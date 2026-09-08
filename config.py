@@ -87,6 +87,13 @@ DEFAULT_CONFIG = {
     # real state, this is only what the settings dialog last wrote.
     "autostart":            False,
     "autostart_wallpaper":  False,
+    # Each preset starts on black instead of inheriting the last frame of the
+    # one before. projectM's default is to inherit, which reads as a smoother
+    # hand-over; on a dark preset following a bright one it reads as a smear.
+    "preset_start_clean":   False,
+    # Pictures laid over the render: [{image, motion, size, alpha, blend}].
+    # `image` is a file stem under user_data_dir()/sprites.
+    "sprites":              [],
 }
 
 

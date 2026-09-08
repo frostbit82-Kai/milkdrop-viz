@@ -234,10 +234,19 @@ can reach, so run them on the real machine before the installer is rebuilt:
       change was written on Linux and only parse-checked, so read the output
       of the fetch and stamp steps rather than trusting them.
 
+- [ ] **The picture overlay.** New in the preset browser's drop-down, third tab.
+      It only appears when libprojectM has the sprite API, so it is a direct
+      check that the DLL rebuild above actually landed: an old DLL shows an
+      explanation instead of the controls. Add a picture, change the movement
+      and the blending, restart and confirm it is still there. The pictures
+      live in `%APPDATA%`-adjacent user data, not beside the app.
+
 Also new and cross-platform, so Windows only needs a look rather than a test:
 named collections (right-click → Collections), backup/restore of ratings and
-collections, an audio level meter in the audio submenu, and `x` to exclude the
-visual on screen.
+collections, an audio level meter in the audio submenu, `x` to exclude the
+visual on screen, and the Settings row "Start each visual on a black frame".
+libprojectM's own warnings and errors now reach stdout prefixed `[projectm:...]`
+— on Windows that needs `MILKDROP_CONSOLE=1` to be visible at all.
 
 ## Packaging
 

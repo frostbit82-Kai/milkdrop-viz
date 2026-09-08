@@ -21,6 +21,7 @@ from viz_common import (
     QSlider, QTabWidget, QScrollArea, QFileDialog, QInputDialog, QFrame,
     PRESET_TWEAKS, preset_scalar, preset_driven_keys, patch_preset,
     preset_textures, texture_override_path, theme_colour,
+    QComboBox, SPRITE_MOTIONS, SPRITE_BLENDS, MAX_SPRITES,
 )
 
 logger = logging.getLogger(__name__)
@@ -91,6 +92,18 @@ class TweakPanel(QWidget):
             Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self._tabs.addTab(tex_scroll, "Textures")
 
+        # Tab 3 — pictures laid over the render, rather than inside a preset.
+        self._spr_body = QWidget()
+        self._spr_lay = QVBoxLayout(self._spr_body)
+        self._spr_lay.setContentsMargins(4, 4, 4, 4)
+        self._spr_lay.setSpacing(4)
+        spr_scroll = QScrollArea()
+        spr_scroll.setWidgetResizable(True)
+        spr_scroll.setWidget(self._spr_body)
+        spr_scroll.setHorizontalScrollBarPolicy(
+            Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self._spr_tab = self._tabs.addTab(spr_scroll, "Overlay")
+
         foot = QHBoxLayout()
         foot.setContentsMargins(0, 0, 0, 0)
         foot.setSpacing(6)
@@ -105,10 +118,25 @@ class TweakPanel(QWidget):
         foot.addWidget(btn_save)
         lay.addLayout(foot)
 
+        # Revert and Save as\u2026 act on the preset. They mean nothing on the
+        # Overlay tab, where nothing being edited belongs to a preset at all,
+        # and a Save that quietly ignored the picture on screen would be worse
+        # than no button.
+        self._foot = (btn_revert, btn_save)
+        self._tabs.currentChanged.connect(self._tab_changed)
+
         self._timer = QTimer(self)
         self._timer.setSingleShot(True)
         self._timer.setInterval(self.APPLY_MS)
         self._timer.timeout.connect(self._apply)
+
+        self._spr_timer = QTimer(self)
+        self._spr_timer.setSingleShot(True)
+        self._spr_timer.setInterval(self.APPLY_MS)
+        self._spr_timer.timeout.connect(self._sprite_flush)
+
+        # Last: the sliders it builds are wired to the timer above.
+        self._build_sprites()
 
     # ── loading ────────────────────────────────────────────────────────
 
@@ -266,11 +294,217 @@ class TweakPanel(QWidget):
         why = self._host.swap_texture(name, path)
         if why:
             QMessageBox.warning(self, "Replace texture", why)
-        self._build_textures()
+        self._rebuild_later(self._build_textures)
 
     def _restore(self, name):
         self._host.restore_texture(name)
-        self._build_textures()
+        self._rebuild_later(self._build_textures)
+
+    # ── overlay ────────────────────────────────────────────────────────
+    # Not part of any preset, so this tab is built once and rebuilt only when
+    # a sprite changes -- never on reload(), which fires on every preset
+    # change and would drop the selection mid-adjustment.
+
+    def _rebuild_later(self, fn, then=None):
+        """Rebuild a tab after the current signal has finished emitting.
+
+        Rebuilding replaces every widget in the tab, including the button or
+        combo whose signal called us. Doing that inline orphans a live sender
+        mid-emit and the binding frees it under itself -- which shows up as
+        the whole application vanishing with no Python traceback at all,
+        because there is no exception involved. Measured: changing a sprite's
+        movement killed the app every time.
+        """
+        def run():
+            fn()
+            if then is not None:
+                then()
+        QTimer.singleShot(0, run)
+
+    def _tab_changed(self, index):
+        preset_tab = index != self._spr_tab
+        for w in self._foot:
+            w.setVisible(preset_tab)
+
+    def _build_sprites(self):
+        _clear_layout(self._spr_lay)
+        if not getattr(self._host, "can_sprites", lambda: False)():
+            self._spr_lay.addWidget(_hint(
+                "This needs a newer libprojectM than the one loaded. "
+                "Everything else here still works."))
+            self._spr_lay.addStretch(1)
+            return
+
+        self._spr_lay.addWidget(_hint(
+            "Lay your own picture over whatever is playing — a logo, a photo, "
+            "anything. It stays put while the presets change underneath, and "
+            "it is still there next time you open the app."))
+
+        self._spr_list = QListWidget()
+        self._spr_list.setMaximumHeight(96)
+        self._spr_list.currentRowChanged.connect(self._sprite_selected)
+        self._spr_lay.addWidget(self._spr_list)
+
+        entries = self._host.sprites()
+        labels = {k: l for k, l, _c in SPRITE_MOTIONS}
+        for e in entries:
+            name = e.get("image", "")[4:] or e.get("image", "")   # drop spr_
+            self._spr_list.addItem(
+                f"{name}   ·   {labels.get(e.get('motion'), 'Still')}")
+
+        btns = QHBoxLayout()
+        btns.setContentsMargins(0, 0, 0, 0)
+        btns.setSpacing(6)
+        add = QPushButton("Add a picture…")
+        add.setEnabled(len(entries) < MAX_SPRITES)
+        add.clicked.connect(self._add_sprite)
+        btns.addWidget(add)
+        self._spr_del = QPushButton("Remove")
+        self._spr_del.clicked.connect(self._remove_sprite)
+        btns.addWidget(self._spr_del)
+        clear = QPushButton("Remove all")
+        clear.setEnabled(bool(entries))
+        clear.clicked.connect(self._clear_sprites)
+        btns.addWidget(clear)
+        btns.addStretch(1)
+        self._spr_lay.addLayout(btns)
+
+        self._spr_motion = QComboBox()
+        for _k, label, _c in SPRITE_MOTIONS:
+            self._spr_motion.addItem(label)
+        self._spr_motion.currentIndexChanged.connect(
+            lambda i: self._sprite_set(motion=SPRITE_MOTIONS[i][0]))
+        self._spr_lay.addLayout(self._labelled("Movement", self._spr_motion))
+
+        self._spr_blend = QComboBox()
+        for _k, label, _b in SPRITE_BLENDS:
+            self._spr_blend.addItem(label)
+        self._spr_blend.setToolTip(
+            "Additive lights the picture up with the preset showing through, "
+            "instead of covering it")
+        self._spr_blend.currentIndexChanged.connect(
+            lambda i: self._sprite_set(blend=SPRITE_BLENDS[i][0]))
+        self._spr_lay.addLayout(self._labelled("Blending", self._spr_blend))
+
+        self._spr_size = self._sprite_slider(5, 200, "size", 100.0)
+        self._spr_lay.addLayout(self._labelled("Size", self._spr_size))
+        self._spr_alpha = self._sprite_slider(0, 100, "alpha", 100.0)
+        self._spr_lay.addLayout(self._labelled("Opacity", self._spr_alpha))
+
+        self._spr_lay.addStretch(1)
+        if entries:
+            self._spr_list.setCurrentRow(0)
+        else:
+            self._sprite_selected(-1)
+
+    def _labelled(self, text, widget):
+        row = QHBoxLayout()
+        row.setContentsMargins(0, 0, 0, 0)
+        row.setSpacing(6)
+        name = QLabel(text)
+        name.setFixedWidth(96)
+        name.setStyleSheet("font-size:12px;")
+        row.addWidget(name)
+        row.addWidget(widget, 1)
+        return row
+
+    def _sprite_slider(self, lo, hi, field, scale):
+        s = QSlider(Qt.Orientation.Horizontal)
+        s.setRange(lo, hi)
+        # Debounced through the same timer the tweak sliders use: each change
+        # destroys and recreates the sprite, and one of those per pixel of
+        # drag is pointless work on the render thread.
+        s.valueChanged.connect(
+            lambda v, f=field, sc=scale: self._sprite_pending(f, v / sc))
+        return s
+
+    def _sprite_pending(self, field, value):
+        if getattr(self, "_spr_loading", False):
+            return
+        self._spr_pending = dict(getattr(self, "_spr_pending", {}))
+        self._spr_pending[field] = value
+        self._spr_timer.start()
+
+    def _sprite_flush(self):
+        pending = getattr(self, "_spr_pending", None)
+        if pending:
+            self._spr_pending = {}
+            self._sprite_set(**pending)
+
+    def _sprite_row(self) -> int:
+        lst = getattr(self, "_spr_list", None)
+        return lst.currentRow() if lst is not None else -1
+
+    def _sprite_selected(self, row):
+        entries = self._host.sprites()
+        on = 0 <= row < len(entries)
+        for w in (getattr(self, "_spr_motion", None),
+                  getattr(self, "_spr_blend", None),
+                  getattr(self, "_spr_size", None),
+                  getattr(self, "_spr_alpha", None),
+                  getattr(self, "_spr_del", None)):
+            if w is not None:
+                w.setEnabled(on)
+        if not on:
+            return
+        e = entries[row]
+        # Guarded, or setting the controls to match the selection would read
+        # as the user editing it and write the previous sprite's values over
+        # the one just clicked.
+        self._spr_loading = True
+        try:
+            keys = [k for k, _l, _c in SPRITE_MOTIONS]
+            blends = [k for k, _l, _b in SPRITE_BLENDS]
+            self._spr_motion.setCurrentIndex(
+                keys.index(e.get("motion", "still"))
+                if e.get("motion", "still") in keys else 0)
+            self._spr_blend.setCurrentIndex(
+                blends.index(e.get("blend", "normal"))
+                if e.get("blend", "normal") in blends else 0)
+            self._spr_size.setValue(int(round(float(e.get("size", 0.5)) * 100)))
+            self._spr_alpha.setValue(int(round(float(e.get("alpha", 1.0)) * 100)))
+        finally:
+            self._spr_loading = False
+
+    def _sprite_set(self, **fields):
+        if getattr(self, "_spr_loading", False):
+            return
+        row = self._sprite_row()
+        if row < 0:
+            return
+        self._host.update_sprite(row, **fields)
+        if "motion" in fields:
+            # The list row shows the movement, so it has to be redrawn.
+            self._rebuild_later(self._build_sprites,
+                                lambda: self._spr_list.setCurrentRow(row))
+
+    def _add_sprite(self):
+        path, _ = QFileDialog.getOpenFileName(
+            self, "Lay a picture over the visuals", os.path.expanduser("~"),
+            "Images (*.jpg *.jpeg *.png *.tga *.bmp *.dds *.dib)")
+        if not path:
+            return
+        why = self._host.add_sprite(path)
+        if why:
+            QMessageBox.warning(self, "Add a picture", why)
+            return
+        self._rebuild_later(
+            self._build_sprites,
+            lambda: self._spr_list.setCurrentRow(self._spr_list.count() - 1))
+
+    def _remove_sprite(self):
+        row = self._sprite_row()
+        if row >= 0 and self._host.remove_sprite(row):
+            self._rebuild_later(self._build_sprites)
+
+    def _clear_sprites(self):
+        if self._host.sprites() and QMessageBox.question(
+                self, "Remove all",
+                "Take every picture off the render? The copies this app made "
+                "are deleted; your originals are untouched.") \
+                == QMessageBox.StandardButton.Yes:
+            self._host.clear_sprites()
+            self._rebuild_later(self._build_sprites)
 
     # ── applying ───────────────────────────────────────────────────────
 
