@@ -78,6 +78,15 @@ DEFAULT_CONFIG = {
     "soft_cut_duration":    3.0,
     "projectm_lib":         "",
     "projectm_version":     4,
+    # Stop drawing while nothing is playing, or while something else is
+    # full-screen. "wallpaper" (the default), "always" or "never" -- see
+    # viz_common.should_idle for why the default is not "always".
+    "pause_when_idle":      "wallpaper",
+    "idle_silence_seconds": 20,
+    # Mirrors the login entry; the registry (or ~/.config/autostart) is the
+    # real state, this is only what the settings dialog last wrote.
+    "autostart":            False,
+    "autostart_wallpaper":  False,
 }
 
 

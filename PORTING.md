@@ -201,6 +201,33 @@ Not started:
 - [ ] Code signing (an unsigned installer gets a SmartScreen warning)
 - [ ] Steam page
 
+### 1.7.0 — needs a pass on Windows
+
+All of it is written and tested on Linux (fifteen suites, plus a live run under
+Xvfb with a null sink). Three parts have Windows-only branches that no test here
+can reach, so run them on the real machine before the installer is rebuilt:
+
+- [ ] **Idle pause, full-screen half.** `fullscreen_app_running()` calls
+      `shell32.SHQueryUserNotificationState` and returns False everywhere else,
+      so on Linux only the silence timer was exercised. Check that starting a
+      full-screen game pauses a running wallpaper and that leaving it resumes.
+      The silence half is proven: paused, resumed on a tone, paused again.
+- [ ] **Start at login.** The Linux branch (a `.desktop` file) is tested; the
+      Windows branch writes `HKCU\...\CurrentVersion\Run` through `winreg` and
+      is not. Tick the box, log out and back in, and confirm the value is
+      removed again when it is unticked. The "…as the desktop wallpaper" row is
+      Windows-only and adds `--wallpaper` to the command.
+- [ ] **Sound in recorded clips with the bundled ffmpeg.** The clip is muxed in
+      a second pass (`-c:v copy`, `-itsscale`, `aac`). Verified here against the
+      system ffmpeg; the bundled LGPL build has to encode AAC, so check a clip
+      actually has an audio stream rather than a warning in the log. The
+      recorder falls back to the silent video if the mux fails, and says so.
+
+Also new and cross-platform, so Windows only needs a look rather than a test:
+named collections (right-click → Collections), backup/restore of ratings and
+collections, an audio level meter in the audio submenu, and `x` to exclude the
+visual on screen.
+
 ## Packaging
 
 `installer/README.md` covers the build. The parts that cost time:

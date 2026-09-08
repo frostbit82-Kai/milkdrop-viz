@@ -83,6 +83,12 @@ class _AudioBackend:
     #: Short identifier used in log lines.
     name = "base"
 
+    #: Sample rate the open stream is actually running at. Only the clip
+    #: recorder reads it, and it has to be the real one: a WAV written at the
+    #: wrong rate is silently the wrong length, which is a sync bug rather
+    #: than an audible one. 44100 is the value every backend falls back to.
+    rate = 44100
+
     def __init__(self, device_name: str, emit):
         self._device_name = device_name or ""
         self._emit = emit
@@ -457,6 +463,8 @@ class _SoundDeviceBackend(_AudioBackend):
                     callback=callback,
                 )
                 self._stream.start()
+                # Not `samplerate`: that is None for the device-default rows.
+                self.rate = int(getattr(self._stream, "samplerate", 0) or 44100)
                 if is_linux:
                     self._move_to_source()
                 try:
@@ -641,6 +649,7 @@ class _WasapiLoopbackBackend(_AudioBackend):
                 stream_callback=callback,
             )
             self._stream.start_stream()
+            self.rate = rate
         except Exception as e:
             _log(f"[audio] Could not open WASAPI loopback stream: {e}")
             self.stop()
@@ -716,6 +725,14 @@ class AudioCapture:
         #: endpoint that reports as default but refuses to open would otherwise
         #: be retried every tick forever. One attempt per distinct target.
         self._follow_target = ""
+        #: Called with every captured chunk, or None. The clip recorder sets
+        #: it. It has to be here rather than in the render loop because the
+        #: render loop pops ONE chunk per frame while the backend pushes about
+        #: 86 a second -- at 60fps a third of the audio never reaches it, and
+        #: a recording made from what is left is silently short.
+        self._tap = None
+        #: Peak of the last chunk, after gain. Read by the level meter.
+        self._level = 0.0
 
     # ── device discovery, for the settings dialog ───────────────────────
     @staticmethod
@@ -755,6 +772,36 @@ class AudioCapture:
     def _emit(self, chunk: "np.ndarray"):
         with self._lock:
             self._buffer.append(chunk)
+        # Outside the buffer lock on purpose: the tap writes to a file and the
+        # render thread takes this lock every frame to pop a chunk.
+        try:
+            peak = float(np.abs(chunk).max()) if chunk.size else 0.0
+        except Exception:
+            peak = 0.0
+        # Post-gain, because that is the signal projectM sees -- a meter
+        # showing the raw input would read empty on exactly the quiet source
+        # the sensitivity slider exists for. tanh, matching get_chunk().
+        self._level = float(np.tanh(peak * self._gain)) if self._gain != 1.0 \
+            else peak
+        tap = self._tap
+        if tap is not None:
+            try:
+                tap(chunk)
+            except Exception:
+                pass          # a failing recorder must not stop capture
+
+    def set_tap(self, fn):
+        """Receive every captured chunk, or None to stop. Backend thread."""
+        self._tap = fn
+
+    def level(self) -> float:
+        """Peak of the most recent chunk, 0.0-1.0ish, after gain."""
+        return self._level
+
+    def rate(self) -> int:
+        """Sample rate of the open stream, or the usual default."""
+        b = self._backend
+        return int(getattr(b, "rate", 44100) or 44100) if b else 44100
 
     def is_following(self) -> bool:
         """True when no device is pinned, so capture tracks the system default.
@@ -1017,6 +1064,7 @@ DEFAULT_KEYMAPS = {
     "fullscreen_mouse": "DBLCLICK",
     "record":           "F9",
     "toggle_wallpaper": "d",
+    "exclude":          "x",
 }
 
 
@@ -1086,6 +1134,78 @@ def save_keymaps_to(keymaps_path, km: dict):
             json.dump(km, f, indent=4)
     except Exception as e:
         print(f"[config] Warning: could not save keymaps.json: {e}")
+
+
+def load_collections_from(path) -> dict:
+    """{collection name: [preset stem, ...]}. Missing file = no collections.
+
+    Ratings say how good a preset is. A collection says what it is *for* --
+    the axis a 0-10 number cannot carry -- so the two are stored apart and
+    neither rebuilds from the other.
+    """
+    from pathlib import Path
+    p = Path(path)
+    if p.exists():
+        try:
+            with open(p, encoding="utf-8-sig") as f:
+                data = json.load(f)
+            if isinstance(data, dict):
+                # Shape-checked on the way in rather than at every use: this
+                # file is small, hand-editable, and read by a menu builder.
+                return {str(k): [str(v) for v in vals]
+                        for k, vals in data.items()
+                        if isinstance(vals, list)}
+        except Exception as e:
+            print(f"[config] Warning: could not load collections.json: {e}")
+    return {}
+
+
+def save_collections_to(path, data: dict):
+    try:
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(data, f, indent=4)
+    except Exception as e:
+        print(f"[config] Warning: could not save collections.json: {e}")
+
+
+def backup_state(zip_path, paths: dict) -> str:
+    """Zip up whichever of `paths` exist. Returns "" or the reason it failed.
+
+    Ratings and collections are the part of this app that cannot be
+    reinstalled -- they are hours of somebody deciding what they like. The
+    presets themselves are a download; these are not.
+    """
+    import zipfile as _zf
+    try:
+        with _zf.ZipFile(zip_path, "w", _zf.ZIP_DEFLATED) as z:
+            for name, src in paths.items():
+                if os.path.isfile(src):
+                    z.write(src, name)
+        return ""
+    except Exception as e:
+        return str(e)
+
+
+def restore_state(zip_path, paths: dict) -> list:
+    """Unpack a backup over `paths`. Returns the names actually restored.
+
+    Only the names the caller asked for, and each written whole: a backup made
+    by a later version may hold files this one knows nothing about, and
+    guessing where those belong is how a restore corrupts a config.
+    """
+    import zipfile as _zf
+    done = []
+    with _zf.ZipFile(zip_path) as z:
+        have = set(z.namelist())
+        for name, dest in paths.items():
+            if name not in have:
+                continue
+            data = z.read(name)
+            os.makedirs(os.path.dirname(os.path.abspath(dest)), exist_ok=True)
+            with open(dest, "wb") as f:
+                f.write(data)
+            done.append(name)
+    return done
 
 
 def get_preset_rating(ratings: dict, name: str) -> int:
@@ -1739,7 +1859,7 @@ for _mod, _names in (
                  "QHeaderView", "QLineEdit", "QSizePolicy", "QMessageBox",
                  "QFileDialog", "QSlider", "QWidget", "QWidgetAction",
                  "QListWidget", "QListWidgetItem", "QAbstractItemView",
-                 "QProgressBar", "QSystemTrayIcon")),
+                 "QProgressBar", "QSystemTrayIcon", "QInputDialog")),
 ):
     for _n in _names:
         globals()[_n] = getattr(_mod, _n)
@@ -2239,6 +2359,12 @@ class SettingsDialog(QDialog):
         # exec() returns, and changed_config() has to compare against the values
         # the dialog opened with, not the ones it has just written back.
         self._opened_with = dict(cfg)
+        # The registry (or ~/.config/autostart) is the truth about whether
+        # this app starts at login, not config.json -- somebody may have
+        # removed the entry from outside. Seeding the baseline with the real
+        # answer is also what keeps changed_config() from rewriting it on
+        # every OK.
+        self._opened_with["autostart"] = autostart_enabled()
         self.setWindowTitle("Visualizer Settings")
         self.setMinimumWidth(400)
         self.setStyleSheet(dialog_qss())
@@ -2369,6 +2495,40 @@ class SettingsDialog(QDialog):
         _gain_row.addWidget(_gain_lbl)
         layout.addRow("Input sensitivity:", _gain_row)
 
+        # Idle pause. Scoped to wallpaper mode by default: a visualiser
+        # somebody is watching must not freeze because the track ended --
+        # projectM animates without audio, and stopping it looks like a crash.
+        self._idle_mode = QComboBox()
+        for value, label in IDLE_MODES:
+            self._idle_mode.addItem(label, value)
+        idx = self._idle_mode.findData(cfg.get("pause_when_idle", "wallpaper"))
+        if idx >= 0:
+            self._idle_mode.setCurrentIndex(idx)
+        self._idle_mode.setToolTip(
+            "Stop drawing while nothing is playing, or while a full-screen "
+            "application is running")
+        layout.addRow("Pause when idle:", self._idle_mode)
+
+        self._idle_secs = QSpinBox()
+        self._idle_secs.setRange(0, 3600)
+        self._idle_secs.setSpecialValueText("Never on silence")
+        self._idle_secs.setValue(int(cfg.get("idle_silence_seconds", 20)))
+        self._idle_secs.setSuffix("  sec of silence")
+        layout.addRow("Pause after:", self._idle_secs)
+
+        # Start at login. Applied to the OS in accept(), because the
+        # checkbox is a view of the registry rather than of config.json.
+        self._autostart = QCheckBox("Start automatically when I log in")
+        self._autostart.setChecked(self._opened_with["autostart"])
+        layout.addRow("At login:", self._autostart)
+
+        self._autostart_wp = QCheckBox("…as the desktop wallpaper")
+        self._autostart_wp.setChecked(bool(cfg.get("autostart_wallpaper", False)))
+        self._autostart_wp.setEnabled(self._autostart.isChecked())
+        self._autostart.toggled.connect(self._autostart_wp.setEnabled)
+        if sys.platform == "win32":
+            layout.addRow("", self._autostart_wp)
+
         # Buttons
         sep = QFrame()
         sep.setFrameShape(QFrame.Shape.HLine)
@@ -2422,7 +2582,30 @@ class SettingsDialog(QDialog):
             "hard_cut_sensitivity": round(self._hcs.value(), 1),
             "audio_device":         self._audio_device_value(),
             "audio_gain":           round(self._gain.value() / 100.0, 2),
+            "pause_when_idle":      self._idle_mode.currentData() or "wallpaper",
+            "idle_silence_seconds": self._idle_secs.value(),
+            "autostart":            self._autostart.isChecked(),
+            "autostart_wallpaper":  self._autostart_wp.isChecked(),
         }
+
+    def accept(self):
+        """Write the login entry before closing.
+
+        A side effect in a dialog, on purpose: this checkbox shows the state
+        of the registry, not of config.json, and both callers of this dialog
+        (the app and the screensaver's /c branch) would otherwise each need
+        their own copy of the same three lines.
+        """
+        if "autostart" in self.changed_config() or (
+                self._autostart.isChecked()
+                and self._autostart_wp.isChecked()
+                != bool(self._opened_with.get("autostart_wallpaper", False))):
+            why = set_autostart(self._autostart.isChecked(),
+                                self._autostart_wp.isChecked())
+            if why:
+                QMessageBox.warning(self, "Start at login",
+                                    f"Could not change the login entry:\n{why}")
+        super().accept()
 
     def changed_config(self) -> dict:
         """Only the settings the user actually altered.
@@ -2472,6 +2655,7 @@ ACTION_LABELS = {
     "fullscreen_mouse": "Toggle fullscreen (mouse)",
     "record":           "Start / stop recording a clip",
     "toggle_wallpaper": "Desktop wallpaper mode on / off",
+    "exclude":          "Exclude this visual (rate it 0★) and move on",
 }
 
 ACTION_NOTES = {
@@ -2481,6 +2665,7 @@ ACTION_NOTES = {
     "rate_down":        "Rating 0 excludes preset from random rotation",
     "record":           "Needs ffmpeg; clips land in the clips folder",
     "toggle_wallpaper": "Windows only; leave it again from the tray icon",
+    "exclude":          "Hides it from rotation. Nothing is deleted",
 }
 
 
@@ -3144,8 +3329,11 @@ class ContextMenu(QMenu):
         self.addAction("🗂   Preset browser",   lambda: self._renderer.request_toggle_browser())
         self.addAction("↕   Sort by name",     lambda: self._renderer.request_sort("name"))
         self.addAction("★   Sort by rating",   lambda: self._renderer.request_sort("rating"))
+        self.addAction("🚫   Exclude this visual (0★)",
+                       lambda: self._renderer.request_exclude())
         self.addAction("🗑   Delete 0★ presets…", self._confirm_delete_zero)
         self.addAction("↺   Reset all ratings…", self._confirm_reset_ratings)
+        self._build_collections_menu()
         self.addSeparator()
 
         lock_text = "\U0001f512  Unlock visual" if locked else "\U0001f513  Lock visual"
@@ -3170,6 +3358,7 @@ class ContextMenu(QMenu):
         self.addSeparator()
 
         self.addAction("⬇   Get presets…",    self._open_packs)
+        self._build_backup_menu()
         self.addAction("⌨   Key bindings…",   self._open_keymaps)
         self.addAction("⚙   Settings…",        self._open_settings)
         self.addAction("ℹ   About…",           self._open_about)
@@ -3224,6 +3413,163 @@ class ContextMenu(QMenu):
             sub.addAction(act)
         sub.addSeparator()
         sub.addAction("📂   Open clips folder", self._open_clips)
+
+    def _build_collections_menu(self):
+        """Named sets of presets: pick one to play, or file the current one.
+
+        Ratings answer "is this any good". A collection answers "what is it
+        for", which is the question a library of ten thousand still leaves
+        open once everything has been rated.
+        """
+        sub = self.addMenu("🎵   Collections")
+        sub.setStyleSheet(self.styleSheet())
+        try:
+            names = sorted(self._renderer.collections(), key=str.lower)
+            active = self._renderer.collection()
+        except Exception:
+            names, active = [], ""
+
+        group = QActionGroup(sub)
+        group.setExclusive(True)
+        for name, label in [("", "All presets")] + [(n, n) for n in names]:
+            act = QAction(label, sub)
+            act.setCheckable(True)
+            act.setChecked(name == active)
+            act.triggered.connect(
+                lambda _, n=name: self._renderer.play_collection(n))
+            group.addAction(act)
+            sub.addAction(act)
+            if not name:
+                sub.addSeparator()
+
+        sub.addSeparator()
+        stem = ""
+        try:
+            stem = self._renderer.current_preset_stem()
+        except Exception:
+            pass
+        members = {}
+        try:
+            members = self._renderer.collections()
+        except Exception:
+            pass
+        add = sub.addMenu("➕   Add this visual to")
+        add.setStyleSheet(self.styleSheet())
+        for name in names:
+            act = QAction(name, add)
+            # Disabled rather than hidden: seeing that it is already in there
+            # is the answer to the question that opened this menu.
+            act.setEnabled(stem not in members.get(name, ()))
+            act.triggered.connect(lambda _, n=name: self._add_current_to(n))
+            add.addAction(act)
+        if names:
+            add.addSeparator()
+        add.addAction("✎   New collection…", self._new_collection)
+
+        if active:
+            sub.addAction(f"➖   Remove this visual from “{active}”",
+                          lambda: self._remove_current_from(active))
+            sub.addAction(f"🗑   Delete the “{active}” collection…",
+                          lambda: self._delete_collection(active))
+        elif not names:
+            hint = QAction("(none yet — add a visual to make one)", sub)
+            hint.setEnabled(False)
+            sub.addAction(hint)
+
+    def _add_current_to(self, name: str):
+        stem = self._renderer.current_preset_stem()
+        if self._renderer.add_to_collection(name, stem):
+            self._renderer._bridge.show_toast.emit(f"Added to “{name}”")
+
+    def _remove_current_from(self, name: str):
+        stem = self._renderer.current_preset_stem()
+        if self._renderer.remove_from_collection(name, stem):
+            self._renderer._bridge.show_toast.emit(f"Removed from “{name}”")
+
+    def _new_collection(self):
+        name, ok = QInputDialog.getText(
+            self._tmp_parent, "New collection",
+            "Name it — “chill”, “party”, whatever you will recognise:")
+        if not ok:
+            return
+        if not self._renderer.create_collection(name):
+            QMessageBox.information(
+                self._tmp_parent, "New collection",
+                "That name is empty or already in use.")
+            return
+        self._add_current_to(name.strip())
+
+    def _delete_collection(self, name: str):
+        reply = QMessageBox.question(
+            self._tmp_parent, "Delete collection",
+            f"Delete the collection “{name}”?\n"
+            "The presets themselves are not touched.",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No)
+        if reply == QMessageBox.StandardButton.Yes:
+            self._renderer.delete_collection(name)
+
+    def _build_backup_menu(self):
+        """Ratings and collections out to a zip, and back in again.
+
+        These are the only files here that cannot be downloaded again: they
+        are hours of somebody deciding what they like. The presets are a
+        download; this is not.
+        """
+        sub = self.addMenu("💾   Backup")
+        sub.setStyleSheet(self.styleSheet())
+        sub.addAction("⬆   Back up ratings & collections…", self._do_backup)
+        sub.addAction("⬇   Restore from a backup…", self._do_restore)
+
+    def _default_backup_name(self) -> str:
+        stamp = _time.strftime("%Y-%m-%d")
+        return os.path.join(os.path.expanduser("~"),
+                            f"{APP_SLUG}-backup-{stamp}.zip")
+
+    def _do_backup(self):
+        path, _ = QFileDialog.getSaveFileName(
+            self._tmp_parent, "Save a backup", self._default_backup_name(),
+            "Zip archive (*.zip)")
+        if not path:
+            return
+        why = backup_state(path, self._renderer.state_paths())
+        if why:
+            QMessageBox.warning(self._tmp_parent, "Backup", f"Failed: {why}")
+        else:
+            QMessageBox.information(
+                self._tmp_parent, "Backup",
+                f"Saved to\n{path}\n\nRatings, collections, settings and key "
+                "bindings are all in it.")
+
+    def _do_restore(self):
+        path, _ = QFileDialog.getOpenFileName(
+            self._tmp_parent, "Restore a backup",
+            os.path.expanduser("~"), "Zip archive (*.zip)")
+        if not path:
+            return
+        reply = QMessageBox.question(
+            self._tmp_parent, "Restore",
+            "Replace the current ratings, collections, settings and key "
+            "bindings with the ones in this backup?\n\n"
+            f"{APP_NAME} has to be restarted afterwards.",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No)
+        if reply != QMessageBox.StandardButton.Yes:
+            return
+        try:
+            done = restore_state(path, self._renderer.state_paths())
+        except Exception as e:
+            QMessageBox.warning(self._tmp_parent, "Restore", f"Failed: {e}")
+            return
+        if not done:
+            QMessageBox.warning(
+                self._tmp_parent, "Restore",
+                "That zip holds none of this application's files.")
+            return
+        QMessageBox.information(
+            self._tmp_parent, "Restore",
+            f"Restored {len(done)} file(s).\n\nClose and reopen "
+            f"{APP_NAME} for them to take effect.")
 
     def _open_clips(self):
         d = clips_dir()
@@ -3307,6 +3653,46 @@ class ContextMenu(QMenu):
             none = QAction("(no capture devices found)", sub)
             none.setEnabled(False)
             sub.addAction(none)
+
+        # Level meter. The commonest first-run failure is a source that
+        # captures nothing -- a microphone instead of the speakers, an output
+        # nothing is playing through -- and the symptom is visuals that look
+        # alive but never react. There is no way to tell that apart from a
+        # quiet track without a number, so here is the number.
+        sub.addSeparator()
+        meter_row = QWidget()
+        meter_l = QHBoxLayout(meter_row)
+        meter_l.setContentsMargins(14, 4, 14, 4)
+        meter_l.setSpacing(8)
+        meter_lbl = QLabel("🎚 Level")
+        meter_lbl.setStyleSheet(f"color:{theme_colour('fg')};"
+                                "font-size:12px;min-width:130px;")
+        meter = QProgressBar()
+        meter.setRange(0, 100)
+        meter.setTextVisible(False)
+        meter.setFixedWidth(160)
+        meter.setFixedHeight(10)
+        meter_l.addWidget(meter_lbl)
+        meter_l.addWidget(meter)
+        mwa = QWidgetAction(sub)
+        mwa.setDefaultWidget(meter_row)
+        sub.addAction(mwa)
+
+        def tick():
+            try:
+                v = int(min(1.0, self._renderer.audio_level()) * 100)
+            except Exception:
+                v = 0
+            meter.setValue(v)
+            meter_lbl.setText("🎚 Level" if v else "🎚 Level — silent")
+
+        # Parented to the row so it dies with the menu, same as the save timer
+        # below. 80ms is fast enough to look live and slow enough that a menu
+        # left open costs nothing.
+        meter_timer = QTimer(meter_row)
+        meter_timer.timeout.connect(tick)
+        meter_timer.start(80)
+        tick()
 
         # Sensitivity. Live while dragging so the effect is visible against
         # the running visuals; written to config only on release, because
@@ -3546,7 +3932,8 @@ class _Recorder(threading.Thread):
     #: once it is running. See _grace().
     STARTUP_S, STARTUP_WAIT, RUNNING_WAIT = 2.0, 0.5, 0.005
 
-    def __init__(self, path: str, size: tuple, fps: int, kind: str = "mp4"):
+    def __init__(self, path: str, size: tuple, fps: int, kind: str = "mp4",
+                 audio_rate: int = 0):
         super().__init__(daemon=True)
         import queue
         self.path    = path
@@ -3559,6 +3946,18 @@ class _Recorder(threading.Thread):
         self.frames  = 0
         self.dropped = 0
         self.error   = ""
+        #: Something went wrong that did NOT cost the clip -- the sound, most
+        #: likely. Kept apart from error so a saved file is never reported as
+        #: a failed recording.
+        self.warning = ""
+        #: Sound is a second file, muxed in at the end -- see _mux_audio.
+        #: A GIF has no audio track, so it never asks for one.
+        self._audio_rate = int(audio_rate) if kind == "mp4" else 0
+        self._wav = None
+        self._wav_lock = threading.Lock()
+        #: Where the video goes while sound is being recorded, before the two
+        #: are joined into self.path.
+        self._video_path = (path + ".video.mp4") if self._audio_rate else path
 
     # ── ffmpeg ────────────────────────────────────────────────────────────
 
@@ -3579,13 +3978,13 @@ class _Recorder(threading.Thread):
                 "-filter_complex",
                 "[0:v]vflip,fps=15,scale=480:-2:flags=lanczos,split[a][b];"
                 "[a]palettegen=stats_mode=diff[p];[b][p]paletteuse=dither=bayer",
-                "-loop", "0", self.path]
+                "-loop", "0", self._video_path]
         # trunc(/2)*2 because H.264 will not take an odd width or height, and
         # the window is whatever the user dragged it to.
         return base + [
             "-vf", "vflip,scale=trunc(iw/2)*2:trunc(ih/2)*2",
         ] + video_codec_args(ffmpeg) + [
-            "-pix_fmt", "yuv420p", "-movflags", "+faststart", self.path]
+            "-pix_fmt", "yuv420p", "-movflags", "+faststart", self._video_path]
 
     def start_encoder(self) -> str:
         """Spawn ffmpeg. Returns "" on success, else the reason it failed."""
@@ -3606,9 +4005,127 @@ class _Recorder(threading.Thread):
             )
         except Exception as e:
             return f"could not start ffmpeg: {e}"
-        self._t0 = _time.monotonic()
+        self._t0 = self._t_last = _time.monotonic()
+        self._open_wav()
         self.start()
         return ""
+
+    # ── Sound ─────────────────────────────────────────────────────────────
+
+    def _wav_path(self) -> str:
+        return self.path + ".audio.wav"
+
+    def _open_wav(self):
+        """A plain 16-bit WAV beside the video, filled by the capture thread.
+
+        Not a second pipe into the same ffmpeg: passing an extra file
+        descriptor is POSIX-only, and a named pipe on Windows is a lot of
+        machinery for a file that is a few megabytes. Muxing at the end costs
+        one remux -- the video is stream-copied, never re-encoded.
+        """
+        if not self._audio_rate:
+            return
+        import wave
+        try:
+            w = wave.open(self._wav_path(), "wb")
+            w.setnchannels(2)
+            w.setsampwidth(2)
+            w.setframerate(self._audio_rate)
+            self._wav = w
+        except Exception as e:
+            print(f"[record] no sound: {e}", flush=True)
+            self._wav = None
+
+    def write_audio(self, chunk):
+        """One captured chunk. Called on the audio backend's thread."""
+        if self._wav is None:
+            return
+        try:
+            pcm = (np.clip(chunk, -1.0, 1.0) * 32767.0).astype("<i2").tobytes()
+        except Exception:
+            return
+        with self._wav_lock:
+            w = self._wav
+            if w is None:
+                return
+            try:
+                w.writeframes(pcm)
+            except Exception:
+                pass
+
+    def _close_wav(self) -> int:
+        """Close the WAV and return how many sample frames it holds."""
+        with self._wav_lock:
+            w, self._wav = self._wav, None
+        if w is None:
+            return 0
+        try:
+            n = w.getnframes()
+            w.close()
+            return n
+        except Exception:
+            return 0
+
+    def _timestamp_scale(self) -> float:
+        """How much the video's timestamps have to stretch to match real time.
+
+        ffmpeg is told a constant frame rate, so a clip that dropped frames is
+        shorter than the wall clock it covered -- and the sound, which is
+        captured in real time, would run ahead of it. Measured against the
+        frames that actually reached the encoder, and applied with -itsscale,
+        which retimes without re-encoding anything.
+        """
+        if self.frames < 2:
+            return 1.0
+        nominal = (self.frames - 1) / float(self._fps)
+        wall = self._t_last - self._t0
+        if nominal <= 0 or wall <= 0:
+            return 1.0
+        scale = wall / nominal
+        # Outside this range something other than dropped frames is wrong --
+        # a stalled encoder, a clock jump -- and stretching to match it would
+        # turn a slightly short clip into an unwatchable one.
+        return scale if 0.5 <= scale <= 4.0 else 1.0
+
+    def _mux_audio(self) -> str:
+        """Join the temp video and WAV into self.path. "" or the failure."""
+        wav = self._wav_path()
+        video = self._video_path
+        try:
+            if not os.path.isfile(video):
+                return "no video was written"
+            ffmpeg = find_ffmpeg()
+            if not ffmpeg or self._close_wav() == 0:
+                # No sound to add. The video already is the clip.
+                os.replace(video, self.path)
+                return ""
+            cmd = [ffmpeg, "-y", "-loglevel", "error",
+                   "-itsscale", f"{self._timestamp_scale():.6f}", "-i", video,
+                   "-i", wav,
+                   "-map", "0:v:0", "-map", "1:a:0",
+                   "-c:v", "copy", "-c:a", "aac", "-b:a", "192k",
+                   "-shortest", "-movflags", "+faststart", self.path]
+            r = _subprocess.run(
+                cmd, capture_output=True, text=True, timeout=120,
+                env=child_env(),
+                creationflags=(_subprocess.CREATE_NO_WINDOW
+                               if sys.platform == "win32" else 0))
+            if r.returncode != 0 or not os.path.isfile(self.path):
+                # Keep the silent video rather than losing the recording. A
+                # warning, not an error: the clip is on disk either way.
+                os.replace(video, self.path)
+                tail = (r.stderr or "").strip().splitlines()
+                self.warning = ("saved without sound: "
+                                f"{tail[-1] if tail else 'mux failed'}")
+            return ""
+        finally:
+            self._close_wav()
+            for junk in (wav, video):
+                if junk != self.path:
+                    try:
+                        os.remove(junk)
+                    except OSError:
+                        pass
 
     # ── Producer side (render thread) ─────────────────────────────────────
 
@@ -3628,6 +4145,7 @@ class _Recorder(threading.Thread):
                 else self.RUNNING_WAIT)
 
     def submit(self, frame: bytes):
+        self._t_last = _time.monotonic()
         try:
             self._q.put(frame, timeout=self._grace())
         except Exception:
@@ -3642,6 +4160,12 @@ class _Recorder(threading.Thread):
                 self._proc.wait(timeout=timeout)
             except Exception:
                 self._proc.kill()
+        if self._audio_rate and not self.error:
+            # Only when the video came out clean: muxing onto a broken file
+            # would replace a diagnosable failure with a confusing one.
+            self.error = self._mux_audio()
+        else:
+            self._close_wav()
         return self.error
 
     # ── Consumer side ─────────────────────────────────────────────────────
@@ -3808,6 +4332,16 @@ def thumbs_dir() -> str:
     return os.path.join(user_data_dir(), "thumbs")
 
 
+def collections_path() -> str:
+    """Where named collections live.
+
+    The data directory, not the config one, and deliberately not a per-app
+    path handed down by a subclass: a collection is a list of preset names,
+    which means the same thing to anything that plays the same library.
+    """
+    return os.path.join(user_data_dir(), "collections.json")
+
+
 def thumb_path(preset_name: str) -> str:
     """Cache path for one preset's thumbnail.
 
@@ -3879,6 +4413,152 @@ def thumb_writer() -> "_ThumbWriter":
         _THUMB_WRITER = _ThumbWriter()
         _THUMB_WRITER.start()
     return _THUMB_WRITER
+
+
+# ─── idle pause ───────────────────────────────────────────────────────────────
+
+#: SHQueryUserNotificationState answers. Only two of them mean "somebody is
+#: using this screen for something else", and those are the two worth pausing
+#: for: a full-screen Direct3D application (a game) and a full-screen window
+#: with presentation mode on.
+_QUNS_BUSY, _QUNS_RUNNING_D3D_FULL_SCREEN, _QUNS_PRESENTATION_MODE = 1, 2, 3
+
+
+def fullscreen_app_running() -> bool:
+    """Is something else running full-screen right now? Windows only.
+
+    Nothing equivalent exists on Linux: a full-screen window there is an
+    ordinary window with a hint set, and asking every window about it from
+    another process is neither cheap nor reliable. So the answer off Windows
+    is False, and the silence timer is what pauses instead.
+    """
+    if sys.platform != "win32":
+        return False
+    try:
+        state = ctypes.c_int(0)
+        # S_OK is 0. Any failure leaves state at 0, which is not one of the
+        # busy values, so a broken call reads as "not busy" rather than
+        # freezing the visuals.
+        if ctypes.WinDLL("shell32").SHQueryUserNotificationState(
+                ctypes.byref(state)) != 0:
+            return False
+        return state.value in (_QUNS_BUSY, _QUNS_RUNNING_D3D_FULL_SCREEN,
+                               _QUNS_PRESENTATION_MODE)
+    except Exception:
+        return False
+
+
+#: What "pause_when_idle" may be set to, and what the settings dialog offers.
+IDLE_MODES = (("wallpaper", "Only as desktop wallpaper"),
+              ("always",    "Always"),
+              ("never",     "Never"))
+
+
+def should_idle(mode: str, wallpaper: bool, silent_for: float,
+                silence_after: float, fullscreen_app: bool) -> bool:
+    """Whether the render loop should stop drawing.
+
+    Split out as a plain function because the reasons to pause are a policy
+    question and the render loop is not testable without a GPU.
+
+    The default scope is wallpaper mode alone. A visualiser someone is
+    watching must not freeze because the track ended -- projectM animates
+    without audio, and stopping that looks like a crash. A wallpaper that
+    keeps a GPU busy behind a full-screen game is the actual complaint.
+    """
+    if mode == "never" or (mode != "always" and not wallpaper):
+        return False
+    if fullscreen_app:
+        return True
+    return silence_after > 0 and silent_for >= silence_after
+
+
+#: Peak sample below which a chunk counts as silence. Not zero: a live
+#: loopback capture of a stopped player still carries dither and the odd
+#: denormal, and projectM makes nothing of either.
+SILENCE_PEAK = 0.002
+
+
+# ─── start at login ───────────────────────────────────────────────────────────
+
+#: Registry value name on Windows, and the .desktop basename on Linux. Fixed,
+#: so turning the setting off finds the entry turning it on wrote.
+_AUTOSTART_KEY = r"Software\Microsoft\Windows\CurrentVersion\Run"
+
+
+def autostart_command(wallpaper: bool = False) -> str:
+    """The command line an autostart entry should run.
+
+    A frozen build is its own executable. A source checkout is the interpreter
+    plus main.py, which is worth supporting: it is how this gets tested at all.
+    """
+    if getattr(sys, "frozen", False):
+        parts = [sys.executable]
+    else:
+        main = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                            "main.py")
+        parts = [sys.executable, main]
+    if wallpaper:
+        parts.append("--wallpaper")
+    return " ".join(f'"{p}"' if " " in p else p for p in parts)
+
+
+def autostart_enabled() -> bool:
+    """Is there an autostart entry for this app? The OS is the truth here."""
+    try:
+        if sys.platform == "win32":
+            import winreg
+            with winreg.OpenKey(winreg.HKEY_CURRENT_USER, _AUTOSTART_KEY) as k:
+                winreg.QueryValueEx(k, APP_NAME)
+            return True
+        return os.path.isfile(_autostart_desktop_path())
+    except Exception:
+        return False
+
+
+def _autostart_desktop_path() -> str:
+    root = os.environ.get("XDG_CONFIG_HOME") or os.path.expanduser("~/.config")
+    return os.path.join(root, "autostart", f"{APP_SLUG}.desktop")
+
+
+def set_autostart(on: bool, wallpaper: bool = False) -> str:
+    """Add or remove the login entry. Returns "" or the reason it failed.
+
+    Per-user in both cases -- HKCU and ~/.config/autostart -- so it never needs
+    elevation and never touches anyone else's login.
+    """
+    try:
+        if sys.platform == "win32":
+            import winreg
+            with winreg.CreateKey(winreg.HKEY_CURRENT_USER,
+                                  _AUTOSTART_KEY) as k:
+                if on:
+                    winreg.SetValueEx(k, APP_NAME, 0, winreg.REG_SZ,
+                                      autostart_command(wallpaper))
+                else:
+                    try:
+                        winreg.DeleteValue(k, APP_NAME)
+                    except FileNotFoundError:
+                        pass
+            return ""
+        path = _autostart_desktop_path()
+        if not on:
+            try:
+                os.remove(path)
+            except FileNotFoundError:
+                pass
+            return ""
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "w", encoding="utf-8") as f:
+            f.write("[Desktop Entry]\n"
+                    "Type=Application\n"
+                    f"Name={APP_NAME}\n"
+                    f"Exec={autostart_command(wallpaper)}\n"
+                    "Terminal=false\n"
+                    "X-GNOME-Autostart-enabled=true\n")
+        return ""
+    except Exception as e:
+        return str(e)
 
 
 # ─── renderer ─────────────────────────────────────────────────────────────────
@@ -4022,6 +4702,7 @@ class Renderer:
         self._req_fullscreen             = False  # toggle fullscreen
         self._req_record                 = None   # 'mp4' | 'gif' | 'stop'
         self._req_wallpaper              = None   # True/False: be the desktop
+        self._req_collection             = None   # name to play, "" = all
         self._rated                      = False  # favorite (rating-weighted) shuffle
         self._rated_history              = deque(maxlen=200)  # native indices for rated prev
 
@@ -4061,6 +4742,21 @@ class Renderer:
         self._wp_host    = None    # (hwnd, style) of a WorkerW we clipped
         self._wp_restore = None    # (x, y, w, h, borderless) to come back to
         self._thumb_done = True    # one attempt per preset; see _maybe_thumbnail
+        #: Idle pause. _last_sound is when audio was last above SILENCE_PEAK,
+        #: _idle whether the loop is currently not drawing, and _idle_since
+        #: when it stopped -- the preset clock is pushed forward by that much
+        #: on the way out, or a paused wallpaper would come back having
+        #: "played" through a hundred presets it never showed.
+        self._last_sound = 0.0
+        self._idle = False
+        self._idle_since = 0.0
+        self._fs_app = False
+        self._fs_app_checked = 0.0
+        #: Name of the collection being played, or "" for the whole library.
+        self._collection = ""
+        #: Loaded on first use, not here: this runs before the data directory
+        #: is known to exist and a menu is the only thing that ever asks.
+        self._collections = None
 
         self._audio = AudioCapture(cfg.get("audio_device", ""))
         self._audio.set_gain(cfg.get("audio_gain", 1.0))
@@ -4449,6 +5145,117 @@ class Renderer:
             self._req_reload = True
         return deleted
 
+    # ── Collections ───────────────────────────────────────────────────────
+    #
+    # A rating says how good a preset is. A collection says what it is for --
+    # "chill", "party", "the one with the tunnels" -- which is the axis a 0-10
+    # number cannot carry, and the reason a library of ten thousand still
+    # needs sorting after everything has been rated.
+    #
+    # Playing one is a playlist rebuild and nothing more, so the browser, the
+    # search box, sort, shuffle and delete-0★ all narrow to it for free.
+
+    def collections(self) -> dict:
+        """{name: [preset stem, ...]}, read from disk once per process."""
+        if getattr(self, "_collections", None) is None:
+            self._collections = load_collections_from(collections_path())
+        return self._collections
+
+    def _write_collections(self):
+        save_collections_to(collections_path(), self.collections())
+
+    def collection(self) -> str:
+        """Name of the collection being played, or "" for the whole library."""
+        return self._collection
+
+    def create_collection(self, name: str) -> bool:
+        name = (name or "").strip()
+        if not name or name in self.collections():
+            return False
+        self.collections()[name] = []
+        self._write_collections()
+        return True
+
+    def delete_collection(self, name: str):
+        if self.collections().pop(name, None) is None:
+            return
+        self._write_collections()
+        if self._collection == name:
+            self.play_collection("")
+
+    def add_to_collection(self, name: str, stem: str) -> bool:
+        """Returns False when it was already there, so the caller can say so."""
+        members = self.collections().setdefault(name, [])
+        if not stem or stem in members:
+            return False
+        members.append(stem)
+        self._write_collections()
+        return True
+
+    def remove_from_collection(self, name: str, stem: str) -> bool:
+        members = self.collections().get(name)
+        if not members or stem not in members:
+            return False
+        members.remove(stem)
+        self._write_collections()
+        # The playlist is only rebuilt when the collection being played
+        # changed; anything else would interrupt a preset to remove a
+        # different one.
+        if self._collection == name:
+            with self._lock:
+                self._req_collection = name
+        return True
+
+    def play_collection(self, name: str = ""):
+        """Play only this collection, or "" for the whole library."""
+        with self._lock:
+            self._req_collection = name or ""
+
+    def current_preset_stem(self) -> str:
+        try:
+            return self._pm.current_preset_name() or ""
+        except Exception:
+            return ""
+
+    def _do_play_collection(self, name: str):
+        """Render thread. Rebuild the playlist from a collection, or all."""
+        if name and name not in self.collections():
+            name = ""
+        self._collection = name
+        files = self._all_preset_files()
+        if name and not files:
+            # An empty collection would leave a black window with no
+            # explanation, and the way back out is a menu two levels deep.
+            self._collection = ""
+            self._bridge.status_message.emit(
+                f"“{name}” has nothing in it yet")
+            return
+        if not files:
+            self._bridge.status_message.emit("No presets found")
+            return
+        files.sort(key=lambda ps: ps[1].lower())
+        cur = self.current_preset_stem()
+        self._rebuild_playlist([f for f, _ in files])
+        self._shuffle = False
+        self._rated_history.clear()      # native indices changed
+        self._seek_to_stem(cur)
+        self._bridge.status_message.emit(
+            f"Collection: {name} — {len(files)} presets" if name
+            else f"All presets — {len(files)}")
+        self._bridge.playlist_changed.emit()
+        self._emit_current_preset()
+
+    # ── Backup ────────────────────────────────────────────────────────────
+
+    def state_paths(self) -> dict:
+        """{name inside the backup: file on disk}. Subclasses add their own.
+
+        Only collections here, because that is the one file whose location
+        this class decides. Config, ratings and keymaps live wherever the
+        concrete app put them.
+        """
+        return {"collections.json": collections_path()}
+
     def is_locked(self) -> bool:
         return self._locked
 
@@ -4654,6 +5461,27 @@ class Renderer:
                 if self._req_reload:
                     self._req_reload = False
                     self._do_reload_playlist()
+                if self._req_collection is not None:
+                    name = self._req_collection
+                    self._req_collection = None
+                    self._do_play_collection(name)
+
+            # ── Idle pause ────────────────────────────────────────────────
+            # Above auto-advance, not below it: a paused wallpaper that still
+            # rotates is worse than one that does not pause at all -- it comes
+            # back having silently played a hundred presets nobody saw, and
+            # measuring it live is the only way this showed up. The level is
+            # updated on the capture thread, so it is still current in here.
+            if self._audio.level() > SILENCE_PEAK:
+                self._last_sound = _time.monotonic()
+            if self._check_idle():
+                # Keep popping, or the ring buffer hands projectM a stale
+                # chunk the moment the music comes back. No render and no
+                # swap: the window keeps the last frame it drew, which as a
+                # wallpaper is simply a still picture.
+                self._audio.get_chunk()
+                _time.sleep(0.15)
+                continue
 
             # ── Auto-advance ──────────────────────────────────────────────
             if not self._locked:
@@ -4737,6 +5565,8 @@ class Renderer:
             self._do_toggle_mode()
         elif km("toggle_borderless", sym, scancode):
             self._toggle_borderless()
+        elif km("exclude", sym, scancode):
+            self.request_exclude()
         elif km("toggle_wallpaper", sym, scancode):
             # Only ever turns it on from here: once the window is a desktop
             # child it gets no keyboard, so the key cannot toggle it back --
@@ -4834,14 +5664,25 @@ class Renderer:
     # ── Preset management (sort / delete-zero / reset ratings) ─────────────
 
     def _all_preset_files(self):
-        """[(full_path, stem), …] for every .milk under the preset dir."""
+        """[(full_path, stem), …] for the presets in play.
+
+        Narrowed to the active collection when there is one, which is what
+        makes sort, shuffle and delete-0★ act on the collection rather than
+        silently dragging the whole library back in.
+        """
         import glob
         from pathlib import Path
         preset_dir = self._cfg.get("preset_dir", "")
         if not preset_dir:
             return []
         files = glob.glob(os.path.join(preset_dir, "**", "*.milk"), recursive=True)
-        return [(f, Path(f).stem) for f in files]
+        pairs = [(f, Path(f).stem) for f in files]
+        members = self.collections().get(self._collection) if self._collection \
+            else None
+        if members is None:
+            return pairs
+        want = set(members)
+        return [ps for ps in pairs if ps[1] in want]
 
     def _rebuild_playlist(self, paths):
         """Clear the playlist and re-add `paths` in the given order (shuffle off,
@@ -5330,6 +6171,46 @@ class Renderer:
 
     # ── Recording ─────────────────────────────────────────────────────────
 
+    #: How often the "is a game running" question is asked. It is a shell
+    #: call, and the answer cannot change usefully faster than this.
+    FS_APP_POLL_S = 2.0
+
+    def _check_idle(self) -> bool:
+        """Should this frame be skipped? Updates the idle state as it goes."""
+        if self._rec is not None:
+            # Never while recording. The sound tap keeps running whatever this
+            # loop does, so a pause would leave a clip whose audio is minutes
+            # longer than its video.
+            return False
+        now = _time.monotonic()
+        if now - self._fs_app_checked >= self.FS_APP_POLL_S:
+            self._fs_app_checked = now
+            self._fs_app = fullscreen_app_running()
+        if not self._last_sound:
+            self._last_sound = now      # first pass: nothing has been quiet yet
+        idle = should_idle(
+            str(self._cfg.get("pause_when_idle", "wallpaper")),
+            self._wallpaper,
+            now - self._last_sound,
+            float(self._cfg.get("idle_silence_seconds", 20)),
+            self._fs_app)
+        if idle and not self._idle:
+            self._idle, self._idle_since = True, now
+            print("[idle] paused", flush=True)
+        elif not idle and self._idle:
+            self._idle = False
+            # Give the current preset back the time it did not get to play.
+            self._preset_start += now - self._idle_since
+            print("[idle] resumed", flush=True)
+        return self._idle
+
+    def audio_level(self) -> float:
+        """Peak of the last captured chunk, for the menu's level meter."""
+        try:
+            return self._audio.level()
+        except Exception:
+            return 0.0
+
     def request_record(self, kind: str = "mp4"):
         """Start recording, or stop the one running (render thread)."""
         with self._lock:
@@ -5367,7 +6248,8 @@ class Renderer:
         w, h, _ = grab
         stamp = _time.strftime("%Y-%m-%d_%H-%M-%S")
         path  = os.path.join(clips_dir(), f"{APP_SLUG}_{stamp}.{kind}")
-        rec   = _Recorder(path, (w, h), self._rec_fps, kind)
+        rec   = _Recorder(path, (w, h), self._rec_fps, kind,
+                          audio_rate=self._audio.rate())
         why   = rec.start_encoder()
         if why:
             print(f"[record] {why}", flush=True)
@@ -5376,6 +6258,10 @@ class Renderer:
         self._rec      = rec
         self._rec_size = (w, h)
         self._rec_last = 0.0
+        # Straight off the capture backend, not off the render loop: the loop
+        # pops one chunk per frame and the backend pushes about 86 a second,
+        # so a clip built from what the loop sees would be a third short.
+        self._audio.set_tap(rec.write_audio)
         print(f"[record] recording to {path}", flush=True)
         self._bridge.show_toast.emit(
             f"⏺  Recording {kind.upper()} — press the record key again to stop")
@@ -5384,12 +6270,16 @@ class Renderer:
         rec, self._rec, self._rec_size = self._rec, None, None
         if rec is None:
             return
+        self._audio.set_tap(None)
         err = rec.finish()
         if err:
             print(f"[record] {err}", flush=True)
             self._bridge.show_toast.emit(f"Recording failed: {err}")
             return
         note = f"  ({rec.dropped} frames dropped)" if rec.dropped else ""
+        if rec.warning:
+            print(f"[record] {rec.warning}", flush=True)
+            note += f"  — {rec.warning}"
         print(f"[record] wrote {rec.path}  {rec.frames} frames{note}",
               flush=True)
         self._bridge.show_toast.emit(
@@ -5507,6 +6397,30 @@ class Renderer:
         print(f"[renderer] Rated '{name}': {new_r}/10{suffix}")
         self._bridge.preset_changed.emit(name, new_r)
         self._bridge.show_toast.emit(toast)
+
+    def request_exclude(self):
+        """Rate the current preset 0★ and move on. Safe from the Qt thread.
+
+        Rating 0 is already what keeps a preset out of the random and rated
+        rotations; this is the one keystroke that gets there, because holding
+        the rate-down key five times to bury something you never want to see
+        again is what makes people delete files instead.
+        """
+        try:
+            name = self._pm.current_preset_name()
+            if not name:
+                return
+            set_preset_rating(self._ratings, name, 0)
+            self._save_ratings(self._ratings)
+            self._bridge.preset_changed.emit(name, 0)
+            self._bridge.show_toast.emit(
+                f"Excluded  {name}\nRate it up again to bring it back")
+            print(f"[renderer] Excluded '{name}'", flush=True)
+        except Exception as e:
+            print(f"[renderer] exclude failed: {e}", flush=True)
+            return
+        with self._lock:
+            self._req_next = True
 
     # ── Emit helpers ──────────────────────────────────────────────────────
 

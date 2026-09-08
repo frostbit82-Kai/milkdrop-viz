@@ -89,8 +89,9 @@ the only way to see why a frozen build failed.
 
 `test_*.py` in the repo root, each runnable on its own with
 `QT_QPA_PLATFORM=offscreen`: `browser_search`, `browser_title`, `display_picker`,
-`recording` (needs ffmpeg and ffprobe), `thumbnails`, `screensaver`, `wallpaper`,
-`packs`, `settings_diff`, `shuffle`, `theme`. All eleven must pass before a release.
+`recording` (needs ffmpeg and ffprobe), `clip_audio` (same), `thumbnails`,
+`screensaver`, `wallpaper`, `packs`, `settings_diff`, `shuffle`, `theme`,
+`idle_pause`, `collections`, `backup`. All fifteen must pass before a release.
 
 There is no display in an agent shell and SDL needs one, so:
 
@@ -477,6 +478,43 @@ There is no display in an agent shell and SDL needs one, so:
   screen saver" before choosing a preset folder got the Get Presets dialog over
   the fullscreen visualiser — unanswerable, because any input ends a
   screensaver.
+- **The idle pause has to be checked above auto-advance, not below it.** Below
+  it, a paused wallpaper stops *drawing* but goes on rotating presets — it
+  comes back on a preset it never showed, having burned through a hundred
+  nobody saw. Nothing in the offscreen tests can see loop order, and it only
+  showed up under Xvfb with the log open, so `test_idle_pause` asserts the
+  order of the three section markers in `Renderer.run` as well as the policy.
+- **The render loop sees about a third of the captured audio.** It pops one
+  chunk per frame and the backend pushes roughly 86 a second, so at 60fps the
+  ring buffer (`deque(maxlen=8)`) drops the rest — which is fine for driving
+  projectM and useless for recording. Sound for a clip comes off
+  `AudioCapture.set_tap`, straight from the capture thread. A recording built
+  out of `get_chunk()` would be silently short, and short in a way that only
+  shows up as drift near the end.
+- **A recorded clip's video is a constant frame rate and its audio is not.**
+  ffmpeg is told `-framerate`, so a clip that dropped frames is shorter than
+  the wall clock it covered and the sound runs ahead of the picture.
+  `_timestamp_scale()` measures the two against each other and the mux applies
+  it with `-itsscale`, which retimes without re-encoding — the video is
+  stream-copied. A ratio outside 0.5-4.0 is ignored: that is a stalled encoder
+  or a clock jump, and stretching to match it makes things worse.
+- **A clip's sound is muxed on at the end, not piped in alongside the frames.**
+  Two pipes into one ffmpeg means passing an extra file descriptor, which is
+  POSIX-only, or a named pipe on Windows. The WAV-then-remux route costs one
+  fast pass and works the same on both.
+- **Idle pause never engages while recording.** The sound tap keeps running
+  whatever the render loop does, so a pause mid-clip leaves audio minutes
+  longer than the video.
+- **"Start at login" is applied in `SettingsDialog.accept()`.** A deliberate
+  side effect in a dialog: the checkbox shows the state of the registry (or
+  `~/.config/autostart`), not of config.json, so `_opened_with["autostart"]` is
+  seeded from `autostart_enabled()` — otherwise every OK rewrites the entry.
+  Both callers of the dialog get it for free, including the screensaver's `/c`
+  branch, which has no renderer to route it through.
+- **Collections narrow `_all_preset_files()`, and that is the whole feature.**
+  Sort, shuffle, delete-0★ and the browser all go through that one method, so
+  none of them has to know collections exist. A member that is no longer on
+  disk is simply absent — delete-0★ removes files from inside this very app.
 - **Git Bash rewrites a lone `/p` or `/c` into a Windows path.** MSYS2 path
   conversion turns `app.scr /c` into `app.scr C:/`, so the screensaver argument
   tests appear to fail when the app is fine. Drive those from PowerShell, or

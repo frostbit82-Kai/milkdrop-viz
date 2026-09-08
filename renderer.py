@@ -58,5 +58,20 @@ class Renderer(_BaseRenderer):
     def _create_projectm(self):
         return load_projectm(config_dir=_CONFIG_DIR)
 
+    def state_paths(self) -> dict:
+        """Everything a backup should carry. Collections come from the base.
+
+        Named by basename inside the zip rather than by full path, so a backup
+        taken on Windows restores on Linux and a source checkout's backup
+        restores into an installed build.
+        """
+        paths = super().state_paths()
+        paths.update({
+            "config.json":  str(CONFIG_PATH),
+            "ratings.json": str(RATINGS_PATH),
+            "keymaps.json": str(KEYMAPS_PATH),
+        })
+        return paths
+
 
 __all__ = ["Renderer"]
