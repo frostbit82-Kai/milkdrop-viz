@@ -91,7 +91,8 @@ the only way to see why a frozen build failed.
 `QT_QPA_PLATFORM=offscreen`: `browser_search`, `browser_title`, `display_picker`,
 `recording` (needs ffmpeg and ffprobe), `clip_audio` (same), `thumbnails`,
 `screensaver`, `wallpaper`, `packs`, `settings_diff`, `shuffle`, `theme`,
-`idle_pause`, `collections`, `backup`. All fifteen must pass before a release.
+`idle_pause`, `collections`, `backup`, `tweak`. All sixteen must pass before a
+release.
 
 There is no display in an agent shell and SDL needs one, so:
 
@@ -515,6 +516,37 @@ There is no display in an agent shell and SDL needs one, so:
   Sort, shuffle, delete-0★ and the browser all go through that one method, so
   none of them has to know collections exist. A member that is no longer on
   disk is simply absent — delete-0★ removes files from inside this very app.
+- **Preset tweaking rides on `projectm_load_preset_data`, and half the sliders
+  are inert without `preset_driven_keys`.** A preset that sets `zoom` from its
+  own per-frame code overwrites the file's value before the first pixel is
+  drawn — true of **49% of the 9,795-preset library, measured** — so a slider
+  for it would move and do nothing, which reads as a broken feature. The panel
+  greys those and says why. Note the ini name and the shader name differ:
+  `fDecay` in the file is `decay` in the equations, and `PRESET_TWEAKS` carries
+  both because looking for the ini spelling in the code would never match.
+- **Swapping a texture never writes to the texture pack.** The picture goes in
+  `user_data_dir()/texture-overrides`, which `_apply_texture_paths()` puts
+  **first**; libprojectM scans its search paths in order and the first file
+  whose *stem* matches wins, so the override stands in front of the stock file
+  and Restore is one `os.remove`. The pack is 8,000 files of other people's
+  work that the user downloaded separately — overwriting into it would be
+  undoable only by re-downloading 2.5 GB. Matching is by stem, so a `.png`
+  replaces a stock `.jpg`; never leave two files with one stem in there.
+- **Textures resolve when a preset loads, so a swap shows nothing until it
+  reloads.** `_do_reset_textures` re-applies the paths (the override directory
+  does not exist until the first swap, and non-existent paths are filtered
+  out), calls `projectm_reset_textures`, then reloads the preset text. Miss the
+  reload and a swap looks like it needs a restart.
+- **`load_preset_data` compiles shaders, so it is render-thread only.** The
+  browser's panel hands text over through `_req_preset_data`, debounced at
+  120 ms — one recompile per drag step is far too many — and the reload is a
+  hard cut, because blending each step turns a drag into a smear.
+- **A rig restarted without re-exporting `XDG_DATA_HOME` writes to the real
+  data directory.** The isolation is in the launcher script, not in the app, so
+  restarting the app by hand from another shell silently drops it — a texture
+  override landed in the live `~/.local/share/BomsAIVisualizer` that way. Same
+  family as the symlink trap above: check where the app actually wrote before
+  believing a rig is isolated.
 - **Git Bash rewrites a lone `/p` or `/c` into a Windows path.** MSYS2 path
   conversion turns `app.scr /c` into `app.scr C:/`, so the screensaver argument
   tests appear to fail when the app is fine. Drive those from PowerShell, or

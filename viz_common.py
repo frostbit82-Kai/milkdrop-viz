@@ -1499,6 +1499,31 @@ class ProjectM4:
                                                  ctypes.c_char_p,
                                                  ctypes.c_bool]
 
+        # Load a preset from a string rather than a file. This is what makes
+        # editing one possible at all: the text can be patched and played back
+        # without ever being written to disk, so nothing is risked until Save.
+        # Guarded because it is optional -- an older libprojectM without it
+        # simply has no tweak feature rather than no application.
+        try:
+            C.projectm_load_preset_data.restype  = None
+            C.projectm_load_preset_data.argtypes = [ctypes.c_void_p,
+                                                     ctypes.c_char_p,
+                                                     ctypes.c_bool]
+            self.can_load_data = True
+        except AttributeError:
+            self.can_load_data = False
+            print("[projectm_wrapper] projectm_load_preset_data missing — "
+                  "live preset tweaking is unavailable")
+
+        # Drops the scanned texture list, so a texture swapped on disk is
+        # picked up without recreating the whole projectM instance.
+        try:
+            C.projectm_reset_textures.restype  = None
+            C.projectm_reset_textures.argtypes = [ctypes.c_void_p]
+            self.can_reset_textures = True
+        except AttributeError:
+            self.can_reset_textures = False
+
         # Preset-switched callback (used to track current name)
         C.projectm_set_preset_switch_requested_event_callback.restype  = None
         C.projectm_set_preset_switch_requested_event_callback.argtypes = [
@@ -1678,6 +1703,49 @@ class ProjectM4:
             path = self._preset_files[index].encode()
             self._core.projectm_load_preset_file(self._pm, path, True)
 
+    def current_preset_path(self) -> str:
+        """Full path of the preset playing, or "" when it cannot be known.
+
+        current_preset_name() takes the stem of this same string, because that
+        is what ratings and thumbnails are keyed by. Editing needs the file.
+        """
+        try:
+            if self._pl and self._playlist:
+                pos = self._playlist.projectm_playlist_get_position(self._pl)
+                raw = self._playlist.projectm_playlist_item(self._pl, pos)
+                if raw:
+                    return raw.decode(errors="replace")
+            elif self._preset_files:
+                return self._preset_files[self._preset_index]
+        except Exception:
+            pass
+        return ""
+
+    def load_preset_data(self, text: str, smooth: bool = False) -> bool:
+        """Play a preset held in a string. Render thread only -- it compiles
+        shaders, which needs the GL context."""
+        if not self._pm or not getattr(self, "can_load_data", False):
+            return False
+        try:
+            self._core.projectm_load_preset_data(
+                self._pm, text.encode("utf-8", "replace"), bool(smooth))
+            return True
+        except Exception as e:
+            print(f"[projectm_wrapper] load_preset_data failed: {e}",
+                  flush=True)
+            return False
+
+    def reset_textures(self) -> bool:
+        """Forget the scanned texture list. Render thread only."""
+        if not self._pm or not getattr(self, "can_reset_textures", False):
+            return False
+        try:
+            self._core.projectm_reset_textures(self._pm)
+            return True
+        except Exception as e:
+            print(f"[projectm_wrapper] reset_textures failed: {e}", flush=True)
+            return False
+
     def render_frame(self):
         self._core.projectm_opengl_render_frame(self._pm)
 
@@ -1816,6 +1884,223 @@ def load_projectm(config_dir=None) -> ProjectM4:
     return ProjectM4(core, playlist)
 
 
+# ─── preset editing ───────────────────────────────────────────────────────────
+#
+# A .milk file is an INI: a few header lines, a [preset00] section of scalars,
+# then the per-frame/per-pixel equations and the warp/comp shaders. Everything
+# here works on that text and nothing else, so it is all testable without a GPU
+# -- the only part that needs one is handing the result to
+# ProjectM4.load_preset_data(), which plays a preset straight out of a string.
+# Nothing is written to disk until Save.
+
+#: (ini key, shader variable, label, low, high, decimals). The shader variable
+#: is not always the key: the file says fDecay and the equations say decay, and
+#: telling whether a slider will do anything depends on knowing both. Measured
+#: across 9,795 presets -- every one of these keys is present in >99% of them.
+PRESET_TWEAKS = (
+    ("zoom",            "zoom",       "Zoom",             0.5,  2.0,  3),
+    ("rot",             "rot",        "Rotation",        -1.0,  1.0,  3),
+    ("warp",            "warp",       "Warp",             0.0,  4.0,  3),
+    ("dx",              "dx",         "Drift across",    -0.05, 0.05, 4),
+    ("dy",              "dy",         "Drift down",      -0.05, 0.05, 4),
+    ("fDecay",          "decay",      "Trail length",     0.5,  1.0,  3),
+    ("fGammaAdj",       "gamma",      "Brightness",       0.5,  3.0,  3),
+    ("fVideoEchoAlpha", "echo_alpha", "Echo",             0.0,  1.0,  3),
+    ("fWaveScale",      "wave_scale", "Wave size",        0.01, 5.0,  3),
+    ("fWaveAlpha",      "wave_a",     "Wave opacity",     0.0,  4.0,  3),
+)
+
+#: Sampler names projectM provides itself -- the framebuffers and the built-in
+#: noise volumes. They are not files and cannot be swapped for a picture.
+BUILTIN_TEXTURES = frozenset((
+    "main", "blur1", "blur2", "blur3",
+    "noise_lq", "noise_lq_lite", "noise_mq", "noise_hq",
+    "noisevol_lq", "noisevol_hq",
+))
+
+#: MilkDrop's sampler names carry an optional filter/wrap prefix, so
+#: sampler_pw_noise_lq and sampler_noise_lq are the same texture.
+_SAMPLER_PREFIXES = ("fw_", "fc_", "pw_", "pc_")
+
+#: Extensions libprojectM's texture scanner accepts, lower-case. The lookup
+#: itself is by filename *stem*, so a .png override replaces a stock .jpg.
+TEXTURE_EXTENSIONS = (".jpg", ".jpeg", ".png", ".dds", ".tga", ".bmp", ".dib")
+
+_CODE_KEYS = ("per_frame_", "per_pixel_", "per_frame_init_")
+
+
+def _preset_code(text: str) -> str:
+    """Just the equation lines, joined. Shaders are deliberately left out:
+    they assign to their own locals, not to the preset's scalars."""
+    out = []
+    for line in text.splitlines():
+        stripped = line.lstrip()
+        if any(stripped.startswith(k) for k in _CODE_KEYS):
+            out.append(stripped.split("=", 1)[-1])
+    return "\n".join(out)
+
+
+def preset_scalar(text: str, key: str):
+    """The value of one top-level `key=value` line, or None.
+
+    Anchored to the start of a line and matched case-insensitively, because
+    presets in the wild spell fDecay as fdecay and FDECAY.
+    """
+    import re
+    m = re.search(rf"^[ \t]*{re.escape(key)}[ \t]*=[ \t]*([^\r\n]*)",
+                  text, re.IGNORECASE | re.MULTILINE)
+    if not m:
+        return None
+    try:
+        return float(m.group(1).strip())
+    except ValueError:
+        return None
+
+
+def preset_driven_keys(text: str) -> set:
+    """Which tweakable variables the preset's own code assigns every frame.
+
+    This matters more than it sounds: `zoom` is set from per-frame code in
+    **49% of the 9,795 presets measured**, and in those the base value in the
+    file is overwritten before the first pixel is drawn. A slider for it would
+    move and do nothing, which reads as a broken feature rather than as a
+    preset that has its own opinion. The UI disables those and says why.
+
+    `==` is excluded so a comparison is not mistaken for an assignment.
+    """
+    import re
+    code = _preset_code(text)
+    driven = set()
+    for key, var, *_ in PRESET_TWEAKS:
+        if re.search(rf"\b{re.escape(var)}[ \t]*=[^=]", code):
+            driven.add(key)
+    return driven
+
+
+def patch_preset(text: str, updates: dict) -> str:
+    """Return `text` with these top-level scalars replaced.
+
+    The rest of the file is untouched, line endings included -- a preset is
+    somebody else's work and a rewrite that reformats it is a rewrite that
+    cannot be diffed against the original. A key the file does not have is
+    inserted after the [preset00] header rather than appended, because
+    anything after the first `per_frame_` line is code.
+    """
+    import re
+    for key, value in updates.items():
+        # Six decimals then trimmed, but never past the point: the library
+        # writes zoom=1.011000 and rot=0.020000, and a bare "3" sitting in
+        # that column reads as a different kind of value.
+        val = f"{float(value):.6f}".rstrip("0")
+        if val.endswith("."):
+            val += "0"
+        pattern = re.compile(
+            rf"^([ \t]*{re.escape(key)}[ \t]*=)[ \t]*[^\r\n]*",
+            re.IGNORECASE | re.MULTILINE)
+        text, n = pattern.subn(lambda m: m.group(1) + val, text, count=1)
+        if n:
+            continue
+        header = re.search(r"^\[[^\]\r\n]+\][ \t]*\r?\n", text, re.MULTILINE)
+        if header:
+            text = text[:header.end()] + f"{key}={val}\n" + text[header.end():]
+        else:
+            text = f"{key}={val}\n" + text
+    return text
+
+
+def preset_textures(text: str) -> list:
+    """File textures this preset samples, in first-seen order.
+
+    The built-in framebuffers and noise volumes are dropped, and so are
+    MilkDrop's rand00-rand07 slots: those pick a random file from the pack on
+    every load, so overriding one would take effect at random.
+    """
+    import re
+    seen, out = set(), []
+    for raw in re.findall(r"sampler_([A-Za-z0-9_]+)", text):
+        name = raw.lower()
+        for prefix in _SAMPLER_PREFIXES:
+            if name.startswith(prefix):
+                name = name[len(prefix):]
+                break
+        if (name in BUILTIN_TEXTURES or name in seen
+                or re.fullmatch(r"rand\d\d", name)):
+            continue
+        seen.add(name)
+        out.append(name)
+    return out
+
+
+def texture_override_dir() -> str:
+    """Where a picture put in place of a stock texture lives.
+
+    A separate directory that leads the search path, rather than overwriting
+    the file in the texture pack. libprojectM scans its search paths in order
+    and the first match by filename stem wins, so this has exactly the effect
+    of replacing the stock texture -- and the pack, which is 8,000 files of
+    other people's work downloaded separately, is never written to. Undoing a
+    swap is deleting one file, and a reinstall of the pack cannot wipe it.
+    """
+    return os.path.join(user_data_dir(), "texture-overrides")
+
+
+def texture_override_path(name: str) -> str:
+    """The override in place for this texture name, or "" if there is none."""
+    d = texture_override_dir()
+    for ext in TEXTURE_EXTENSIONS:
+        p = os.path.join(d, name + ext)
+        if os.path.isfile(p):
+            return p
+    return ""
+
+
+def set_texture_override(name: str, image_path: str) -> str:
+    """Copy `image_path` in as the texture called `name`. "" or the failure.
+
+    The stem is what libprojectM matches on, so the copy keeps the source
+    file's extension and any other override for the same name is removed
+    first -- two files with the same stem would leave the winner to whichever
+    the directory scan reached first.
+    """
+    import shutil
+    ext = os.path.splitext(image_path)[1].lower()
+    if ext not in TEXTURE_EXTENSIONS:
+        return (f"{ext or 'That file'} is not a texture format projectM "
+                f"reads. Use one of: "
+                + ", ".join(e.lstrip(".") for e in TEXTURE_EXTENSIONS))
+    try:
+        os.makedirs(texture_override_dir(), exist_ok=True)
+        clear_texture_override(name)
+        shutil.copyfile(image_path,
+                        os.path.join(texture_override_dir(), name + ext))
+        return ""
+    except Exception as e:
+        return str(e)
+
+
+def clear_texture_override(name: str) -> bool:
+    """Remove the override for one texture. True if there was one."""
+    gone = False
+    for ext in TEXTURE_EXTENSIONS:
+        p = os.path.join(texture_override_dir(), name + ext)
+        try:
+            os.remove(p)
+            gone = True
+        except OSError:
+            pass
+    return gone
+
+
+def texture_overrides() -> list:
+    """Names that currently have a picture standing in for them."""
+    try:
+        return sorted({os.path.splitext(f)[0]
+                       for f in os.listdir(texture_override_dir())
+                       if os.path.splitext(f)[1].lower() in TEXTURE_EXTENSIONS})
+    except OSError:
+        return []
+
+
 # ─── ui ───────────────────────────────────────────────────────────────────────
 
 # ── Qt binding ───────────────────────────────────────────────────────────────
@@ -1859,7 +2144,8 @@ for _mod, _names in (
                  "QHeaderView", "QLineEdit", "QSizePolicy", "QMessageBox",
                  "QFileDialog", "QSlider", "QWidget", "QWidgetAction",
                  "QListWidget", "QListWidgetItem", "QAbstractItemView",
-                 "QProgressBar", "QSystemTrayIcon", "QInputDialog")),
+                 "QProgressBar", "QSystemTrayIcon", "QInputDialog",
+                 "QTabWidget", "QScrollArea")),
 ):
     for _n in _names:
         globals()[_n] = getattr(_mod, _n)
@@ -2150,6 +2436,32 @@ _BROWSER_QSS_TEMPLATE = """
         margin: 0 8px 6px 8px; padding: 5px 8px; font-size: 12px;
     }
     QLineEdit#search:focus { border-color: @focus_border@; }
+    /* The tweak drop-down. Without these the tabs, sliders and scroll bars
+       come out in the platform style over a dark panel -- the same trap the
+       dialog sheet documents: a stylesheet replaces native drawing, so a
+       widget the sheet does not mention is a widget half-drawn. */
+    QTabWidget::pane {
+        border: 1px solid @list_border@; border-radius: 5px; top: -1px;
+    }
+    QTabBar::tab {
+        background: @button@; color: @fg@;
+        border: 1px solid @button_border@; border-bottom: none;
+        border-top-left-radius: 5px; border-top-right-radius: 5px;
+        padding: 4px 12px; margin-right: 2px; font-size: 12px;
+    }
+    QTabBar::tab:selected { background: @sel_bg@; color: @sel_fg@; }
+    QTabBar::tab:hover:!selected { background: @button_hover@; }
+    QScrollArea { border: none; }
+    QSlider::groove:horizontal {
+        height: 4px; background: @groove@; border-radius: 2px;
+    }
+    QSlider::handle:horizontal {
+        background: @handle@; width: 12px; margin: -5px 0; border-radius: 6px;
+    }
+    QSlider::handle:horizontal:disabled { background: @button_border@; }
+    QScrollBar:vertical, QScrollBar:horizontal { background: @scroll_bg@; border: 0; }
+    QScrollBar::handle { background: @scroll_handle@; border-radius: 4px; }
+    QScrollBar::add-line, QScrollBar::sub-line { height: 0; width: 0; }
 """
 
 
@@ -4703,6 +5015,8 @@ class Renderer:
         self._req_record                 = None   # 'mp4' | 'gif' | 'stop'
         self._req_wallpaper              = None   # True/False: be the desktop
         self._req_collection             = None   # name to play, "" = all
+        self._req_preset_data            = None   # preset text to play now
+        self._req_reset_textures         = False  # rescan after a swap
         self._rated                      = False  # favorite (rating-weighted) shuffle
         self._rated_history              = deque(maxlen=200)  # native indices for rated prev
 
@@ -4978,6 +5292,12 @@ class Renderer:
             return
         preset_dir = self._cfg.get("preset_dir", "")
         tex_paths = [p for p in (
+            # First, and that is the whole mechanism behind swapping a
+            # texture for your own picture: libprojectM scans its search
+            # paths in order and the first file whose stem matches wins, so
+            # an override here stands in front of the stock one without the
+            # texture pack ever being written to.
+            texture_override_dir(),
             self._cfg.get("texture_dir", "").strip(),
             os.path.join(os.path.dirname(__file__), "textures"),
             os.path.join(preset_dir, "textures"),
@@ -5245,6 +5565,133 @@ class Renderer:
         self._bridge.playlist_changed.emit()
         self._emit_current_preset()
 
+    # ── Tweaking the preset on screen ─────────────────────────────────────
+    #
+    # Everything the browser's tweak panel needs. The text work is all in
+    # module functions above; what lives here is the two things that must
+    # happen on the render thread, because both compile shaders: playing a
+    # patched preset, and rescanning textures after a swap.
+
+    def can_tweak(self) -> bool:
+        """False on a libprojectM too old to play a preset from a string."""
+        return bool(self._pm and getattr(self._pm, "can_load_data", False))
+
+    def current_preset_path(self) -> str:
+        try:
+            return self._pm.current_preset_path() if self._pm else ""
+        except Exception:
+            return ""
+
+    def preset_text(self) -> str:
+        """The current preset's file, or "". Qt thread -- it is a file read."""
+        path = self.current_preset_path()
+        if not path or not os.path.isfile(path):
+            return ""
+        try:
+            # Presets come from packs assembled by hundreds of people over
+            # twenty years; a stray byte is not a reason to refuse to open one.
+            with open(path, encoding="utf-8", errors="replace") as f:
+                return f.read()
+        except Exception as e:
+            print(f"[tweak] could not read {path}: {e}", flush=True)
+            return ""
+
+    def preview_preset(self, text: str):
+        """Play this preset text now. Not saved anywhere."""
+        with self._lock:
+            self._req_preset_data = text
+
+    def _do_load_preset_data(self, text: str):
+        """Render thread. A hard cut, deliberately: blending on every slider
+        step turns a drag into a smear of half-applied presets."""
+        if not self._pm:
+            return
+        if self._pm.load_preset_data(text, smooth=False):
+            # Logged because an edited preset that fails to compile just shows
+            # the previous frame forever, and without a line here there is
+            # nothing to tell "the slider did nothing" from "the preset is
+            # broken". Rate-limited by the panel's own debounce.
+            print(f"[tweak] applied {len(text)} bytes", flush=True)
+        else:
+            self._bridge.show_toast.emit(
+                "This build of projectM cannot play an edited preset")
+
+    def revert_preset(self):
+        """Back to the file on disk, discarding an unsaved tweak.
+
+        By reloading the text rather than re-seeking the playlist: seeking is
+        refused while the preset is locked, and locking the thing you are
+        tweaking is the obvious way to keep it on screen while you work.
+        """
+        text = self.preset_text()
+        if text:
+            self.preview_preset(text)
+
+    def save_preset_as(self, text: str, name: str) -> str:
+        """Write a tweaked preset beside the original. "" or the failure.
+
+        Into the same directory the preset came from, so it is picked up by
+        the next scan and lands in the same collection and sort as its
+        neighbours. Never over the original: the point of a tweak is that the
+        thing you started from is still there.
+        """
+        src = self.current_preset_path()
+        folder = (os.path.dirname(src) if src
+                  else self._cfg.get("preset_dir", ""))
+        if not folder or not os.path.isdir(folder):
+            return "There is no preset folder to save into."
+        stem = "".join(c for c in (name or "").strip()
+                       if c not in '\\/:*?"<>|').strip()
+        if not stem:
+            return "Give it a name."
+        dest = os.path.join(folder, stem + ".milk")
+        if os.path.exists(dest):
+            return f"“{stem}” already exists in that folder."
+        try:
+            with open(dest, "w", encoding="utf-8") as f:
+                f.write(text)
+        except Exception as e:
+            return str(e)
+        self._ratings[stem] = get_preset_rating(self._ratings, stem)
+        self._save_ratings(self._ratings)
+        with self._lock:
+            self._req_reload = True
+        self._bridge.show_toast.emit(f"Saved “{stem}”")
+        return ""
+
+    # ── Swapping a texture for a picture ──────────────────────────────────
+
+    def swap_texture(self, name: str, image_path: str) -> str:
+        """Stand `image_path` in for the stock texture `name`. "" or why not."""
+        why = set_texture_override(name, image_path)
+        if not why:
+            self._refresh_textures()
+        return why
+
+    def restore_texture(self, name: str) -> bool:
+        gone = clear_texture_override(name)
+        if gone:
+            self._refresh_textures()
+        return gone
+
+    def _refresh_textures(self):
+        with self._lock:
+            self._req_reset_textures = True
+
+    def _do_reset_textures(self):
+        """Render thread. Re-point projectM at the search paths and make it
+        forget what it scanned, then reload the preset -- textures are
+        resolved when a preset loads, so nothing changes on screen until it
+        does. That is also why a swap used to look like it needed a restart.
+        """
+        if not self._pm:
+            return
+        self._apply_texture_paths()
+        self._pm.reset_textures()
+        text = self.preset_text()
+        if text:
+            self._pm.load_preset_data(text, smooth=False)
+
     # ── Backup ────────────────────────────────────────────────────────────
 
     def state_paths(self) -> dict:
@@ -5465,6 +5912,13 @@ class Renderer:
                     name = self._req_collection
                     self._req_collection = None
                     self._do_play_collection(name)
+                if self._req_reset_textures:
+                    self._req_reset_textures = False
+                    self._do_reset_textures()
+                if self._req_preset_data is not None:
+                    text = self._req_preset_data
+                    self._req_preset_data = None
+                    self._do_load_preset_data(text)
 
             # ── Idle pause ────────────────────────────────────────────────
             # Above auto-advance, not below it: a paused wallpaper that still
