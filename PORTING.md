@@ -318,6 +318,33 @@ See the trap in `CLAUDE.md`. The script already works around it.
 
 ## Next
 
+### The Windows installer needs rebuilding — 2026-09-08
+
+The Windows 1.7.0 installer built on 2026-09-08 predates four app changes made
+the same day, so the two platforms are no longer identical at the same version
+number. Rebuild it from the current tree; the version stays 1.7.0 unless the
+owner says otherwise.
+
+What changed after that build:
+
+- **The overlay blend modes were renamed and remapped.** "Normal" is now
+  projectM mode 4, which honours a PNG's transparency; mode 0, which ignores it
+  and drew every cut-out picture as a black rectangle, is now called "Solid". A
+  config written by the older build still loads.
+- **Sprite size no longer double-corrects for the picture's aspect ratio**, so a
+  wide picture is no longer squashed.
+- **`assets/welcome.milk` and `assets/textures/bomsai.png` are new files** and
+  the installer must carry them, or a fresh install shows projectM's own "M"
+  logo until a preset folder is chosen. `installer/bomsai-visualizer.spec`
+  bundles the whole `assets` directory, so this needs no spec change — but check
+  both files are in the packaged output, the way the Linux tarball was checked.
+- **Thumbnails no longer overflow the row below them** in the preset browser.
+
+Worth a look on the real machine while the build is fresh: open the Overlay tab,
+add a cut-out PNG on "Normal" and confirm it is not a black box, and start the
+app once with no preset folder configured to confirm the welcome screen.
+
+
 **Audio — done, but only the capture half is proven.** `AudioCapture` keeps its
 public API (`start`/`stop`/`is_alive`/`get_chunk`/`update_device`) and delegates to a
 backend chosen per platform: `parec` then `sounddevice` on Linux, `wasapi-loopback`

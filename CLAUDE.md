@@ -134,8 +134,40 @@ There is no display in an agent shell and SDL needs one, so:
   because no Python exception is involved. Defer with `QTimer.singleShot(0, ...)`
   -- `TweakPanel._rebuild_later`. Measured: changing a sprite's movement killed
   the app every time, and only the live run could see it.
+- **Take the screenshot and look at it.** Driving the app for the site's pictures
+  on 2026-09-08 found three defects that seventeen passing suites could not: the
+  Backup menu read "Back up ratings _collections…" because Qt eats a lone `&` in
+  an action label; every thumbnail in the browser overflowed the row below it;
+  and the overlay's blend modes were named for behaviour they do not have. None
+  of them is visible from the source, and all three were on screen the whole time.
 
 ## Traps already paid for
+
+- **projectM's sprite blend modes do not do what their MilkDrop names say.**
+  Mode 0 ("alpha") ignores the texture's alpha channel entirely and draws the
+  whole rectangle; mode 4 ("colour key") is the only one that honours it —
+  upstream's own comment reads "Milkdrop actually changed color keying to using
+  texture alpha. The color key is ignored." Mode 2 is additive, which is what
+  makes a black background vanish. `SPRITE_BLENDS` is named for the behaviour,
+  not the MilkDrop label.
+- **projectM already scales a sprite quad by the picture's own aspect ratio**
+  (`MilkdropSprite.cpp`, "First aspect ratio"), before the screen-aspect pass.
+  Correcting for it in the generated code as well squashed a 400x200 picture to
+  630x160 on screen where 630x320 was right. `sy` is set equal to `sx` and left
+  alone.
+- **`uniformItemSizes` on a `QListWidget` measures once and never again.**
+  Not on a size-hint change, not on `doItemsLayout`, not on clear-and-refill.
+  The only thing that gets through is a stylesheet `min-height` on
+  `QListWidget::item`, which is how the browser makes room for thumbnails that
+  arrive after the first layout. Turning uniform sizing off instead costs 0.5s
+  per rebuild on a ten-thousand-row list — measured.
+- **The welcome preset is what stops projectM drawing its own "M" logo.**
+  `ProjectM::LoadIdlePreset()` fires whenever no preset is active, which on a
+  fresh install is until the user picks a folder. `assets/welcome.milk` is
+  loaded through `projectm_load_preset_data` *before* the library, and it
+  samples `assets/textures/bomsai.png` through the texture search path — so
+  that directory has to be on it, and it goes last, after the sprite directory,
+  for the same reason the sprite directory is late.
 
 - **`PYSDL2_DLL_PATH` must be set before `sdl2` is imported** — PySDL2 reads it once,
   at its own import. It was being set afterwards and silently doing nothing.
