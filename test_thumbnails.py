@@ -193,6 +193,41 @@ def the_browser_shows_a_cached_thumbnail_and_skips_the_rest():
         "the icon column never opened up for the thumbnail"
     win.close()
 
+def a_thumbnail_below_an_unwatched_row_is_not_squashed_into_it():
+    """uniformItemSizes measures the first row and reuses that height for
+    every other one, so when the row at the top has no thumbnail -- normal,
+    most presets have none -- a 54px thumbnail three rows down was drawn into
+    a 26px row and spilled over its neighbours. Seen in a screenshot, not in
+    a test, which is why there is one now."""
+    path = thumb_path(NAME)
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    img = QImage(96, 54, QImage.Format.Format_RGB888)
+    img.fill(0x3366cc)
+    assert img.save(path, "JPG", 80)
+
+    class TopUnwatched(BrowserHost):
+        entries = [("never watched", 5), (NAME, 9), ("nor this", 5)]
+    win = PresetPlaylistWindow(host=TopUnwatched())
+    win.resize(420, 400)
+    win.show()
+    app.processEvents()
+    win._load_visible_icons()
+    assert win._list.iconSize() == win.ICON_SIZE
+    # The drawn rectangle, not the size hint: with uniformItemSizes on, the
+    # view ignores a hint set after the first layout, which is exactly how
+    # this shipped looking broken while the hints all read correctly.
+    h = win._list.visualItemRect(win._list.item(1)).height()
+    assert h >= win.ICON_SIZE.height(), \
+        f"rows are {h}px and the thumbnail is {win.ICON_SIZE.height()}px"
+    # And a sort, which rebuilds every row, must not undo it.
+    win.refresh()
+    win._load_visible_icons()
+    app.processEvents()
+    h = win._list.visualItemRect(win._list.item(1)).height()
+    assert h >= win.ICON_SIZE.height(), f"a rebuild put it back to {h}px"
+    win.close()
+
+
 def an_empty_cache_leaves_no_gutter():
     """A fresh install has no thumbnails, and a 96px empty column down ten
     thousand rows looks like the list is broken."""
@@ -216,7 +251,8 @@ for fn in (a_thumbnail_path_is_stable_and_filesystem_safe,
            an_already_cached_preset_is_not_re_grabbed,
            a_new_preset_re_arms_the_gate,
            the_browser_shows_a_cached_thumbnail_and_skips_the_rest,
-           an_empty_cache_leaves_no_gutter):
+           an_empty_cache_leaves_no_gutter,
+           a_thumbnail_below_an_unwatched_row_is_not_squashed_into_it):
     results.append(check(fn.__name__, fn))
 
 shutil.rmtree(tmp, ignore_errors=True)

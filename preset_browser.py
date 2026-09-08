@@ -815,6 +815,23 @@ class PresetPlaylistWindow(QWidget):
                 self._list.item(i).setIcon(QIcon(path))
                 if self._list.iconSize().width() == 0:
                     self._list.setIconSize(self.ICON_SIZE)
+                    self._make_room_for_icons()
+
+    def _make_room_for_icons(self):
+        """Give the rows the height a thumbnail needs.
+
+        uniformItemSizes is on because measuring ten thousand rows one at a
+        time costs half a second every time the list is rebuilt, and it means
+        the view measures once and reuses that height for every row. Raising
+        the icon size afterwards does not re-measure -- nor does setting an
+        item's size hint, nor clearing and refilling the list -- so if the row
+        at the top has no thumbnail, which is the normal case, every thumbnail
+        below it was drawn at 54px into a 26px row and spilled over its
+        neighbours. A stylesheet minimum is the one thing that does get
+        through, and it survives a rebuild, so it is set once and left.
+        """
+        self._list.setStyleSheet(
+            "QListWidget::item { min-height: %dpx; }" % self.ICON_SIZE.height())
 
     def _highlight(self, pos: int):
         if 0 <= pos < self._list.count():
