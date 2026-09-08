@@ -15,7 +15,6 @@
 
 $ErrorActionPreference = 'Stop'
 
-$ProjectMTag = 'v4.1.0'   # matches the lib version projectm_wrapper.py expects
 $DevRoot     = 'C:\dev'
 $Src         = "$DevRoot\projectm"
 $Build       = "$Src\cmake-build"
@@ -31,6 +30,19 @@ if (-not (Test-Path "$ScriptDir\requirements.txt")) {
     throw "requirements.txt not found in $ScriptDir. Run this as a file " +
           "(powershell.exe -ExecutionPolicy Bypass -File .\setup_windows.ps1), " +
           "or cd to the repository first."
+}
+
+# The libprojectM commit to build, shared with the Linux installer so the two
+# platforms can never drift apart. Read rather than duplicated: a second copy
+# of a SHA is a second thing to forget. installer/PROJECTM_COMMIT says why it
+# is a commit and not a tag.
+$PinFile = Join-Path $ScriptDir 'installer\PROJECTM_COMMIT'
+if (-not (Test-Path $PinFile)) { throw "No $PinFile" }
+$ProjectMCommit = (Get-Content $PinFile | Where-Object { $_ -notmatch '^\s*#' } |
+                   ForEach-Object { $_.Trim() } | Where-Object { $_ } |
+                   Select-Object -First 1)
+if ($ProjectMCommit -notmatch '^[0-9a-f]{40}$') {
+    throw "installer/PROJECTM_COMMIT does not hold a full commit SHA (got '$ProjectMCommit')."
 }
 
 New-Item -ItemType Directory -Force -Path $DevRoot | Out-Null
@@ -71,19 +83,45 @@ if (-not $cmake) { throw 'No cmake.exe found.' }
 Write-Output "    cmake: $cmake"
 
 # --- [2/4] Build libprojectM-4 --------------------------------------------
-Write-Output "==> [2/4] Building libprojectM-4 ($ProjectMTag)..."
-if (Test-Path "$Deploy\projectM-4.dll") {
-    Write-Output '    Already built, skipping. Delete C:\dev\projectm-deploy to force a rebuild.'
+Write-Output "==> [2/4] Building libprojectM-4 ($($ProjectMCommit.Substring(0,12)))..."
+# A stamp beside the DLLs, not just their existence: the deploy directory
+# survives a pin bump, and skipping on "a DLL is there" is how a stale
+# libprojectM gets shipped while the build reports success.
+$DeployStamp = "$Deploy\PROJECTM_COMMIT"
+$DeployedAt = if (Test-Path $DeployStamp) { (Get-Content $DeployStamp -Raw).Trim() } else { '' }
+if ((Test-Path "$Deploy\projectM-4.dll") -and $DeployedAt -eq $ProjectMCommit) {
+    Write-Output '    Already built at this commit, skipping. Delete C:\dev\projectm-deploy to force a rebuild.'
 } else {
+    if ($DeployedAt -and $DeployedAt -ne $ProjectMCommit) {
+        Write-Output "    Deployed DLLs are from $($DeployedAt.Substring(0,12)); rebuilding at the pin."
+        Remove-Item -Recurse -Force $Deploy, $Build, $Install -ErrorAction SilentlyContinue
+    }
+
     if (-not (Test-Path $VcpkgRoot)) {
         git clone https://github.com/microsoft/vcpkg.git $VcpkgRoot
         & "$VcpkgRoot\bootstrap-vcpkg.bat" -disableMetrics
     }
 
-    if (-not (Test-Path $Src)) {
-        git clone --depth 1 --branch $ProjectMTag --recurse-submodules --shallow-submodules `
-            https://github.com/projectM-visualizer/projectm.git $Src
+    # Fetched by SHA rather than cloned by tag: the pin is a commit on master
+    # with no tag pointing at it, and --branch does not take a SHA. A shallow
+    # fetch of one commit is what GitHub serves fastest; the full fetch is the
+    # fallback for a host that refuses to serve an arbitrary SHA.
+    if (-not (Test-Path "$Src\.git")) {
+        New-Item -ItemType Directory -Force -Path $Src | Out-Null
+        git -C $Src init -q
+        git -C $Src remote add origin https://github.com/projectM-visualizer/projectm.git
     }
+    if ((git -C $Src rev-parse HEAD 2>$null) -ne $ProjectMCommit) {
+        git -C $Src fetch --depth 1 origin $ProjectMCommit
+        if ($LASTEXITCODE -ne 0) {
+            Write-Output '    Shallow fetch by SHA refused; fetching the full history.'
+            git -C $Src fetch origin
+            if ($LASTEXITCODE -ne 0) { throw 'Could not fetch libprojectM.' }
+        }
+        git -C $Src checkout -q --detach $ProjectMCommit
+        if ($LASTEXITCODE -ne 0) { throw "Commit $ProjectMCommit not found after fetch." }
+    }
+    git -C $Src submodule update --init --recursive --depth 1
     if (-not (Test-Path "$Src\vendor\projectm-eval\CMakeLists.txt")) {
         throw "Submodule vendor/projectm-eval is empty. Re-run 'git submodule update --init --recursive' in $Src."
     }
@@ -124,6 +162,8 @@ if (Test-Path "$Deploy\projectM-4.dll") {
     Copy-Item "$Install\bin\projectM-4.dll"          $Deploy
     Copy-Item "$Install\bin\projectM-4-playlist.dll" $Deploy
     Copy-Item "$Build\vcpkg_installed\x64-windows\bin\glew32.dll" $Deploy
+    # Last, so a build that died half way leaves no stamp claiming success.
+    Set-Content -Path $DeployStamp -Encoding ascii -Value $ProjectMCommit
 }
 Get-ChildItem $Deploy -Filter *.dll | ForEach-Object { Write-Output "    $($_.Name)" }
 

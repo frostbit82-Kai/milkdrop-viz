@@ -17,17 +17,46 @@ IMAGE="milkdrop-viz-builder"
 # host build is linked against the host's glibc, which is the very thing this
 # script exists to get away from. Upstream's release links have gone dead
 # before, so a local source tree is preferred over cloning.
+PIN="$(grep -v '^#' "$HERE/PROJECTM_COMMIT" | tr -d '[:space:]')"
+[ -n "$PIN" ] || { echo "installer/PROJECTM_COMMIT has no commit in it." >&2; exit 1; }
+
+# A tree is only usable if it is AT the pin. Checking that it merely exists is
+# how the wrong library gets built: several projectM checkouts live on this
+# machine at different versions, the first one found wins, and a 4.1.0 build
+# comes out reporting success. Reported, never silently checked out -- the
+# source tree belongs to whoever cloned it.
+usable() {
+    # Both files, not just the top one: a tree whose submodules were never
+    # initialised has the outer CMakeLists.txt and nothing under vendor/, and
+    # cmake only says so two minutes into the container build.
+    [ -f "$1/CMakeLists.txt" ] && [ -f "$1/vendor/projectm-eval/CMakeLists.txt" ] \
+        && [ "$(git -C "$1" rev-parse HEAD 2>/dev/null)" = "$PIN" ]
+}
+
 PROJECTM_SRC="${PROJECTM_SRC:-}"
-if [ -z "$PROJECTM_SRC" ]; then
-    for c in "$REPO/../projectm" \
-             "/run/media/fr0st/AE86E49C86E465F5/dev/projectm" \
-             "$HOME/dev/projectm"; do
-        # Both files, not just the top one: a tree whose submodules were never
-        # initialised has the outer CMakeLists.txt and nothing under vendor/,
-        # and cmake only says so two minutes into the container build.
-        [ -f "$c/CMakeLists.txt" ] && [ -f "$c/vendor/projectm-eval/CMakeLists.txt" ] \
-            && { PROJECTM_SRC="$(cd "$c" && pwd)"; break; }
+if [ -n "$PROJECTM_SRC" ]; then
+    usable "$PROJECTM_SRC" || {
+        echo "PROJECTM_SRC=$PROJECTM_SRC is not at the pinned commit." >&2
+        echo "  wanted: $PIN" >&2
+        echo "  got:    $(git -C "$PROJECTM_SRC" rev-parse HEAD 2>/dev/null || echo 'not a git tree')" >&2
+        echo "  fix:    git -C $PROJECTM_SRC fetch origin && git -C $PROJECTM_SRC checkout $PIN \\" >&2
+        echo "          && git -C $PROJECTM_SRC submodule update --init --recursive" >&2
+        exit 1
+    }
+else
+    NEAR=""
+    for c in "$REPO/../projectm" "$HOME/projectm" "$HOME/dev/projectm" \
+             "/run/media/fr0st/AE86E49C86E465F5/dev/projectm"; do
+        [ -d "$c" ] || continue
+        if usable "$c"; then PROJECTM_SRC="$(cd "$c" && pwd)"; break; fi
+        # Remember one wrong-version tree so the failure can name it rather
+        # than claiming nothing is there. An if, not an && chain: under set -e
+        # the chain's own failure once NEAR is set would end the script.
+        if [ -z "$NEAR" ] && [ -f "$c/CMakeLists.txt" ]; then NEAR="$c"; fi
     done
+    if [ -z "$PROJECTM_SRC" ] && [ -n "$NEAR" ]; then
+        echo "==> $NEAR is at $(git -C "$NEAR" rev-parse --short HEAD 2>/dev/null || echo '?'), not the pin" >&2
+    fi
 fi
 REBUILD_PM=1
 if [ ! -f "${PROJECTM_SRC:-/nonexistent}/vendor/projectm-eval/CMakeLists.txt" ]; then
@@ -38,14 +67,17 @@ if [ ! -f "${PROJECTM_SRC:-/nonexistent}/vendor/projectm-eval/CMakeLists.txt" ];
     # The floor check at the end is what proves it.
     if [ -f "$HERE/vendor/linux/libprojectM-4.so.4" ]; then
         REBUILD_PM=0
-        echo "==> No projectM source tree; reusing installer/vendor/linux/"
+        echo "==> No projectM source tree at the pin; reusing installer/vendor/linux/"
+        echo "    That library is whatever was committed, NOT necessarily $PIN."
     else
-        echo "No projectM source tree found. Set PROJECTM_SRC to one." >&2
-        echo "It needs vendor/projectm-eval too — clone with --recurse-submodules." >&2
+        echo "No projectM source tree at the pinned commit. Clone one:" >&2
+        echo "  git clone --recurse-submodules https://github.com/projectM-visualizer/projectm.git ~/projectm" >&2
+        echo "  git -C ~/projectm checkout $PIN && git -C ~/projectm submodule update --init --recursive" >&2
+        echo "Then re-run, or set PROJECTM_SRC to it." >&2
         exit 1
     fi
 else
-    echo "==> projectM source: $PROJECTM_SRC"
+    echo "==> projectM source: $PROJECTM_SRC @ ${PIN:0:12}"
 fi
 
 echo "==> [1/3] Builder image ($BASE)"

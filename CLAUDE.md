@@ -70,6 +70,17 @@ through PyInstaller and Inno Setup 6, plus the portable tree beside it.
 `-SkipInstaller` stops after freezing. Inno Setup installs per-user under winget,
 so the script looks in `%LOCALAPPDATA%\Programs` as well as Program Files.
 
+**`installer/PROJECTM_COMMIT` pins the exact libprojectM commit both platforms
+build.** It is a SHA on master, not a tag, because the API we want has never
+been released — upstream's newest tag is v4.1.7 and master declares 4.2.0 with
+nothing tagged. Both `build_linux_docker.sh` and `setup_windows.ps1` read that
+one file and **refuse to build from a tree that is not at it**, because
+checking only that a checkout exists is how the wrong library gets built: this
+machine has projectM trees at three different commits, the first one found used
+to win, and a 4.1.0 build came out reporting success. Windows also stamps the
+commit into `C:\dev\projectm-deploy\PROJECTM_COMMIT`, so a pin bump rebuilds
+instead of reusing stale DLLs. Bump the pin and re-run both.
+
 **The vendored `installer/vendor/linux/libprojectM-4*.so.4` are committed on
 purpose.** Upstream release links have gone dead before, and rebuilding needs a
 toolchain the packaging box may not have. `PROJECTM_LIB_DIR` overrides them.

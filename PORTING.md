@@ -223,6 +223,17 @@ can reach, so run them on the real machine before the installer is rebuilt:
       actually has an audio stream rather than a warning in the log. The
       recorder falls back to the silent video if the mux fails, and says so.
 
+- [ ] **Rebuild libprojectM at the pin.** Linux has moved off 4.1.0 to the
+      commit in `installer/PROJECTM_COMMIT`; the Windows DLLs are still 4.1.0
+      and the two must not ship apart. Run `setup_windows.ps1` — it now reads
+      the pin, fetches that commit by SHA, and rebuilds rather than reusing
+      `C:\dev\projectm-deploy` when the stamp there does not match. Copy the
+      three DLLs into `installer/vendor/windows/`, run `verify_dlls.ps1`, and
+      check the app still starts and cycles presets. Expect it to look
+      *better*: the 4.1.x rendering fixes land here. The whole PowerShell
+      change was written on Linux and only parse-checked, so read the output
+      of the fetch and stamp steps rather than trusting them.
+
 Also new and cross-platform, so Windows only needs a look rather than a test:
 named collections (right-click → Collections), backup/restore of ratings and
 collections, an audio level meter in the audio submenu, and `x` to exclude the
@@ -239,6 +250,18 @@ included) inside Debian 12 instead and takes the floor to **2.36**: Debian 12+,
 Ubuntu 24.04+, Fedora 37+, current Arch and SteamOS. Use it for anything
 released. Ubuntu 22.04 (2.35) needs a lower base image and therefore building
 Python too; for Steam the eventual target is the Steam Runtime 3 "sniper" SDK.
+
+**libprojectM is pinned to a commit, in `installer/PROJECTM_COMMIT`.** Not a
+tag: the sprite, texture-load-callback and log-callback API exists only on
+master, which declares 4.2.0 with no release behind it. The Linux and Windows
+scripts both read that file and stop if their source tree is somewhere else,
+which is the fix for a trap that cost a build: several projectM checkouts live
+on this machine at different commits, and picking the first one that merely
+exists produced a silent 4.1.0 build. Moving off 4.1.0 also picks up the whole
+4.1.x line of rendering fixes — inverted Y and wrong angle into per-pixel
+expressions, warp texel drift, a null dereference in the texture sampler,
+sampler keywords misparsed inside shader comments, several HLSL transpiler
+gaps — which change how existing presets look, with no app change at all.
 
 **Three things move when `sys.frozen` is set**: the config directory, the
 projectM search path, and `PYSDL2_DLL_PATH`. All three are handled and all three

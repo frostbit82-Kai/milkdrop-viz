@@ -1,0 +1,22 @@
+# The exact libprojectM commit both installers build against.
+#
+# Not a tag, because there is no release that has what we need. Upstream's
+# newest tag is v4.1.7 and the API added since -- user sprites, the texture
+# load callback, the log callback -- exists only on master, where CMakeLists
+# declares 4.2.0 with no tag to go with it. So the pin is a SHA.
+#
+# Verified against this commit before it was written down: every one of the 47
+# exported declarations in v4.1.0 is byte-identical on master (68 total, so it
+# is purely additive), the glibc floor of a container build is unchanged at
+# 2.35, and the app played 60 presets on it with no errors.
+#
+# It also carries the rendering fixes from the whole 4.1.x line that 4.1.0
+# predates: inverted Y and wrong angle passed to per-pixel expressions, warp
+# shader texel drift, a null dereference in the texture sampler, sampler
+# keywords misparsed inside shader comments, and several HLSL transpiler gaps.
+# That is the reason to move even before anything binds the new API.
+#
+# Both installers refuse to build from a source tree that is not at this
+# commit, rather than quietly producing a library from whatever was lying
+# around. Bump this line to move; the scripts will tell you what to do.
+397f15eb21d2ad8be7dbdec00595e509193ef6e7
