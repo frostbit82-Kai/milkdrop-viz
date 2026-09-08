@@ -45,8 +45,7 @@ if [ -n "$PROJECTM_SRC" ]; then
     }
 else
     NEAR=""
-    for c in "$REPO/../projectm" "$HOME/projectm" "$HOME/dev/projectm" \
-             "/run/media/fr0st/AE86E49C86E465F5/dev/projectm"; do
+    for c in "$REPO/../projectm" "$HOME/projectm" "$HOME/dev/projectm"; do
         [ -d "$c" ] || continue
         if usable "$c"; then PROJECTM_SRC="$(cd "$c" && pwd)"; break; fi
         # Remember one wrong-version tree so the failure can name it rather

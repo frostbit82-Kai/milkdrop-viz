@@ -51,6 +51,11 @@ does, projectM's own Steam listing included.
 > smaller and permanently better. Do that for a week and ten thousand presets
 > become your two hundred.
 >
+> **Name what a set is for.** A rating says how good a preset is. A collection
+> says what it is *for* — "chill", "party", "the ones that look good behind the
+> icons". Add whatever is on screen to one from the menu, then play only that
+> collection.
+>
 > **The browser shows where you are.** A live list of the whole playlist with
 > the current preset highlighted and its stars beside it. Jump to any of them.
 >
@@ -65,12 +70,18 @@ does, projectM's own Steam listing included.
 > through, which are the ones you were going to look for again.
 >
 > **Keep a clip.** One key starts recording what is on screen; another stops
-> it. MP4 for a video, GIF for something to post. The presets that made you
-> stop and stare are now something you can send to somebody.
+> it. MP4 for a video — with the sound that was playing over it — or a GIF for
+> something to post. The presets that made you stop and stare are now something
+> you can send to somebody.
 >
 > **Put it on your desktop.** Wallpaper mode draws the visuals on the Windows
 > desktop, behind your icons, reacting to whatever you are playing. A tray icon
 > keeps the menu and your ratings a click away.
+>
+> **It knows when to stop.** Nothing is playing, or a game is full-screen in
+> front of it? The visuals pause and give the machine back. Sound returns and
+> so do they. A wallpaper you never have to think about is the only kind worth
+> having.
 >
 > **Or leave it as your screen saver.** The installer will set it up, and any
 > key or a real mouse movement brings you back.
@@ -101,6 +112,25 @@ does, projectM's own Steam listing included.
 > anywhere and it never will. Your ratings and settings are files on your own
 > disk. Buy it once and it keeps working with the internet unplugged.
 >
+> **Change the one you nearly like.** Every preset opens in a panel of ten
+> sliders — zoom, rotation, warp, drift, trails, brightness, echo, wave size.
+> Move one and the visual changes while you watch it. Save the result under a
+> new name and it joins the library as its own preset. The sliders a preset
+> animates itself are greyed out, so you are never fighting its own code.
+>
+> **Swap its pictures.** A preset that draws with a photograph can draw with
+> yours instead. Pick the texture, pick your file, and it is that preset now.
+> The original pack is never touched.
+>
+> **Lay your own picture over it.** A logo, a photo, anything: it sits over the
+> visuals and stays there while the presets change underneath. Still, spinning,
+> drifting, or pulsing to the beat, with size and opacity you set. Up to
+> sixteen at once, and they are still there next time you open the app.
+>
+> **Your ratings are the part you cannot download again.** Everything else here
+> can be reinstalled; hours of deciding what you like cannot. Back up ratings
+> and collections to a zip in one action, and restore them on another machine.
+>
 > **Made to be lived with.** Rebindable keys for everything. Dark and light
 > themes, or follow Windows. Borderless mode. Preset locking when one is too
 > good to let rotate away. Adjustable beat sensitivity, mesh quality and frame
@@ -119,21 +149,21 @@ does, projectM's own Steam listing included.
 2. Search ten thousand presets by name as you type
 3. Sort a ten-thousand-preset library by your own rating
 4. Rated shuffle — play only the presets you actually liked
-5. Delete every 0-rated preset in one action and never see them again
-6. Thumbnails build themselves from the presets you watch — no batch render
-7. Record what is on screen to MP4, or to a GIF you can post
-8. Desktop wallpaper mode, behind your icons, with a tray icon for the menu
-9. Doubles as a Windows screen saver, set up by the installer
-10. Pick which monitor fullscreen and wallpaper mode use
-11. Live preset browser showing where you are in the playlist
-12. Visualises system audio: any player, any game, any browser tab
-13. Follows your default output device when you switch it mid-song
-14. Full MilkDrop 2 texture support — the good presets look right
-15. Loads nested preset packs recursively, exactly as downloaded
-16. Downloads and installs a curated preset pack from inside the app
-17. Lock a preset so the rotation leaves it alone
-18. Every key rebindable
-19. Dark and light themes, or follow the system
+5. Name a collection — "chill", "party" — and play only what is in it
+6. Delete every 0-rated preset in one action and never see them again
+7. Thumbnails build themselves from the presets you watch — no batch render
+8. Record what is on screen to MP4 with sound, or to a GIF you can post
+9. Desktop wallpaper mode, behind your icons, with a tray icon for the menu
+10. Pauses itself when the sound stops or a full-screen app is in front
+11. Doubles as a Windows screen saver, set up by the installer
+12. Ten sliders change the visual on screen — zoom, rotation, trails, brightness
+13. Save a preset you have changed under a new name, as its own preset
+14. Swap the picture a preset draws with for one of your own
+15. Lay your own picture over the visuals — spinning, drifting, or on the beat
+16. Back up ratings and collections to a zip and restore them anywhere
+17. Pick which monitor fullscreen and wallpaper mode use
+18. Visualises system audio: any player, any game, any browser tab
+19. Full MilkDrop 2 texture support — the good presets look right
 20. No account, no sign-in, no telemetry — works fully offline, forever
 
 ## Search terms  (7 max)
@@ -174,16 +204,24 @@ no ads, no in-app purchases, no gambling.
 
 ## Screenshots to capture  (Microsoft Store wants 1366×768 or larger, up to 10)
 
+**Read every browser screenshot before it goes in.** Preset names come from
+hundreds of authors and a fair number are crude: the three shots taken on
+2026-09-07 caught "suksma - dicked", "phat_Phenethylamine", and "i am only here
+to die slowly in pain there is great peace in this surrender" — in a listing
+that has to answer an age-rating questionnaire. **Sort by rating and shoot the
+top of the list**: a curated top is clean, and it is also what a used library
+actually looks like. A name-sorted browser is a lottery.
+
 Shoot these in order — they tell the story in the order the description does:
 
 1. A genuinely good preset, full frame, mid-track. This is the thumbnail.
 2. The same, different preset, showing texture-heavy work rendering properly.
-3. The preset browser open beside the visualiser, ratings visible in the list.
-4. The browser sorted by rating — the top of the list, all high scores.
-5. The delete-0★ confirmation, with the count of what is about to go.
-6. The browser with thumbnails filled in — the clearest single picture of
-   what this app is for.
-7. The search box with a name typed and the list narrowed.
+3. The browser sorted by rating — the top of the list, all high scores, with
+   thumbnails filled in. The clearest single picture of what this app is for.
+4. Your own picture laid over a preset — the overlay tab open beside it.
+5. The tweak sliders, mid-change, on a preset that is visibly responding.
+6. The search box with a name typed and the list narrowed.
+7. The Collections menu open, showing named sets.
 8. Wallpaper mode: the desktop, icons over the visuals, tray icon visible.
 9. Settings, showing the preset and texture folder rows.
 10. Get presets, mid-download, progress bar visible.
@@ -191,23 +229,25 @@ Shoot these in order — they tell the story in the order the description does:
 A short recorded clip is also the best possible store video — the app now makes
 one of itself.
 
-## Pricing — recommendation
+## Pricing — decided
 
-**$7.99, no trial, no subscription.**
+**$5.00, no trial, no subscription.**
 
-Was $4.99 while the app was curation alone. Recording and wallpaper mode are
-what move it: nothing free does curation *and* recording *and* wallpaper, and
-wallpaper in particular puts it in the same sentence as Wallpaper Engine
-($3.99, tens of millions of owners) rather than next to a free preset player.
+Was $4.99 while the app was curation alone, then $7.99 once recording and
+wallpaper mode landed. Dropped to a flat $5 on 2026-09-08, the owner's call:
+*"I've seen full games sell for less than the current asking price, figured $5
+would be a steal for what the user gets, plus motivate others to try, due to
+affordability."*
+
+The reasoning behind $7.99 was never wrong — nothing free does curation *and*
+recording *and* wallpaper, and the ceiling really is around $9.99, where people
+compare this to Wallpaper Engine's entire workshop and it loses. What changed
+is which end of the range to aim at. This is a first paid app from an unknown
+name with no reviews to lean on, and at $5 the decision to try it stops being a
+decision. Volume and word of mouth are worth more here than $3 a copy.
 
 The floor is still set by projectM's own free player, which plays the same
-presets — so the copy stays about what that player cannot do. The ceiling is
-around $9.99, where people start comparing this to Wallpaper Engine's entire
-workshop and it loses. $7.99 sits above impulse-buy noise while staying an
-easy yes.
-
-$9.99 becomes defensible once wallpaper mode has been tested on real Windows
-hardware and the store video is a clip the app recorded of itself.
+presets — so the copy stays about what that player cannot do.
 
 Do not discount at launch. A launch discount off an unknown price is not a
 discount, and it burns the one sale event you get.

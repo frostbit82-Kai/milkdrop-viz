@@ -1911,6 +1911,12 @@ class ProjectM4:
                 return Path(self._preset_files[self._preset_index]).stem
         except Exception:
             pass
+        # An empty playlist is the welcome preset showing, not a failure.
+        try:
+            if self.playlist_size() == 0:
+                return WELCOME_NAME
+        except Exception:
+            pass
         return "Unknown"
 
     def playlist_size(self) -> int:
@@ -2148,6 +2154,41 @@ def preset_textures(text: str) -> list:
         seen.add(name)
         out.append(name)
     return out
+
+
+def bundled_dir(*parts) -> str:
+    """A file that ships with the app, source checkout or frozen build alike.
+
+    PyInstaller unpacks the bundle to a temporary directory and points
+    sys._MEIPASS at it; the source tree has everything beside this file.
+    """
+    root = getattr(sys, "_MEIPASS", None) or os.path.dirname(
+        os.path.abspath(__file__))
+    return os.path.join(root, *parts)
+
+
+#: What the welcome preset calls itself in the title bar and the browser.
+#: Not "Unknown", which is what an empty playlist reads as everywhere else and
+#: is the flag several code paths use for "nothing is playing yet".
+WELCOME_NAME = "Welcome — choose a preset folder to begin"
+
+
+def welcome_preset() -> str:
+    """The preset shown before the library is playing, or in place of it.
+
+    Without this projectM draws its own idle preset -- the projectM "M" logo
+    -- which is the first thing a new install shows, for as long as it takes
+    to choose a preset folder. It is somebody else's branding on the first
+    frame of a paid app. This one is ours: it samples
+    assets/textures/bomsai.png through the texture search path, which is why
+    that directory is on it.
+    """
+    try:
+        with open(bundled_dir("assets", "welcome.milk"), encoding="utf-8") as f:
+            return f.read()
+    except OSError as e:
+        print(f"[renderer] no welcome preset: {e}", flush=True)
+        return ""
 
 
 def texture_override_dir() -> str:
@@ -5518,6 +5559,14 @@ class Renderer:
         if self.sprites():
             self._req_sprites = True
 
+        # Before the library loads, so the first frame drawn is ours. projectM
+        # draws its own "M" idle preset for as long as nothing else is
+        # loaded, which on a fresh install is until a preset folder is
+        # chosen -- somebody else's logo on the first screen of a paid app.
+        text = welcome_preset()
+        if text:
+            self._pm.load_preset_data(text, smooth=False)
+
         count = 0
         if not os.path.isdir(preset_dir):
             print(f"[renderer] WARNING: preset dir not found: {preset_dir!r}")
@@ -5562,6 +5611,10 @@ class Renderer:
             # preset actually asks for. The spr_ prefix makes a collision
             # unlikely; being last makes it harmless.
             sprite_dir(),
+            # Ours, and only one file: the logo the welcome preset samples.
+            # Same reasoning as the line above -- last, so it can never
+            # answer for a texture a downloaded preset asked for.
+            bundled_dir("assets", "textures"),
         ) if p and os.path.isdir(p)]
         if tex_paths:
             self._pm.set_texture_search_paths(tex_paths)
@@ -6635,7 +6688,7 @@ class Renderer:
                 _random.shuffle(paths)   # a rebuild must not silently unshuffle
             self._rebuild_playlist(paths)
             self._rated_history.clear()   # native indices changed
-            if cur and cur != "Unknown":
+            if cur and cur not in ("Unknown", WELCOME_NAME):
                 self._seek_to_stem(cur)
             elif paths:
                 # Nothing was playing: first run, or the preset directory was

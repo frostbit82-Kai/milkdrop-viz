@@ -199,6 +199,46 @@ def every_pack_has_a_page_and_a_sane_shape():
             assert pack["url"].startswith("https://"), pack["name"]
 
 
+# ── the welcome preset ────────────────────────────────────────────────────
+
+def the_welcome_preset_ships_with_the_picture_it_samples():
+    """It draws the logo by sampling `sampler_fc_bomsai`, which projectM
+    resolves through the texture search path. Ship the .milk without the
+    picture and the first frame of a fresh install is a solid white square."""
+    text = v.welcome_preset()
+    assert text.startswith("MILKDROP_PRESET_VERSION"), text[:40]
+    assert "sampler_fc_bomsai" in text
+    assert os.path.isfile(v.bundled_dir("assets", "textures", "bomsai.png"))
+
+
+def the_bundled_texture_directory_is_last_in_the_search_path():
+    """Same rule the sprite directory follows: our own files must never
+    answer for a texture a downloaded preset asked for."""
+    import inspect
+    body = inspect.getsource(v.Renderer._apply_texture_paths)
+    assert 'bundled_dir("assets", "textures")' in body, body
+    assert body.index("sprite_dir()") < body.index('bundled_dir("assets"')
+
+
+def the_welcome_preset_is_loaded_before_the_library():
+    """Loaded after it, the first frames are projectM's own "M" idle preset;
+    not loaded at all, a fresh install shows that logo until a preset folder
+    is chosen."""
+    import inspect
+    body = inspect.getsource(v.Renderer._init_projectm)
+    assert "welcome_preset()" in body, "the welcome preset is never loaded"
+    assert body.index("welcome_preset()") < body.index("load_preset_dir"), \
+        "the library is loaded first, so the welcome preset never shows"
+
+
+def an_empty_playlist_is_named_rather_than_unknown():
+    assert v.WELCOME_NAME and v.WELCOME_NAME != "Unknown"
+    import inspect
+    body = inspect.getsource(v.Renderer._do_reload_playlist)
+    assert "WELCOME_NAME" in body, \
+        "the rebuild treats the welcome name as a preset to seek back to"
+
+
 for _name, _fn in list(globals().items()):
     if callable(_fn) and not _name.startswith(("_", "check")) \
             and getattr(_fn, "__module__", None) == "__main__":

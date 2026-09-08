@@ -7,6 +7,10 @@ __pycache__/
 # with the texture/preset directory settings instead.
 textures/
 projectm-presets/
+# ...except our own one file. The welcome preset samples it, so it has to
+# ship; the rule above is about other people's texture packs.
+!assets/textures/
+!assets/textures/bomsai.png
 
 # Local state
 config.json
