@@ -34,7 +34,11 @@ $dlls | ForEach-Object { Write-Output ("  {0,-28} {1:N0} bytes" -f $_.Name, $_.L
 
 # ctypes binds a symbol by assigning its signature: "C.projectm_create.restype".
 # Anything else matching projectm_* in that file is a Python name, not a symbol.
-$required = Select-String -Path $Source -Pattern '\b[A-Z]\.(projectm_[a-z0-9_]+)\.(?:restype|argtypes)' -AllMatches |
+# The receiver is whatever the binding code called it -- C, P, core, self._core
+# -- and matching only a single capital missed projectm_set_log_callback and
+# projectm_set_log_level, which are exactly the kind of new-on-master symbol
+# this script exists to catch.
+$required = Select-String -Path $Source -Pattern '(?:^|[^A-Za-z0-9_])[A-Za-z_][A-Za-z0-9_]*\.(projectm_[a-z0-9_]+)\.(?:restype|argtypes)' -AllMatches |
             ForEach-Object { $_.Matches } | ForEach-Object { $_.Groups[1].Value } |
             Sort-Object -Unique
 

@@ -86,9 +86,10 @@ purpose.** Upstream release links have gone dead before, and rebuilding needs a
 toolchain the packaging box may not have. `PROJECTM_LIB_DIR` overrides them.
 projectM is LGPL-2.1 and stays a separate `ctypes`-loaded library with its
 licence in `installer/licenses/` — that is what makes shipping it in a paid app
-legitimate, so do not link it statically. `installer/vendor/windows/` holds the
-same three DLLs for the same reason: `projectM-4.dll`, `projectM-4-playlist.dll`
-and the `glew32.dll` the core links.
+legitimate, so do not link it statically. `installer/vendor/windows/` holds
+`projectM-4.dll` and `projectM-4-playlist.dll` for the same reason. There is no
+third: `glew32.dll` was dropped at the pin below, where projectM stopped using
+GLEW.
 
 **The Windows release build is windowed, so it prints nothing.** `console` in
 the spec is False on win32 — a black console box behind a visualiser is a
@@ -159,12 +160,30 @@ There is no display in an agent shell and SDL needs one, so:
   line took it down. `_log()` now degrades unprintable characters instead of raising.
   Do not wrap a backend's whole `start()` in `try/except` and infer failure from it —
   an exception there may be about the logging, not the audio.
-- **libprojectM does not call `glewInit()`.** On Windows it links GLEW but only
-  ever initialises it in the SDL developer UI, which this build excludes. The host
-  must call `glewInit()` itself, with a current GL context, before the first
-  projectM call — otherwise every GL pointer is NULL and `projectm_create()` writes
-  to address 0. This depends on projectM being built against the *shared*
-  glew32.dll so both share one pointer table; a static GLEW would break it silently.
+- **GLEW is gone, and removing it was not optional.** Up to 4.1.0 libprojectM
+  linked GLEW on Windows and never called `glewInit()` (upstream only does that
+  in the SDL developer UI, which this build excludes), so the host had to call
+  it or every GL pointer stayed NULL and `projectm_create()` wrote to address 0.
+  At the pinned commit projectM loads OpenGL itself through **glad** —
+  `dumpbin /exports` shows no `glew32.dll` and no `OPENGL32.dll` import, and the
+  only DLL names inside it are `opengl32.dll`, `libEGL.dll` and the GLES ones it
+  resolves with `LoadLibrary`. That made the old `_init_glew()` a startup
+  failure rather than a safety net: nothing pulled `glew32.dll` into the process
+  any more, so `CDLL("glew32.dll")` raised and the renderer refused to start on
+  a machine where everything actually worked. The call and the vendored DLL are
+  both gone. If a pin is ever moved *back* to a GLEW-linking projectM, the trap
+  comes back with it.
+- **vcpkg builds ports with its own cmake, and finds one in
+  `C:\Program Files\CMake\bin` before it looks anywhere else.** Taking that
+  directory off PATH does not move it — the path is a built-in candidate. It
+  matters because this box's standalone CMake has null-filled module files
+  (crash damage: right sizes, all zero bytes), so every port build died with
+  "Parse error. Expected a command name" pointing inside CMake's own
+  `Modules/`. `VCPKG_FORCE_DOWNLOADED_BINARIES=1` makes vcpkg fetch a known-good
+  copy instead, and is the way past it without touching the machine's install.
+  Check a suspect CMake with `head -c 8 <module>.cmake | od -c`, not with
+  `grep`: in bash `$'\0'` is the empty string, so a NUL scan written that way
+  matches every file and proves nothing.
 - **A wrong ctypes `argtypes` can work on Linux and crash on Windows.** The ABIs
   pass the first argument in different registers (RDI vs RCX), so a missing
   argument picks up different garbage. `projectm_playlist_create` was declared

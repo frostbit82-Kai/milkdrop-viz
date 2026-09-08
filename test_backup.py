@@ -22,7 +22,11 @@ _TMP = tempfile.mkdtemp(prefix="viz-backup-")
 # Redirected before the import, so set_autostart writes here and never into a
 # real login directory.
 os.environ["XDG_CONFIG_HOME"] = os.path.join(_TMP, "config")
+# user_data_dir() reads LOCALAPPDATA on Windows and XDG_DATA_HOME everywhere
+# else, so setting only the Linux one isolates nothing there -- the same trap
+# test_thumbnails was fixed for.
 os.environ["XDG_DATA_HOME"] = os.path.join(_TMP, "data")
+os.environ["LOCALAPPDATA"] = os.path.join(_TMP, "data")
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import viz_common as v                                # noqa: E402

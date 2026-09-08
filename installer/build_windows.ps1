@@ -24,7 +24,7 @@ $Out     = Join-Path $Here 'dist'
 # rebuilt on demand -- see the Linux script for why. Known-good copies are
 # vendored; PROJECTM_LIB_DIR overrides them when a newer build exists.
 if (-not $env:PROJECTM_LIB_DIR) { $env:PROJECTM_LIB_DIR = Join-Path $Here 'vendor\windows' }
-foreach ($dll in 'projectM-4.dll', 'projectM-4-playlist.dll', 'glew32.dll') {
+foreach ($dll in 'projectM-4.dll', 'projectM-4-playlist.dll') {
     if (-not (Test-Path (Join-Path $env:PROJECTM_LIB_DIR $dll))) {
         throw "No $dll in $env:PROJECTM_LIB_DIR (build one with setup_windows.ps1)"
     }

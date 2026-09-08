@@ -21,10 +21,10 @@ PROJECTM_DIR = Path(os.environ["PROJECTM_LIB_DIR"]).resolve()
 # with ctypes at runtime, so it ships as a plain shared library the user can
 # swap — which is also what keeps the licence satisfied for a paid app.
 if sys.platform == "win32":
-    # glew32.dll travels with them. libprojectM links GLEW on Windows and never
-    # initialises it, so the host calls glewInit() itself — which only works
-    # while both are looking at the same shared copy.
-    _pm_globs = ("projectM-4*.dll", "libprojectM-4*.dll", "glew32.dll")
+    # No glew32.dll: libprojectM used to link GLEW here and leave the host to
+    # call glewInit(), but at the pinned commit it loads opengl32 itself
+    # through glad and imports GLEW nowhere. See CLAUDE.md.
+    _pm_globs = ("projectM-4*.dll", "libprojectM-4*.dll")
 else:
     _pm_globs = ("libprojectM-4*.so*",)
 binaries = [(str(p), ".") for g in _pm_globs for p in sorted(PROJECTM_DIR.glob(g))]

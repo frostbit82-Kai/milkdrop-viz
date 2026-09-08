@@ -5469,58 +5469,11 @@ class Renderer:
 
     # ── projectM init ─────────────────────────────────────────────────────
 
-    def _init_glew(self) -> bool:
-        """Resolve OpenGL entry points on Windows, before projectM makes any.
-
-        libprojectM links GLEW on Windows but never calls glewInit() itself —
-        upstream only does it in its SDL developer UI, which this build does not
-        include. Until something calls it every GLEW function pointer is NULL,
-        and the first GL call inside projectm_create() writes through a null
-        pointer: "access violation writing 0x0000000000000000".
-
-        Linux never hits this. projectM links libGL directly there, so the
-        dynamic loader resolves the symbols and there is no GLEW indirection.
-
-        This works only because projectM was built against the *shared*
-        glew32.dll: it and this call share one global pointer table. A
-        statically linked GLEW would hand projectM its own private copy and
-        initialising ours would silently fix nothing.
-
-        Requires a current GL context, so call it after SDL_GL_CreateContext
-        and on the same thread.
-        """
-        if sys.platform != "win32":
-            return True
-        try:
-            glew = _ctypes.CDLL("glew32.dll")
-        except OSError as e:
-            print(f"[renderer] glew32.dll not found. It must sit beside "
-                  f"projectM-4.dll or on PATH: {e}")
-            return False
-        try:
-            # GLboolean is an unsigned char; a wider write would clobber
-            # whatever GLEW keeps next to it. Core profiles need this set or
-            # glewInit() refuses on some drivers.
-            _ctypes.c_ubyte.in_dll(glew, "glewExperimental").value = 1
-        except ValueError:
-            pass                      # not exported by every GLEW build
-        glew.glewInit.restype = _ctypes.c_uint
-        err = glew.glewInit()
-        if err != 0:                  # GLEW_OK
-            print(f"[renderer] glewInit() failed with code {err}")
-            return False
-        return True
-
     def _init_projectm(self) -> bool:
         try:
             self._pm = self._create_projectm()
         except RuntimeError as e:
             print(f"[renderer] Fatal: {e}")
-            return False
-
-        # After the libraries are loaded (so we bind the same glew32.dll
-        # projectM does) and before any projectM call touches OpenGL.
-        if not self._init_glew():
             return False
 
         w   = self._cfg.get("width", 1280)

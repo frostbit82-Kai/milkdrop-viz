@@ -19,7 +19,12 @@ import tempfile
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 _TMP = tempfile.mkdtemp(prefix="viz-sprites-")
 # Before the import, so sprite_dir() lands here and never in a real one.
+# user_data_dir() reads LOCALAPPDATA on Windows and XDG_DATA_HOME everywhere
+# else, so setting only the Linux one isolated nothing there: this suite wrote
+# its fixtures into the real per-user directory, passed once, and then failed
+# from the second run on when the names it expected were already taken.
 os.environ["XDG_DATA_HOME"] = os.path.join(_TMP, "data")
+os.environ["LOCALAPPDATA"] = os.path.join(_TMP, "data")
 os.environ["XDG_CONFIG_HOME"] = os.path.join(_TMP, "config")
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 

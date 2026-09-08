@@ -10,8 +10,8 @@
 # or lift the gate once for your account, which is the saner setting on a dev
 # box:  Set-ExecutionPolicy -Scope CurrentUser RemoteSigned
 #
-# Produces C:\dev\projectm-deploy containing the three DLLs the app needs:
-#   projectM-4.dll  projectM-4-playlist.dll  glew32.dll
+# Produces C:\dev\projectm-deploy containing the two DLLs the app needs:
+#   projectM-4.dll  projectM-4-playlist.dll
 
 $ErrorActionPreference = 'Stop'
 
@@ -112,6 +112,11 @@ if ((Test-Path "$Deploy\projectM-4.dll") -and $DeployedAt -eq $ProjectMCommit) {
         git -C $Src remote add origin https://github.com/projectM-visualizer/projectm.git
     }
     if ((git -C $Src rev-parse HEAD 2>$null) -ne $ProjectMCommit) {
+        # The manifest trim below leaves vcpkg.json modified in the source
+        # tree, and checkout refuses to move over a dirty file -- so a pin
+        # bump aborted on the tree the previous run had left behind. It is
+        # rewritten a few lines further down either way.
+        git -C $Src checkout -q -- vcpkg.json 2>$null
         git -C $Src fetch --depth 1 origin $ProjectMCommit
         if ($LASTEXITCODE -ne 0) {
             Write-Output '    Shallow fetch by SHA refused; fetching the full history.'
@@ -157,11 +162,12 @@ if ((Test-Path "$Deploy\projectM-4.dll") -and $DeployedAt -eq $ProjectMCommit) {
     & $cmake --install $Build --config Release
     if ($LASTEXITCODE -ne 0) { throw 'Install failed.' }
 
-    # projectM-4.dll links glew32.dll, so it has to travel with them.
+    # Two DLLs, not three: projectM loads OpenGL itself at this commit and
+    # no longer links glew32.dll. GLEW stays in the vcpkg manifest because
+    # projectM's CMake still asks find_package for it at configure time.
     New-Item -ItemType Directory -Force -Path $Deploy | Out-Null
     Copy-Item "$Install\bin\projectM-4.dll"          $Deploy
     Copy-Item "$Install\bin\projectM-4-playlist.dll" $Deploy
-    Copy-Item "$Build\vcpkg_installed\x64-windows\bin\glew32.dll" $Deploy
     # Last, so a build that died half way leaves no stamp claiming success.
     Set-Content -Path $DeployStamp -Encoding ascii -Value $ProjectMCommit
 }

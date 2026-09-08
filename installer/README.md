@@ -71,12 +71,13 @@ Steam itself.
 Produces `installer\dist\BomsAIVisualizer-<version>-win64-setup.exe` and the
 portable tree beside it. It freezes with the same cross-platform spec the Linux
 build uses — the spec picks `SDL2.dll` over `libSDL2-2.0.so` and reads
-`PROJECTM_LIB_DIR` for `projectM-4.dll`, `projectM-4-playlist.dll` and
-`glew32.dll` — then hands the staged tree to Inno Setup 6. `-SkipInstaller`
-stops after freezing, which is what you want while iterating on the app.
+`PROJECTM_LIB_DIR` for `projectM-4.dll` and `projectM-4-playlist.dll` —
+then hands the staged tree to Inno Setup 6. `-SkipInstaller` stops after
+freezing, which is what you want while iterating on the app.
 
-Those three DLLs are vendored at `vendor/windows/` for the same reason as the
-Linux `.so` files, and `PROJECTM_LIB_DIR` overrides them. `setup_windows.ps1`
+Both DLLs are vendored at `vendor/windows/` for the same reason as the
+Linux `.so` files, and `PROJECTM_LIB_DIR` overrides them. There is no
+`glew32.dll` any more: projectM loads OpenGL itself at the pinned commit. `setup_windows.ps1`
 builds fresh ones and gathers them into `C:\dev\projectm-deploy`.
 
 After re-vendoring them, run `windows\verify_dlls.ps1`. It checks that the DLLs

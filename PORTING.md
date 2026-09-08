@@ -201,52 +201,59 @@ Not started:
 - [ ] Code signing (an unsigned installer gets a SmartScreen warning)
 - [ ] Steam page
 
-### 1.7.0 — needs a pass on Windows
+### 1.7.0 — the Windows pass, done
 
-All of it is written and tested on Linux (fifteen suites, plus a live run under
-Xvfb with a null sink). Three parts have Windows-only branches that no test here
-can reach, so run them on the real machine before the installer is rebuilt:
+Every one of the seventeen suites passes on Windows, twice in a row (see the
+sprites entry below for why twice). The five items the Linux session left here:
 
-- [ ] **Idle pause, full-screen half.** `fullscreen_app_running()` calls
-      `shell32.SHQueryUserNotificationState` and returns False everywhere else,
-      so on Linux only the silence timer was exercised. Check that starting a
-      full-screen game pauses a running wallpaper and that leaving it resumes.
-      The silence half is proven: paused, resumed on a tone, paused again.
-- [ ] **Start at login.** The Linux branch (a `.desktop` file) is tested; the
-      Windows branch writes `HKCU\...\CurrentVersion\Run` through `winreg` and
-      is not. Tick the box, log out and back in, and confirm the value is
-      removed again when it is unticked. The "…as the desktop wallpaper" row is
-      Windows-only and adds `--wallpaper` to the command.
-- [ ] **Sound in recorded clips with the bundled ffmpeg.** The clip is muxed in
-      a second pass (`-c:v copy`, `-itsscale`, `aac`). Verified here against the
-      system ffmpeg; the bundled LGPL build has to encode AAC, so check a clip
-      actually has an audio stream rather than a warning in the log. The
-      recorder falls back to the silent video if the mux fails, and says so.
+- [x] **Idle pause, full-screen half.** `SHQueryUserNotificationState` answers 5
+      (accepts notifications) on an idle desktop and 3 while a full-screen
+      OpenGL window is up, and `fullscreen_app_running()` flips both ways with
+      it — measured with a real full-screen window in a child process, sampled
+      16 times across 8 seconds. No game needed: any exclusive-full-screen
+      window trips it.
+- [x] **Start at login.** Written, read back through `winreg` directly rather
+      than through the app's own reader, and removed again; removing one that is
+      not there is silent, which is the path every OK takes. The command line is
+      parsed with `CommandLineToArgvW` — Windows' own splitter, not `shlex` —
+      for both the source and the frozen forms, because the frozen one lives
+      under `C:\Program Files\...` and the quoting is the only thing that can
+      go wrong there. Not done: an actual log out and back in.
+- [x] **Sound in recorded clips with the bundled ffmpeg.** `test_recording` and
+      `test_clip_audio` both pass with `installer\vendor\windows\ffmpeg.exe`
+      first on PATH, and the suite asserts the muxed stream's codec is `aac`.
+      That build has native `aac` and `h264_mf` and is configured
+      `--disable-libx264 --disable-libx265 --disable-libfdk-aac`, so the licence
+      invariant holds.
+- [x] **libprojectM rebuilt at the pin**, vendored, and checked with
+      `verify_dlls.ps1`: all 47 bound symbols present, sprite API included.
+      Read the GLEW trap in CLAUDE.md before touching this — the rebuild took
+      `glew32.dll` out of the picture, and the app would not start until the
+      `glewInit()` call went with it.
+- [x] **The picture overlay.** Driven live against the new DLL: `can_sprites` is
+      True, `add_sprite_image` copies the file in under a prefixed stem,
+      `sprite_code` is accepted by `projectm_sprite_create`, and the count is
+      still 1 after 90 rendered frames.
 
-- [ ] **Rebuild libprojectM at the pin.** Linux has moved off 4.1.0 to the
-      commit in `installer/PROJECTM_COMMIT`; the Windows DLLs are still 4.1.0
-      and the two must not ship apart. Run `setup_windows.ps1` — it now reads
-      the pin, fetches that commit by SHA, and rebuilds rather than reusing
-      `C:\dev\projectm-deploy` when the stamp there does not match. Copy the
-      three DLLs into `installer/vendor/windows/`, run `verify_dlls.ps1`, and
-      check the app still starts and cycles presets. Expect it to look
-      *better*: the 4.1.x rendering fixes land here. The whole PowerShell
-      change was written on Linux and only parse-checked, so read the output
-      of the fetch and stamp steps rather than trusting them.
+Two Windows-only defects found and fixed in the process:
 
-- [ ] **The picture overlay.** New in the preset browser's drop-down, third tab.
-      It only appears when libprojectM has the sprite API, so it is a direct
-      check that the DLL rebuild above actually landed: an old DLL shows an
-      explanation instead of the controls. Add a picture, change the movement
-      and the blending, restart and confirm it is still there. The pictures
-      live in `%APPDATA%`-adjacent user data, not beside the app.
+- `test_sprites` and `test_backup` redirected only `XDG_DATA_HOME`, so on
+  Windows they wrote into the real `%LOCALAPPDATA%\BomsAIVisualizer`. Both now
+  set `LOCALAPPDATA` as well — the same trap `test_thumbnails` was fixed for.
+  It hides on a first run: `test_sprites` passed once and then failed on the
+  names it had itself left behind.
+- `verify_dlls.ps1` only matched a single-capital ctypes receiver (`C.`, `P.`),
+  so `projectm_set_log_callback` and `projectm_set_log_level` — bound through
+  `core.` — were never checked. Exactly the new-on-master symbols it exists to
+  catch.
 
-Also new and cross-platform, so Windows only needs a look rather than a test:
-named collections (right-click → Collections), backup/restore of ratings and
-collections, an audio level meter in the audio submenu, `x` to exclude the
-visual on screen, and the Settings row "Start each visual on a black frame".
-libprojectM's own warnings and errors now reach stdout prefixed `[projectm:...]`
-— on Windows that needs `MILKDROP_CONSOLE=1` to be visible at all.
+Also new and cross-platform, so Windows only needed a look: named collections
+(right-click → Collections), backup/restore of ratings and collections, an audio
+level meter in the audio submenu, `x` to exclude the visual on screen, and the
+Settings row "Start each visual on a black frame". libprojectM's own warnings
+and errors now reach stdout prefixed `[projectm:...]` — on Windows that needs
+`MILKDROP_CONSOLE=1` to be visible at all. A 45-second live run on the new DLL
+loaded all 11,223 presets and cycled them with no `[projectm:...]` line at all.
 
 ## Packaging
 

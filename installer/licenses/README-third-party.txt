@@ -14,12 +14,6 @@ Qt 6 and PySide6 (Qt for Python) — LGPL-3.0
     application, so they can be replaced with a compatible build.
     Sources: https://download.qt.io/  and  https://download.qt.io/official_releases/QtForPython/
 
-GLEW — Modified BSD / MIT / SGI Free Software Licence B
-    GLEW-LICENSE.txt
-    Windows only, as glew32.dll beside projectM-4.dll. libprojectM links it
-    and never initialises it, so the app calls glewInit() itself -- which
-    only works while both look at the same shared copy.
-
 FFmpeg — LGPL-3.0 (an LGPL build; no GPL components)
     FFMPEG-LGPL-3.0.txt
     Shipped as ffmpeg.exe beside the application and run as a separate
