@@ -397,6 +397,12 @@ There is no display in an agent shell and SDL needs one, so:
   take -- reading it straight back returns the handle just written -- and then
   Qt finishes raising the dialog modally and the owner is 0 again. Linux needs
   none of it; the window manager already keeps a dialog above its parent.
+  **It must also skip popups.** `isWindow()` is true for a `QMenu` as well
+  (`WindowType_Mask` gives 0x9 for Popup against 0x1 Window and 0x3 Dialog),
+  and owning the context menu fights the pointer grab that holds it open: it
+  flickered open and shut under the cursor and then stopped appearing at all
+  until the app was restarted -- reported from a real session, not seen in any
+  suite. The toast is a Tool (0xb) and already sits on top by its own flag.
   Note that walking the z-order with `GetTopWindow`/`GetWindow` misreports
   owned windows: check with a screenshot, not with an enumeration.
 - **Synthetic mouse input needs a real move event.** `SetCursorPos` alone does

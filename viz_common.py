@@ -2890,9 +2890,18 @@ class _OwnedByVisuals(QObject):
         super().__init__()
         self._host = host          # the Renderer, for its SDL window handle
 
+    #: Real windows and dialogs only. isWindow() is also true for a QMenu,
+    #: and giving the context menu an owner fights the pointer grab that keeps
+    #: it up: it flickered open and shut under the cursor, and then stopped
+    #: appearing at all until the app was restarted. The toast is a Tool and
+    #: already sits on top through its own WindowStaysOnTopHint.
+    _OWNABLE = (int(Qt.WindowType.Window), int(Qt.WindowType.Dialog))
+
     def eventFilter(self, obj, event):
         if (event.type() == QEvent.Type.Show
-                and isinstance(obj, QWidget) and obj.isWindow()):
+                and isinstance(obj, QWidget) and obj.isWindow()
+                and (int(obj.windowFlags()) & int(Qt.WindowType.WindowType_Mask))
+                    in self._OWNABLE):
             QTimer.singleShot(0, lambda w=obj: self._own(w))
         return False
 
