@@ -51,12 +51,18 @@ class FakeUser32:
 class FakeSDL:
     SDL_FALSE, SDL_TRUE = 0, 1
 
-    def __init__(self):
+    def __init__(self, log=None):
         self.pos = self.size = None
         self.bordered = None
+        #: Shared with FakeXlib when both are in play, so the order of the
+        #: unmap / property change / map dance can be checked across the two.
+        self.order = [] if log is None else log
     def SDL_SetWindowPosition(self, _w, x, y):  self.pos = (x, y)
     def SDL_SetWindowSize(self, _w, w, h):      self.size = (w, h)
     def SDL_SetWindowBordered(self, _w, v):     self.bordered = v
+    def SDL_HideWindow(self, _w):               self.order.append("hide")
+    def SDL_ShowWindow(self, _w):               self.order.append("show")
+    def SDL_RaiseWindow(self, _w):              self.order.append("raise")
 
 
 class FakeBridge:
@@ -138,17 +144,178 @@ def a_defview_with_no_sibling_gives_nothing():
     assert pick_workerw(u, u.tops) == 0
 
 
-def non_windows_refuses_with_a_reason():
-    r = bare()
+@contextlib.contextmanager
+def as_platform(name):
     real = viz_common.sys.platform
+    viz_common.sys.platform = name
     try:
-        viz_common.sys.platform = "linux"
-        r._set_wallpaper_mode(True)
+        yield
     finally:
         viz_common.sys.platform = real
-    assert r._wallpaper is False, "claimed wallpaper mode off Windows"
-    assert any("Windows only" in " ".join(map(str, t)) for t in r._bridge.toasts), \
+
+
+@contextlib.contextmanager
+def as_env(env):
+    real = viz_common.os.environ
+    viz_common.os.environ = env
+    try:
+        yield
+    finally:
+        viz_common.os.environ = real
+
+
+X11_ENV = {"DISPLAY": ":0", "XDG_SESSION_TYPE": "x11",
+           "XDG_CURRENT_DESKTOP": "X-Cinnamon"}
+WAYLAND_ENV = {"DISPLAY": ":0", "XDG_SESSION_TYPE": "wayland",
+               "WAYLAND_DISPLAY": "wayland-0"}
+
+
+def an_x11_session_can_host_wallpaper_mode():
+    with as_platform("linux"):
+        ok, why = viz_common.wallpaper_support(X11_ENV)
+    assert ok, why
+
+def wayland_is_refused_and_told_the_one_thing_that_would_fix_it():
+    """An X11 client under a Wayland compositor is an ordinary toplevel: there
+    is no below-the-desktop layer to ask for, on XWayland or natively. The only
+    thing the user can do is log in on Xorg, so the reason has to say so."""
+    with as_platform("linux"):
+        ok, why = viz_common.wallpaper_support(WAYLAND_ENV)
+    assert not ok, "offered wallpaper mode on Wayland"
+    assert "xorg" in why.lower(), why
+
+def wayland_is_caught_without_xdg_session_type_too():
+    """That variable is not set on every login manager. WAYLAND_DISPLAY is."""
+    with as_platform("linux"):
+        ok, _why = viz_common.wallpaper_support(
+            {"DISPLAY": ":0", "WAYLAND_DISPLAY": "wayland-0"})
+    assert not ok
+
+def no_display_at_all_is_refused():
+    with as_platform("linux"):
+        ok, _why = viz_common.wallpaper_support({})
+    assert not ok
+
+def windows_needs_no_session_check():
+    with as_platform("win32"):
+        ok, _why = viz_common.wallpaper_support({})
+    assert ok
+
+
+def a_session_that_cannot_host_it_refuses_with_a_reason():
+    r = bare()
+    with as_platform("linux"), as_env(WAYLAND_ENV):
+        r._set_wallpaper_mode(True)
+    assert r._wallpaper is False, "claimed wallpaper mode where it cannot work"
+    assert any("X11" in " ".join(map(str, t)) for t in r._bridge.toasts), \
         r._bridge.toasts
+
+
+class FakeXlib:
+    """Enough of Xlib to record what would have gone on the wire."""
+    def __init__(self, log=None):
+        self.atoms, self.props, self.deleted = {}, {}, []
+        self.lowered = self.synced = 0
+        self.order = [] if log is None else log
+    def atom(self, name):
+        return self.atoms.setdefault(name, 0x1_0000_0001 + len(self.atoms))
+    def XInternAtom(self, _dpy, name, _exists):
+        return self.atom(name.decode())
+    def XChangeProperty(self, _dpy, _win, prop, typ, fmt, _mode, buf, n):
+        self.props[prop] = (typ, fmt, list(buf)[:n])
+    def XDeleteProperty(self, _dpy, _win, prop):
+        self.deleted.append(prop)
+    def XLowerWindow(self, _dpy, _win):  self.lowered += 1
+    def XSync(self, _dpy, _discard):
+        self.synced += 1
+        self.order.append("sync")
+
+
+def the_state_property_is_a_32_bit_atom_list():
+    """Format 32 with type ATOM is what a window manager reads. Atom values are
+    deliberately above 2^32 here: a signature that lets ctypes narrow one to
+    c_int passes every test written with small numbers and fails on a real
+    server."""
+    lib = FakeXlib()
+    wanted = ["_NET_WM_STATE_BELOW", "_NET_WM_STATE_STICKY"]
+    viz_common.x11_set_atoms(lib, 1, 2, "_NET_WM_STATE", wanted)
+    typ, fmt, vals = lib.props[lib.atom("_NET_WM_STATE")]
+    assert fmt == 32, fmt
+    assert typ == viz_common._XA_ATOM, typ
+    assert vals == [lib.atom(v) for v in wanted], vals
+
+def an_empty_list_deletes_the_property():
+    """Leaving _NET_WM_STATE behind on the way out keeps the window below."""
+    lib = FakeXlib()
+    viz_common.x11_set_atoms(lib, 1, 2, "_NET_WM_STATE", [])
+    assert lib.deleted == [lib.atom("_NET_WM_STATE")], lib.deleted
+    assert lib.props == {}, lib.props
+
+
+def _x11_run(on, displays=TWO, cfg=None):
+    """_set_x11_wallpaper against a fake Xlib and a fake SDL."""
+    r = bare(cfg or {"fullscreen_display": 0}, displays)
+    r._native_handle, r._x11_display = 0x2000001, 1
+    r._wallpaper = not on
+    if not on:
+        r._wp_restore = ((10, 20, 640, 480), False, 0, 0)
+    log = []
+    lib = FakeXlib(log)
+    real_x11 = viz_common._libx11
+    viz_common._libx11 = lambda: lib
+    fake = FakeSDL(log)
+    try:
+        with faked_sdl(fake):
+            r._set_x11_wallpaper(on)
+    finally:
+        viz_common._libx11 = real_x11
+    return r, lib, fake
+
+def becoming_the_desktop_asks_for_the_desktop_type_and_the_bottom_layer():
+    r, lib, fake = _x11_run(True)
+    typ = lib.props[lib.atom("_NET_WM_WINDOW_TYPE")][2]
+    assert typ == [lib.atom("_NET_WM_WINDOW_TYPE_DESKTOP")], typ
+    state = lib.props[lib.atom("_NET_WM_STATE")][2]
+    for want in viz_common._X11_STATES:
+        assert lib.atom(want) in state, want
+    assert r._wallpaper is True
+    assert fake.size == (1920, 1080), fake.size
+    assert fake.bordered == FakeSDL.SDL_FALSE, "the desktop kept its border"
+
+def the_window_is_lowered_under_the_icons():
+    """The desktop type puts the window in the bottom layer; it does not say
+    where among the windows already there it lands, and the one holding the
+    desktop icons is one of them."""
+    _r, lib, _fake = _x11_run(True)
+    assert lib.lowered == 1, lib.lowered
+
+def the_property_change_is_flushed_before_the_window_comes_back():
+    """A window manager reads _NET_WM_WINDOW_TYPE when the window is mapped.
+    Map first and it reads the old one, and nothing appears to happen."""
+    _r, lib, fake = _x11_run(True)
+    assert fake.order.index("sync") < fake.order.index("show"), fake.order
+    assert fake.order.index("hide") < fake.order.index("sync"), fake.order
+
+def leaving_puts_the_window_back_where_it_was():
+    r, lib, fake = _x11_run(False)
+    typ = lib.props[lib.atom("_NET_WM_WINDOW_TYPE")][2]
+    assert typ == [lib.atom("_NET_WM_WINDOW_TYPE_NORMAL")], typ
+    assert lib.deleted == [lib.atom("_NET_WM_STATE")], lib.deleted
+    assert r._wallpaper is False
+    assert fake.pos == (10, 20) and fake.size == (640, 480), (fake.pos, fake.size)
+    assert fake.bordered == FakeSDL.SDL_TRUE, "came back without a border"
+    assert lib.lowered == 0, "lowered the window on the way out"
+
+def a_window_that_does_not_exist_yet_is_an_error_not_a_lie():
+    r = bare()
+    r._native_handle, r._x11_display = 0, None
+    try:
+        r._set_x11_wallpaper(True)
+    except RuntimeError:
+        pass
+    else:
+        assert False, "claimed to make a window that does not exist the desktop"
+    assert r._wallpaper is False
 
 def asking_for_the_mode_it_is_already_in_does_nothing():
     r = bare()
@@ -199,17 +366,48 @@ class _MenuHost:
     def _save_config(self, cfg): pass
 
 
-def _wallpaper_entries(host, layered=False):
-    """Build the menu with the desktop lookup stubbed; its wallpaper items."""
-    real = viz_common.find_desktop_host
+def _wallpaper_entries(host, layered=False, support=(True, "")):
+    """Build the menu with the desktop lookup and the session check stubbed;
+    its wallpaper items, as (text, enabled, tooltip).
+
+    `support` is stubbed rather than driven through the environment because the
+    menu is being tested here, not the session check -- and a replaced os.environ
+    takes HOME and XDG_* away from everything else the menu builds.
+    """
+    real_host, real_sup = viz_common.find_desktop_host, viz_common.wallpaper_support
     viz_common.find_desktop_host = lambda *a, **k: (host, layered)
+    viz_common.wallpaper_support = lambda *a, **k: support
     try:
         menu = viz_common.ContextMenu(renderer=_MenuHost(), cfg={},
                                       ratings={}, keymaps={})
-        return [(a.text(), a.isEnabled()) for a in menu.actions()
+        return [(a.text(), a.isEnabled(), a.toolTip()) for a in menu.actions()
                 if "wallpaper" in a.text().lower()]
     finally:
-        viz_common.find_desktop_host = real
+        viz_common.find_desktop_host = real_host
+        viz_common.wallpaper_support = real_sup
+
+
+def a_session_that_cannot_host_it_gets_a_dead_entry_carrying_the_reason():
+    """The menu line has no room for the explanation, and a live entry that
+    only ever reaches a toast spends a click to say no. The tooltip carries it."""
+    why = "Wallpaper mode needs an X11 session."
+    items = _wallpaper_entries(1, support=(False, why))
+    assert items, "no wallpaper entry at all"
+    text, enabled, tip = items[0]
+    assert not enabled, f"offered an entry that cannot work: {text!r}"
+    assert "not available" in text.lower(), text
+    assert tip == why, tip
+
+def an_x11_desktop_is_offered_the_real_entry():
+    """Windows takes a second gate (is Explorer drawing the desktop?); nothing
+    else does, so on X11 a supported session is the whole test."""
+    if sys.platform == "win32":
+        return
+    items = _wallpaper_entries(0, support=(True, ""))
+    assert items, "no wallpaper entry"
+    text, enabled, _tip = items[0]
+    assert enabled, f"the entry was disabled on a session that can host it: {text!r}"
+    assert "set as desktop wallpaper" in text.lower(), text
 
 
 def a_machine_with_no_desktop_is_told_so_in_the_menu():
@@ -219,7 +417,7 @@ def a_machine_with_no_desktop_is_told_so_in_the_menu():
         return                      # the entry is Windows-only
     items = _wallpaper_entries(0)
     assert items, "no wallpaper entry at all"
-    text, enabled = items[0]
+    text, enabled, _tip = items[0]
     assert not enabled, f"offered a wallpaper entry that cannot work: {text!r}"
     assert "not available" in text.lower(), text
 
@@ -229,7 +427,7 @@ def a_machine_with_a_workerw_gets_the_real_entry():
         return
     items = _wallpaper_entries(12345)
     assert items, "no wallpaper entry"
-    text, enabled = items[0]
+    text, enabled, _tip = items[0]
     assert enabled, f"the entry was disabled despite a WorkerW: {text!r}"
     assert "set as desktop wallpaper" in text.lower(), text
 
@@ -279,12 +477,26 @@ def the_wallpaper_action_is_in_the_editor():
 for fn in (the_worker_behind_the_icons_is_chosen,
            a_desktop_with_no_defview_gives_nothing,
            a_defview_with_no_sibling_gives_nothing,
-           non_windows_refuses_with_a_reason,
+           an_x11_session_can_host_wallpaper_mode,
+           wayland_is_refused_and_told_the_one_thing_that_would_fix_it,
+           wayland_is_caught_without_xdg_session_type_too,
+           no_display_at_all_is_refused,
+           windows_needs_no_session_check,
+           a_session_that_cannot_host_it_refuses_with_a_reason,
+           the_state_property_is_a_32_bit_atom_list,
+           an_empty_list_deletes_the_property,
+           becoming_the_desktop_asks_for_the_desktop_type_and_the_bottom_layer,
+           the_window_is_lowered_under_the_icons,
+           the_property_change_is_flushed_before_the_window_comes_back,
+           leaving_puts_the_window_back_where_it_was,
+           a_window_that_does_not_exist_yet_is_an_error_not_a_lie,
            asking_for_the_mode_it_is_already_in_does_nothing,
            a_chosen_monitor_is_the_one_filled,
            with_no_choice_it_spans_every_monitor,
            positions_are_relative_to_the_virtual_desktop_origin,
            a_machine_with_no_desktop_is_told_so_in_the_menu,
+           a_session_that_cannot_host_it_gets_a_dead_entry_carrying_the_reason,
+           an_x11_desktop_is_offered_the_real_entry,
            a_machine_with_a_workerw_gets_the_real_entry,
            windows_10_is_still_offered_the_layer_behind_the_icons,
            windows_11_uses_progmans_own_worker_and_asks_to_be_layered,

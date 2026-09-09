@@ -71,6 +71,7 @@ CONTROLS
     escape            quit
     + / -             rate the current preset up or down
     x                 exclude this one (rate it 0) and move on
+    d                 desktop wallpaper mode on / off (X11 sessions)
     h                 hard cuts on/off
     m                 shuffle the playlist order on / off
     scroll lock       lock the current preset
@@ -122,8 +123,24 @@ movement, which is the contract xscreensaver and similar expect. There is no
 automatic integration — desktops differ too much — so wire it in yourself if
 you want it.
 
-Desktop wallpaper mode is Windows only: X11 desktops each place the wallpaper
-differently and Wayland gives an application no way to draw behind the icons.
+
+DESKTOP WALLPAPER
+-----------------
+
+Right-click -> Set as desktop wallpaper draws the visuals on the desktop,
+behind your icons. Press d for the same thing. The window sits below
+everything, so it cannot be clicked while it is there -- a tray icon appears
+instead, and clicking it opens the same menu. Use it to change preset, rate,
+or leave wallpaper mode.
+
+With a monitor chosen under Fullscreen display it fills that one; otherwise it
+spans every monitor. Settings -> At login can start it this way.
+
+This needs an X11 session. Wayland gives an application no way to draw behind
+the desktop icons -- there is no such layer in the protocol, and running under
+XWayland does not add one. If your login screen offers a session ending in "on
+Xorg", picking that gets you wallpaper mode; the menu entry says so and stays
+greyed out otherwise. Everything else in the app works the same either way.
 
 
 THEME

@@ -548,12 +548,15 @@ There is no display in an agent shell and SDL needs one, so:
   preset browser reads that directory while the writer is filling it, and
   `QImage.save` writes in place, so a reader could open a half-encoded JPEG and
   draw nothing. `os.replace` is atomic on both platforms.
-- **`_build_wallpaper_entry` returns early on Linux, so a stub renderer without
-  `is_wallpaper()` builds the menu fine there and crashes here.** Anything
-  standing in for the renderer has to carry the Windows-only host methods too.
-  The same shape caught `_fit_to_wallpaper`: it calls `glViewport`, which
-  quietly no-ops without a context on Linux and raises `GL_INVALID_OPERATION`
-  on Windows, so that suite could not run on the platform the feature is for.
+- **A feature that is live on one platform and skipped on the other hides
+  stub gaps.** `_build_wallpaper_entry` used to return early on Linux, so a
+  stub renderer without `is_wallpaper()` built the menu fine there and crashed
+  on Windows. It builds everywhere now, but the shape recurs: anything standing
+  in for the renderer has to carry every host method, not the ones the local
+  platform happens to call. The same shape caught `_fit_to_wallpaper`: it calls
+  `glViewport`, which quietly no-ops without a context on Linux and raises
+  `GL_INVALID_OPERATION` on Windows, so that suite could not run on the
+  platform the feature was for.
 
 - **Wallpaper mode: two desktop layouts, and Windows 11 needs a layered
   child.** Measured on 11 Pro build 26200 with screen captures as the check.
@@ -602,6 +605,44 @@ There is no display in an agent shell and SDL needs one, so:
   test that keeps drawing *changing* frames), not a static clear.
   `test_wallpaper` exercises `pick_desktop_host` for both the Win10 top-level
   and the Win11 layered-child layouts against hand-built window lists.
+- **Wallpaper mode on Linux is EWMH, X11 only, and the two non-obvious parts
+  are when the property is read and where the window lands.** 2026-09-09.
+  `_set_x11_wallpaper` sets `_NET_WM_WINDOW_TYPE` to
+  `_NET_WM_WINDOW_TYPE_DESKTOP`, plus `_NET_WM_STATE` = BELOW / SKIP_TASKBAR /
+  SKIP_PAGER / STICKY.
+
+  1. **A window manager reads `_NET_WM_WINDOW_TYPE` when the window is
+     mapped.** Setting it on a window that is already up changes nothing.
+     The window has to go away and come back -- `SDL_HideWindow` /
+     `SDL_ShowWindow` rather than `XUnmapWindow`, so SDL's own bookkeeping
+     stays true -- with an `XSync` between the property change and the map.
+  2. **The desktop type does not say where in the bottom layer you land**, and
+     the window holding the desktop icons (xfdesktop, Nemo, plasmashell) is
+     already there. `XLowerWindow` after the map is what puts the icons above
+     the visuals. Without it the feature looks like it works and covers them.
+
+  **ctypes signatures are spelled out in `_libx11` because both defaults are
+  wrong.** A returned `Atom` through the default `c_int` restype loses its top
+  half on 64-bit; a `Window` passed as a bare Python int goes out as `c_int`
+  and addresses some other window. `_NET_WM_STATE` is format 32, which in Xlib
+  means *an array of `long`* -- `c_ulong`, not `c_uint32`.
+
+  **Wayland cannot host this at all**, XWayland included: an X client under a
+  Wayland compositor is an ordinary toplevel and the protocol has nothing
+  corresponding to a below-the-desktop layer. `wallpaper_support()` is the one
+  gate for the menu entry, the key, the toast and the settings checkbox, and it
+  names Xorg in the refusal because that is the only thing the user can do.
+  Verified 2026-09-09 against a real X server under Xvfb: properties land with
+  type ATOM and format 32, the app enters with `--wallpaper` at full screen
+  geometry, and `d` round-trips it back to `_NET_WM_WINDOW_TYPE_NORMAL` with
+  `_NET_WM_STATE` deleted and the old geometry restored. **Stacking against
+  real desktop icons is still unverified** -- it needs a window manager and an
+  icon manager, neither of which is installed on the dev box. Queued for Mint
+  (Cinnamon on X11). If the visuals come out *over* the icons there, the first
+  thing to check is whether the icon window is itself
+  `_NET_WM_WINDOW_TYPE_DESKTOP` (`xprop` it): two desktop windows in the same
+  layer is exactly the case `XLowerWindow` is there to settle, and if Cinnamon
+  re-raises us the fallback is to lower again on the next `MapNotify`.
 - **A screensaver must not open a dialog, and that includes the no-presets
   one.** `_warn_photosensitivity` already skips for this reason;
   `_on_no_presets` did not, so a fresh install that ticked "use as the Windows

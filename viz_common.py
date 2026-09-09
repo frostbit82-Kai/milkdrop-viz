@@ -3228,7 +3228,7 @@ class SettingsDialog(QDialog):
         self._autostart_wp.setChecked(bool(cfg.get("autostart_wallpaper", False)))
         self._autostart_wp.setEnabled(self._autostart.isChecked())
         self._autostart.toggled.connect(self._autostart_wp.setEnabled)
-        if sys.platform == "win32":
+        if wallpaper_support()[0]:
             layout.addRow("", self._autostart_wp)
 
         # Buttons
@@ -3367,7 +3367,8 @@ ACTION_NOTES = {
     "lock":             "SCROLLLOCK uses the Scroll Lock key",
     "rate_down":        "Rating 0 excludes preset from random rotation",
     "record":           "Needs ffmpeg; clips land in the clips folder",
-    "toggle_wallpaper": "Windows only; leave it again from the tray icon",
+    "toggle_wallpaper": "Windows or an X11 desktop; leave it again from the "
+                        "tray icon",
     "exclude":          "Hides it from rotation. Nothing is deleted",
 }
 
@@ -4070,24 +4071,27 @@ class ContextMenu(QMenu):
         self.addAction("✕   Quit",             QApplication.quit)
 
     def _build_wallpaper_entry(self):
-        """Windows only. Nothing on Linux draws behind the desktop icons in a
-        way an application can ask for, so an entry there would be a promise
-        the platform cannot keep."""
-        if sys.platform != "win32":
-            return
-        on = self._renderer.is_wallpaper()
-        if on:
+        """Live where the session can host it, disabled with a reason where it
+        cannot. Offering it anyway spends a click to reach a toast that is gone
+        three seconds later, so the reason goes where the click would have
+        been -- in the tooltip, which is longer than a menu line allows."""
+        if self._renderer.is_wallpaper():
             self.addAction("🖥   Leave wallpaper mode",
                            lambda: self._renderer.request_wallpaper())
             return
-        host, _layered = find_desktop_host(wait=0.3)
-        if not host:
-            # No Explorer desktop to draw into at all -- a third-party shell,
-            # or the desktop not up yet. Offering the entry anyway spends a
-            # click to reach a toast, so say so where the click would have been.
-            dead = QAction("🖥   Desktop wallpaper — not available on this "
-                           "version of Windows", self)
+        ok, why = wallpaper_support()
+        if ok and sys.platform == "win32":
+            host, _layered = find_desktop_host(wait=0.3)
+            if not host:
+                # No Explorer desktop to draw into at all -- a third-party
+                # shell, or the desktop not up yet.
+                ok, why = False, ("Wallpaper mode is not available on this "
+                                  "version of Windows.")
+        if not ok:
+            dead = QAction("🖥   Desktop wallpaper — not available here", self)
             dead.setEnabled(False)
+            dead.setToolTip(why)
+            self.setToolTipsVisible(True)
             self.addAction(dead)
             return
         self.addAction("🖥   Set as desktop wallpaper",
@@ -5035,6 +5039,86 @@ def find_desktop_host(u=None, wait=2.0):
         _time.sleep(0.05)
 
 
+# ─── desktop wallpaper (X11) ──────────────────────────────────────────────────
+
+#: EWMH is the whole of what X11 offers here. A window whose _NET_WM_WINDOW_TYPE
+#: is _NET_WM_WINDOW_TYPE_DESKTOP is the desktop as far as the window manager is
+#: concerned: undecorated, off the taskbar, and stacked at the very bottom --
+#: which is where the wallpaper goes and, on every desktop that draws icons,
+#: underneath the window those icons live on.
+_X11_TYPE = "_NET_WM_WINDOW_TYPE"
+_X11_DESKTOP = "_NET_WM_WINDOW_TYPE_DESKTOP"
+_X11_NORMAL = "_NET_WM_WINDOW_TYPE_NORMAL"
+_X11_STATE = "_NET_WM_STATE"
+#: BELOW is redundant with the desktop type on a well-behaved window manager and
+#: is what saves the feature on one that only half-implements it. STICKY keeps
+#: the wallpaper on every virtual desktop, which is what a wallpaper is.
+_X11_STATES = ("_NET_WM_STATE_BELOW", "_NET_WM_STATE_SKIP_TASKBAR",
+               "_NET_WM_STATE_SKIP_PAGER", "_NET_WM_STATE_STICKY")
+
+_XA_ATOM, _PROP_REPLACE = 4, 0
+
+
+def _libx11():
+    """Xlib, already loaded into this process by SDL's x11 driver.
+
+    ctypes rather than a binding: there is no python3-xlib in the runtime
+    dependencies and four calls do not earn one.
+    """
+    lib = ctypes.CDLL("libX11.so.6")
+    # Every signature is spelled out because the ctypes defaults are wrong
+    # here in both directions: a returned Atom would come back through c_int
+    # and lose its top half on 64-bit, and a Window passed as a bare Python
+    # int would go out as c_int and address some other window entirely.
+    ulong, ptr, i = ctypes.c_ulong, ctypes.c_void_p, ctypes.c_int
+    lib.XInternAtom.restype = ulong
+    lib.XInternAtom.argtypes = [ptr, ctypes.c_char_p, i]
+    lib.XChangeProperty.argtypes = [ptr, ulong, ulong, ulong, i, i, ptr, i]
+    lib.XDeleteProperty.argtypes = [ptr, ulong, ulong]
+    lib.XLowerWindow.argtypes = [ptr, ulong]
+    lib.XSync.argtypes = [ptr, i]
+    return lib
+
+
+def x11_set_atoms(lib, dpy, win, prop, values):
+    """Replace an atom-list property on a window. An empty list deletes it."""
+    target = lib.XInternAtom(dpy, prop.encode(), False)
+    if not values:
+        lib.XDeleteProperty(dpy, win, target)
+        return
+    atoms = [lib.XInternAtom(dpy, v.encode(), False) for v in values]
+    # Format 32 means "an array of long", not of int32 -- an Xlib wart that
+    # costs a garbled property on any 64-bit machine if it is taken literally.
+    buf = (ctypes.c_ulong * len(atoms))(*atoms)
+    lib.XChangeProperty(dpy, win, target, _XA_ATOM, 32, _PROP_REPLACE,
+                        buf, len(atoms))
+
+
+def wallpaper_support(env=None):
+    """Can this session host wallpaper mode? (ok, reason).
+
+    `reason` is what to tell the user when it cannot, and it is deliberately
+    specific: "not supported" invites a bug report, and the fix here is a
+    thing the user can actually do.
+    """
+    env = os.environ if env is None else env
+    if sys.platform == "win32":
+        return True, ""
+    if sys.platform != "linux":
+        return False, "Wallpaper mode is available on Windows and on Linux."
+    # An X11 client under a Wayland compositor is an ordinary application
+    # window. XWayland has no below-the-desktop layer to ask for, and neither
+    # does Wayland itself: the protocol has nothing that corresponds to it.
+    if env.get("WAYLAND_DISPLAY") or \
+            env.get("XDG_SESSION_TYPE", "").lower() == "wayland":
+        return False, ("Wallpaper mode needs an X11 session. Wayland gives an "
+                       "application no way to draw behind the desktop icons "
+                       "— pick “on Xorg” at the login screen to use it.")
+    if not env.get("DISPLAY"):
+        return False, "Wallpaper mode needs a desktop session."
+    return True, ""
+
+
 def thumbs_dir() -> str:
     return os.path.join(user_data_dir(), "thumbs")
 
@@ -5436,9 +5520,13 @@ class Renderer:
         #: reads it (to place the toast) and SDL calls belong to the thread
         #: that created the window.
         self._win_rect = None
-        #: HWND on Windows, X11 window id elsewhere. Only the frame theme
-        #: uses it, and only on Windows.
+        #: HWND on Windows, X11 window id elsewhere. The frame theme uses it
+        #: on Windows, wallpaper mode on both.
         self._native_handle = 0
+        #: SDL's own Display*, on X11 only. Wallpaper mode changes window
+        #: properties through it rather than opening a second connection, so
+        #: there is no second connection to keep in step.
+        self._x11_display = None
         #: [(index, name, x, y, w, h), ...] for every monitor. Same reason as
         #: _win_rect: SDL's video calls belong to the render thread, and the
         #: Qt thread builds the display menu out of this cache.
@@ -5575,6 +5663,7 @@ class Renderer:
                     handle = wm_info.info.win.window          # HWND
                 else:
                     handle = wm_info.info.x11.window
+                    self._x11_display = wm_info.info.x11.display
                 print(f"XID={handle}", flush=True)
                 # Kept so the frame can be re-themed when the setting changes.
                 self._native_handle = handle
@@ -6868,111 +6957,111 @@ class Renderer:
             self._req_wallpaper = (not self._wallpaper) if on is None else bool(on)
 
     def _set_wallpaper_mode(self, on: bool):
-        """Parent the visualiser window into Explorer's wallpaper window.
+        """Become the desktop: Explorer's wallpaper window on Windows, an
+        EWMH desktop window on X11.
 
-        Windows only. There is no equivalent anywhere else that is worth
-        shipping: X11 desktops each place the wallpaper differently and
-        Wayland gives an application no way to reach behind the desktop at all.
-
-        A window parented into WorkerW receives no keyboard or mouse input --
-        that is Explorer's, not ours -- so the tray icon the host puts up is
-        the only way back out. wallpaper_changed is what tells it to.
+        Either way the visualiser ends up below everything and receives no
+        keyboard or mouse input -- the desktop keeps it -- so the tray icon
+        the host puts up is the only way back out. wallpaper_changed is what
+        tells it to.
         """
         if on == self._wallpaper:
             return
-        if sys.platform != "win32":
-            self._bridge.show_toast.emit(
-                "Wallpaper mode is Windows only — Linux desktops give an "
-                "application no way to draw behind the icons")
+        ok, why = wallpaper_support()
+        if not ok:
+            self._bridge.show_toast.emit(why)
             return
         try:
-            u = _user32()
-            hwnd = ctypes.c_void_p(self._native_handle)
-            if on:
-                host, layered = find_desktop_host(u)
-                if not host:
-                    # Printed as well as toasted, because a toast is gone in
-                    # three seconds and never reaches a log.
-                    print("[wallpaper] no desktop window to draw into",
-                          flush=True)
-                    self._bridge.show_toast.emit(
-                        "Wallpaper mode is not available on this version of "
-                        "Windows.")
-                    return
-                self._track_window()
-                self._wp_restore = (
-                    self._win_rect, self._borderless,
-                    u.GetWindowLongPtrW(hwnd, _GWL_STYLE) or 0,
-                    u.GetWindowLongPtrW(hwnd, _GWL_EXSTYLE) or 0)
-                self._wp_host = None
-                host_style = u.GetWindowLongPtrW(host, _GWL_STYLE) or 0
-                if layered and not host_style & _WS_CLIPCHILDREN:
-                    # Left alone this WorkerW paints the wallpaper over its own
-                    # children. Nothing is lost by clipping it: with no child
-                    # of ours there is nothing to clip, so a crash in here
-                    # leaves the desktop exactly as it was found.
-                    u.SetWindowLongPtrW(host, _GWL_STYLE, ctypes.c_void_p(
-                        host_style | _WS_CLIPCHILDREN))
-                    self._wp_host = (host, host_style)
-                # The order below is the one that was measured to work, and
-                # the two obvious rearrangements were measured not to: SDL
-                # calls before the styles gave a window that never composited,
-                # and sizing through SDL alone left the HWND where it was.
-                if layered:
-                    # Fully opaque: the layer is what gets the window
-                    # composited at all, not an effect anyone should see.
-                    ex = u.GetWindowLongPtrW(hwnd, _GWL_EXSTYLE) or 0
-                    u.SetWindowLongPtrW(hwnd, _GWL_EXSTYLE,
-                                        ctypes.c_void_p(ex | _WS_EX_LAYERED))
-                    u.SetLayeredWindowAttributes(hwnd, 0, 255, _LWA_ALPHA)
-                u.SetParent(hwnd, host)
-                # A parented window that is still WS_POPUP is not drawn, and a
-                # child keeps no caption or frame.
-                st = u.GetWindowLongPtrW(hwnd, _GWL_STYLE) or 0
-                u.SetWindowLongPtrW(hwnd, _GWL_STYLE, ctypes.c_void_p(
-                    (st | _WS_CHILD) & ~(_WS_POPUP | _WS_FRAME)))
-                self._wallpaper = True
-                box = self._wallpaper_box()
-                if box:
-                    u.SetWindowPos(hwnd, _HWND_TOP, *box,
-                                   _SWP_FRAMECHANGED | _SWP_SHOWWINDOW)
-                else:
-                    u.SetWindowPos(hwnd, _HWND_TOP, 0, 0, 0, 0,
-                                   _SWP_NOMOVE | _SWP_NOSIZE |
-                                   _SWP_FRAMECHANGED | _SWP_SHOWWINDOW)
-                self._fit_to_wallpaper(box)
-            else:
-                u.SetParent(hwnd, None)
-                self._wallpaper = False
-                rect, was_borderless, style, exstyle = (
-                    self._wp_restore or (None, False, 0, 0))
-                if style:
-                    # Back to a top-level window: keeping WS_CHILD leaves SDL
-                    # with a window that has no parent to be a child of.
-                    u.SetWindowLongPtrW(hwnd, _GWL_STYLE, ctypes.c_void_p(style))
-                    u.SetWindowLongPtrW(hwnd, _GWL_EXSTYLE,
-                                        ctypes.c_void_p(exstyle))
-                    u.SetWindowPos(hwnd, None, 0, 0, 0, 0,
-                                   _SWP_NOMOVE | _SWP_NOSIZE | _SWP_NOZORDER |
-                                   _SWP_FRAMECHANGED | _SWP_SHOWWINDOW)
-                if self._wp_host:
-                    # Hand Explorer its window back as it was found, then ask
-                    # for a repaint: the clipped region is blank until
-                    # something draws the wallpaper into it again.
-                    host_hwnd, host_style = self._wp_host
-                    u.SetWindowLongPtrW(host_hwnd, _GWL_STYLE,
-                                        ctypes.c_void_p(host_style))
-                    u.InvalidateRect(host_hwnd, None, True)
+            if sys.platform == "win32":
+                u = _user32()
+                hwnd = ctypes.c_void_p(self._native_handle)
+                if on:
+                    host, layered = find_desktop_host(u)
+                    if not host:
+                        # Printed as well as toasted, because a toast is gone in
+                        # three seconds and never reaches a log.
+                        print("[wallpaper] no desktop window to draw into",
+                              flush=True)
+                        self._bridge.show_toast.emit(
+                            "Wallpaper mode is not available on this version of "
+                            "Windows.")
+                        return
+                    self._track_window()
+                    self._wp_restore = (
+                        self._win_rect, self._borderless,
+                        u.GetWindowLongPtrW(hwnd, _GWL_STYLE) or 0,
+                        u.GetWindowLongPtrW(hwnd, _GWL_EXSTYLE) or 0)
                     self._wp_host = None
-                if rect:
-                    x, y, w, h = rect
-                    sdl2.SDL_SetWindowPosition(self._window, x, y)
-                    sdl2.SDL_SetWindowSize(self._window, w, h)
-                sdl2.SDL_SetWindowBordered(
-                    self._window,
-                    sdl2.SDL_FALSE if was_borderless else sdl2.SDL_TRUE)
-                self._borderless = was_borderless
-                self._track_window()
+                    host_style = u.GetWindowLongPtrW(host, _GWL_STYLE) or 0
+                    if layered and not host_style & _WS_CLIPCHILDREN:
+                        # Left alone this WorkerW paints the wallpaper over its own
+                        # children. Nothing is lost by clipping it: with no child
+                        # of ours there is nothing to clip, so a crash in here
+                        # leaves the desktop exactly as it was found.
+                        u.SetWindowLongPtrW(host, _GWL_STYLE, ctypes.c_void_p(
+                            host_style | _WS_CLIPCHILDREN))
+                        self._wp_host = (host, host_style)
+                    # The order below is the one that was measured to work, and
+                    # the two obvious rearrangements were measured not to: SDL
+                    # calls before the styles gave a window that never composited,
+                    # and sizing through SDL alone left the HWND where it was.
+                    if layered:
+                        # Fully opaque: the layer is what gets the window
+                        # composited at all, not an effect anyone should see.
+                        ex = u.GetWindowLongPtrW(hwnd, _GWL_EXSTYLE) or 0
+                        u.SetWindowLongPtrW(hwnd, _GWL_EXSTYLE,
+                                            ctypes.c_void_p(ex | _WS_EX_LAYERED))
+                        u.SetLayeredWindowAttributes(hwnd, 0, 255, _LWA_ALPHA)
+                    u.SetParent(hwnd, host)
+                    # A parented window that is still WS_POPUP is not drawn, and a
+                    # child keeps no caption or frame.
+                    st = u.GetWindowLongPtrW(hwnd, _GWL_STYLE) or 0
+                    u.SetWindowLongPtrW(hwnd, _GWL_STYLE, ctypes.c_void_p(
+                        (st | _WS_CHILD) & ~(_WS_POPUP | _WS_FRAME)))
+                    self._wallpaper = True
+                    box = self._wallpaper_box()
+                    if box:
+                        u.SetWindowPos(hwnd, _HWND_TOP, *box,
+                                       _SWP_FRAMECHANGED | _SWP_SHOWWINDOW)
+                    else:
+                        u.SetWindowPos(hwnd, _HWND_TOP, 0, 0, 0, 0,
+                                       _SWP_NOMOVE | _SWP_NOSIZE |
+                                       _SWP_FRAMECHANGED | _SWP_SHOWWINDOW)
+                    self._fit_to_wallpaper(box)
+                else:
+                    u.SetParent(hwnd, None)
+                    self._wallpaper = False
+                    rect, was_borderless, style, exstyle = (
+                        self._wp_restore or (None, False, 0, 0))
+                    if style:
+                        # Back to a top-level window: keeping WS_CHILD leaves SDL
+                        # with a window that has no parent to be a child of.
+                        u.SetWindowLongPtrW(hwnd, _GWL_STYLE, ctypes.c_void_p(style))
+                        u.SetWindowLongPtrW(hwnd, _GWL_EXSTYLE,
+                                            ctypes.c_void_p(exstyle))
+                        u.SetWindowPos(hwnd, None, 0, 0, 0, 0,
+                                       _SWP_NOMOVE | _SWP_NOSIZE | _SWP_NOZORDER |
+                                       _SWP_FRAMECHANGED | _SWP_SHOWWINDOW)
+                    if self._wp_host:
+                        # Hand Explorer its window back as it was found, then ask
+                        # for a repaint: the clipped region is blank until
+                        # something draws the wallpaper into it again.
+                        host_hwnd, host_style = self._wp_host
+                        u.SetWindowLongPtrW(host_hwnd, _GWL_STYLE,
+                                            ctypes.c_void_p(host_style))
+                        u.InvalidateRect(host_hwnd, None, True)
+                        self._wp_host = None
+                    if rect:
+                        x, y, w, h = rect
+                        sdl2.SDL_SetWindowPosition(self._window, x, y)
+                        sdl2.SDL_SetWindowSize(self._window, w, h)
+                    sdl2.SDL_SetWindowBordered(
+                        self._window,
+                        sdl2.SDL_FALSE if was_borderless else sdl2.SDL_TRUE)
+                    self._borderless = was_borderless
+                    self._track_window()
+            else:
+                self._set_x11_wallpaper(on)
         except Exception as e:
             print(f"[wallpaper] {e}", flush=True)
             self._bridge.show_toast.emit(f"Wallpaper mode failed: {e}")
@@ -6981,6 +7070,57 @@ class Renderer:
         self._bridge.status_message.emit(
             "Wallpaper mode ON — use the tray icon to leave it"
             if self._wallpaper else "Wallpaper mode OFF")
+
+    def _set_x11_wallpaper(self, on: bool):
+        """Ask the window manager to treat the visualiser as the desktop.
+
+        _NET_WM_WINDOW_TYPE is read when a window is mapped, so changing it on
+        a window that is already up does nothing until the window goes away and
+        comes back. SDL_HideWindow/SDL_ShowWindow are used for that round trip
+        rather than XUnmapWindow, so SDL's own idea of the window stays true.
+
+        XLowerWindow at the end is the part that is not optional. The desktop
+        type puts us in the bottom layer; it does not say where among the other
+        windows already in that layer we land, and the window holding the
+        desktop icons -- xfdesktop, Nemo, plasmashell -- is one of them. Lower
+        the window and the icons are above it, which is the whole feature.
+        """
+        if not (self._native_handle and self._x11_display):
+            raise RuntimeError("no X11 window to make the desktop")
+        lib = _libx11()
+        dpy, win = self._x11_display, self._native_handle
+        sdl2.SDL_HideWindow(self._window)
+        if on:
+            self._track_window()
+            self._wp_restore = (self._win_rect, self._borderless, 0, 0)
+            x11_set_atoms(lib, dpy, win, _X11_TYPE, [_X11_DESKTOP])
+            x11_set_atoms(lib, dpy, win, _X11_STATE, list(_X11_STATES))
+            self._wallpaper = True
+            self._fit_to_wallpaper()
+        else:
+            x11_set_atoms(lib, dpy, win, _X11_TYPE, [_X11_NORMAL])
+            x11_set_atoms(lib, dpy, win, _X11_STATE, [])
+            self._wallpaper = False
+            rect, was_borderless, _s, _e = (
+                self._wp_restore or (None, False, 0, 0))
+            sdl2.SDL_SetWindowBordered(
+                self._window,
+                sdl2.SDL_FALSE if was_borderless else sdl2.SDL_TRUE)
+            self._borderless = was_borderless
+            if rect:
+                x, y, w, h = rect
+                sdl2.SDL_SetWindowPosition(self._window, x, y)
+                sdl2.SDL_SetWindowSize(self._window, w, h)
+        # The properties have to be on the server before the map request or
+        # the window manager reads the old ones.
+        lib.XSync(dpy, False)
+        sdl2.SDL_ShowWindow(self._window)
+        if on:
+            lib.XLowerWindow(dpy, win)
+        else:
+            sdl2.SDL_RaiseWindow(self._window)
+        lib.XSync(dpy, False)
+        self._track_window()
 
     def _wallpaper_box(self):
         """Where the visualiser goes on the desktop: (x, y, w, h), or None.

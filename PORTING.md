@@ -79,6 +79,18 @@ Done, packaging:
       `.desktop` launchers beside the scripts, so Linux is as close to the
       Windows setup.exe as a tarball gets. Verified from the built tarball
       through `GDesktopAppInfo` — install, then uninstall, then reinstall
+- [x] **Desktop wallpaper mode**, so the feature list is the same on both
+      platforms. EWMH rather than Explorer's WorkerW:
+      `_NET_WM_WINDOW_TYPE_DESKTOP` plus BELOW/SKIP_TASKBAR/SKIP_PAGER/STICKY,
+      set while the window is unmapped and followed by `XLowerWindow` so the
+      desktop icons stay above it. **X11 only** -- Wayland has no
+      below-the-desktop layer to ask for, XWayland included, so
+      `wallpaper_support()` greys the entry out and names Xorg in the reason
+      rather than failing silently. Properties and the round trip verified
+      against a real X server under Xvfb. **Stacking under real desktop icons
+      is still unverified** -- it needs a window manager and an icon manager,
+      neither of which is installed on the dev box; the check is queued for
+      Mint (Cinnamon on X11)
 - [x] **Status toasts actually appear.** `status_message` was connected to an
       empty method, so every "Mode: Random" / "Hard cuts: ON" / "Sorted by
       rating" was dropped on the floor. Verified with xdotool driving the frozen

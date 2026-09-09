@@ -14,7 +14,8 @@ Extra CLI args accepted by this launcher:
   --no-audio            — skip audio capture (useful when embedded)
   --preset-dir PATH     — override preset directory
   --screensaver         — fullscreen, and any real input quits
-  --wallpaper           — draw on the desktop, behind the icons (Windows)
+  --wallpaper           — draw on the desktop, behind the icons
+                          (Windows, or Linux on an X11 session)
 
 Windows screensaver arguments are accepted too: /s runs it, /c opens settings,
 /p draws the little preview. They arrive with a slash rather than a dash and
@@ -323,7 +324,8 @@ def main():
     parser.add_argument("--screensaver", action="store_true",
                         help="Fullscreen; any key or real mouse movement quits")
     parser.add_argument("--wallpaper", action="store_true",
-                        help="Draw on the desktop behind the icons (Windows)")
+                        help="Draw on the desktop behind the icons "
+                             "(Windows, or Linux on an X11 session)")
     args, _unknown = parser.parse_known_args()
 
     cfg_overrides = {}
