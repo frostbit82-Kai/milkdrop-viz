@@ -78,6 +78,27 @@ a = Analysis(
     excludes=["tkinter", "test", "unittest", "pydoc_data", "sdl2dll", "PyQt6"],
     noarchive=False,
 )
+# The GCC runtime is never bundled on Linux. Both libraries are on every
+# system, both are backward compatible, and the builder's are older than the
+# host's by construction -- the whole point of the build container is to be old.
+#
+# libgcc_s.so.1 sets the glibc floor for nothing: AlmaLinux 9's is built
+# against 2.34 and still references a 2.35 symbol, which cost Ubuntu 22.04.
+#
+# libstdc++.so.6 is worse than a wasted floor -- it stops the app rendering.
+# The host's OpenGL driver is dlopened into this process, and Mesa 26 needs
+# GLIBCXX_3.4.32 while AlmaLinux 9 ships 3.4.29, so radeonsi failed to load and
+# SDL reported "Couldn't find matching GLX visual" with no mention of C++
+# anywhere. Measured: the same build renders at once with this file removed.
+# Same family as the ffmpeg-child trap in CLAUDE.md, one layer deeper.
+#
+# Nothing here needs a newer libstdc++ than the floor distro has: libprojectM
+# is built in the container with its gcc, and every glibc 2.34 system ships at
+# least the matching GLIBCXX.
+_GCC_RUNTIME = ("libgcc_s.so", "libstdc++.so")
+a.binaries = [b for b in a.binaries
+              if not os.path.basename(b[0]).startswith(_GCC_RUNTIME)]
+
 pyz = PYZ(a.pure)
 
 exe = EXE(

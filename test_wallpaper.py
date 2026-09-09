@@ -7,7 +7,7 @@ geometry that follows. Parenting into the FIRST one is the classic mistake —
 it covers the desktop icons instead of sitting behind them.
 Run: QT_QPA_PLATFORM=offscreen python test_wallpaper.py
 """
-import os, sys, ctypes
+import os, sys, ctypes, time
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
@@ -240,6 +240,9 @@ class FakeXlib:
         self.reraises = 0
         #: How many windows sit below anything a lower can reach.
         self.floor = 0
+        #: A window manager that publishes a client stack and ignores
+        #: _NET_RESTACK_WINDOW all the same -- xfwm4 does exactly this.
+        self.refuses_restack = False
 
     @property
     def bottom(self):
@@ -286,6 +289,8 @@ class FakeXlib:
         self.restacks.append((win, sibling, detail))
         if e.message_type != self.atom("_NET_RESTACK_WINDOW"):
             return 0
+        if self.refuses_restack:
+            return 1
         if detail == 1 and win in self.clients and sibling in self.clients:
             self.clients.remove(win)
             self.clients.insert(self.clients.index(sibling), win)
@@ -350,10 +355,12 @@ def _x11_run(on, displays=TWO, cfg=None):
     return r, lib, fake
 
 
-def _lower(reraises, timeout=1.0, reparented=False, clients=None, floor=0):
+def _lower(reraises, timeout=1.0, reparented=False, clients=None, floor=0,
+           refuses=False):
     lib = FakeXlib()
     lib.reraises = reraises
     lib.floor = floor
+    lib.refuses_restack = refuses
     if clients is not None:
         lib.clients = list(clients)
     if reparented:
@@ -472,6 +479,21 @@ def a_desktop_that_never_lets_go_is_reported_rather_than_pretended():
     lib, ok = _lower(reraises=999, timeout=0.2)
     assert not ok, "claimed the window reached the bottom when it never did"
     assert lib.lowered > 1, "did not even retry"
+
+def a_window_manager_that_refuses_to_restack_is_given_up_on_quickly():
+    """xfwm4 publishes a client stack and ignores _NET_RESTACK_WINDOW anyway,
+    so the answer is settled after the first ask -- but the loop used to keep
+    asking until the timeout, freezing the render thread for a whole second on
+    every toggle. Unchanged position twice running is a refusal, not slowness.
+    The timeout here is long on purpose: it is what the test would run for if
+    the early exit were removed."""
+    t0 = time.monotonic()
+    lib, ok = _lower(reraises=999, clients=[ICONS, APP_WIN], timeout=5.0,
+                     refuses=True)
+    spent = time.monotonic() - t0
+    assert not ok, "claimed success against a window manager that refused"
+    assert spent < 1.0, f"waited out {spent:.2f}s of the timeout"
+    assert lib.restacks, "gave up without ever asking"
 
 def a_desktop_that_keeps_the_icons_below_says_so():
     """The visuals are up either way; only the stacking failed. A silent
@@ -731,6 +753,7 @@ for fn in (the_worker_behind_the_icons_is_chosen,
            a_desktop_that_never_lets_go_is_reported_rather_than_pretended,
            a_compositing_window_manager_is_asked_rather_than_told,
            the_bottom_of_the_roots_children_is_the_wrong_thing_to_test,
+           a_window_manager_that_refuses_to_restack_is_given_up_on_quickly,
            a_desktop_that_keeps_the_icons_below_says_so,
            the_property_change_is_flushed_before_the_window_comes_back,
            the_geometry_is_set_again_once_the_window_is_back_up,

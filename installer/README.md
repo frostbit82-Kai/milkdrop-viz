@@ -46,23 +46,46 @@ container:
 
     bash installer/build_linux_docker.sh
 
-Same output, floor dropped to **glibc 2.36** — Debian 12+, Ubuntu 24.04+,
-Fedora 37+, current Arch and SteamOS. It rebuilds libprojectM in the container
-(the vendored copy is linked against the host's glibc, which is the thing being
-escaped) and refreshes `vendor/linux/` with the result, so the host build gets
-the portable library too.
+Same output, floor dropped to **glibc 2.34** — Ubuntu 22.04+, Mint 21+,
+Debian 12+, RHEL 9+, Fedora 35+, current Arch and SteamOS. It rebuilds
+libprojectM in the container (the vendored copy is linked against the host's
+glibc, which is the thing being escaped) and refreshes `vendor/linux/` with the
+result, so the host build gets the portable library too.
 
 It needs a projectM source tree — `PROJECTM_SRC`, auto-detected from a few
 usual places — rather than cloning, because upstream's links have gone dead
 before. `vendor/projectm-eval` is a submodule, so the tree has to be a
 `--recurse-submodules` clone.
 
-Bookworm is as old as this goes for free: there is no `python:3.14` image below
-it, so a lower floor (Ubuntu 22.04 is glibc 2.35) means building Python in the
-image as well. `BASE=<image> bash installer/build_linux_docker.sh` is the knob
-if that day comes. For Steam specifically the right target is eventually the
-Steam Runtime 3 "sniper" SDK, which is glibc 2.31 and is shipped to players by
-Steam itself.
+**2.34 is PySide6's floor, not a choice of ours.** Its wheels are tagged
+`manylinux_2_34` from 6.10 onward, so no older base can install the Qt this app
+ships — measured: pip on a glibc 2.28 image offers 6.9.3 as its newest. Going
+below 2.34 costs two Qt minor versions, which is a product decision rather than
+a packaging one. Debian is not the way down either: bookworm is 2.36, and
+bullseye (2.31) left security support on 2026-08-31, so its apt repository no
+longer verifies and its libraries will never be patched again.
+
+Three things about the container are load-bearing, and each was a measured
+failure first:
+
+- **The base is `almalinux:9`, not a `manylinux` image.** Same distro, but
+  manylinux's CPythons are built static and PyInstaller needs a shared
+  `libpython`. AlmaLinux's own `python3.14` RPM has one.
+- **libprojectM is built with `gcc-toolset-14`, not the distro's gcc 11.**
+  The same preset ran at ~640 fps against a gcc 11 build and ~890 against
+  gcc 14, uncapped at 1280x720. gcc-toolset links the newer libstdc++ symbols
+  statically, so the library still runs on AlmaLinux 9's own runtime and the
+  floor does not move — the built library needs only `GLIBCXX_3.4.29`.
+- **The GCC runtime is not bundled** (`libgcc_s.so.1`, `libstdc++.so.6`;
+  filtered in the spec). `libgcc_s` cost a whole glibc version for nothing, and
+  the bundled `libstdc++` stopped the app rendering at all: the host's OpenGL
+  driver is dlopened into this process, Mesa 26 wants `GLIBCXX_3.4.32`, and
+  AlmaLinux 9 ships 3.4.29 — SDL reported "Couldn't find matching GLX visual"
+  with no mention of C++ anywhere.
+
+`BASE=<image> bash installer/build_linux_docker.sh` overrides the base. For
+Steam specifically the right target is eventually the Steam Runtime 3 "sniper"
+SDK, which Steam ships to players itself.
 
 ## Windows
 

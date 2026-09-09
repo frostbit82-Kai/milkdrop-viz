@@ -74,7 +74,7 @@ Done, packaging:
       and ratings
 - [x] libprojectM vendored at `installer/vendor/linux/` rather than rebuilt, with
       projectM's LGPL-2.1 text alongside it in `installer/licenses/`
-- [x] **Old-system build**: `installer/build_linux_docker.sh`, glibc floor 2.43 -> 2.36
+- [x] **Old-system build**: `installer/build_linux_docker.sh`, glibc floor 2.43 -> 2.34
 - [x] **Double-click install**: the archive ships Install / Uninstall
       `.desktop` launchers beside the scripts, so Linux is as close to the
       Windows setup.exe as a tarball gets. Verified from the built tarball
@@ -279,10 +279,13 @@ loaded all 11,223 presets and cycled them with no `[projectm:...]` line at all.
 **The glibc of the build machine becomes the floor.** Measured, not guessed:
 a package built on this box needs **glibc 2.43** — Ubuntu 26.04 and nothing
 else. `installer/build_linux_docker.sh` builds the whole thing (libprojectM
-included) inside Debian 12 instead and takes the floor to **2.36**: Debian 12+,
-Ubuntu 24.04+, Fedora 37+, current Arch and SteamOS. Use it for anything
-released. Ubuntu 22.04 (2.35) needs a lower base image and therefore building
-Python too; for Steam the eventual target is the Steam Runtime 3 "sniper" SDK.
+included) inside AlmaLinux 9 instead and takes the floor to **2.34**: Ubuntu
+22.04+, Mint 21+, Debian 12+, RHEL 9+, Fedora 35+, current Arch and SteamOS.
+Use it for anything released. **2.34 is PySide6's floor** — its wheels are
+tagged `manylinux_2_34` from 6.10 on — so going lower costs two Qt minor
+versions rather than a different base image. `installer/README.md` has the
+three container details that each cost a measured failure. For Steam the
+eventual target is the Steam Runtime 3 "sniper" SDK.
 
 **libprojectM is pinned to a commit, in `installer/PROJECTM_COMMIT`.** Not a
 tag: the sprite, texture-load-callback and log-callback API exists only on

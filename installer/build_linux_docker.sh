@@ -5,12 +5,12 @@
 #   bash installer/build_linux_docker.sh
 #
 # PROJECTM_SRC   projectM source tree (must include vendor/, submodules and all)
-# BASE           builder base image, default python:3.14-slim-bookworm
+# BASE           builder base image, default almalinux:9
 set -euo pipefail
 
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 HERE="$REPO/installer"
-BASE="${BASE:-python:3.14-slim-bookworm}"
+BASE="${BASE:-almalinux:9}"
 IMAGE="milkdrop-viz-builder"
 
 # libprojectM has to be rebuilt in the container: the copy vendored for the
@@ -95,8 +95,10 @@ docker run --rm -u "$(id -u):$(id -g)" -e HOME=/tmp -e "REBUILD_PM=$REBUILD_PM" 
             cmake --build /tmp/pmbuild -j"$(nproc)" >/dev/null
             cmake --install /tmp/pmbuild >/dev/null
             mkdir -p /src/installer/vendor/linux
-            cp -L /tmp/pmroot/lib/libprojectM-4.so.4 \
-                  /tmp/pmroot/lib/libprojectM-4-playlist.so.4 \
+            # Red Hat puts 64-bit libraries in lib64, Debian in lib, and
+            # cmake follows the distro -- so the glob, not a fixed path.
+            cp -L /tmp/pmroot/lib*/libprojectM-4.so.4 \
+                  /tmp/pmroot/lib*/libprojectM-4-playlist.so.4 \
                   /src/installer/vendor/linux/
         fi
 

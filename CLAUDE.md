@@ -529,12 +529,50 @@ There is no display in an agent shell and SDL needs one, so:
 
 - **A subprocess spawned from the frozen build inherits the bundle's loader
   path.** The Linux package is deliberately built old to keep the glibc floor
-  at 2.36, so its `libstdc++.so.6` is older than a modern host's — and the
-  system ffmpeg, started as a child, loaded that one and died with
-  `GLIBCXX_3.4.32 not found`. The app reported "broken pipe", which is what the
-  parent saw, not what happened. `child_env()` restores `LD_LIBRARY_PATH_ORIG`
-  (or drops the variable when frozen) for every helper process. **Test any new
-  subprocess against a real frozen build, not a source checkout.**
+  down, so anything system-shaped inside it is older than a modern host's — and
+  the system ffmpeg, started as a child, loaded the bundled `libstdc++.so.6`
+  and died with `GLIBCXX_3.4.32 not found`. The app reported "broken pipe",
+  which is what the parent saw, not what happened. `child_env()` restores
+  `LD_LIBRARY_PATH_ORIG` (or drops the variable when frozen) for every helper
+  process. **Test any new subprocess against a real frozen build, not a source
+  checkout.** The spec no longer bundles libstdc++ at all (see below), which
+  removes the cause; `child_env()` stays, because every other bundled library
+  shadows the host's the same way.
+
+- **The bundled GCC runtime stopped the app rendering, and said nothing about
+  C++.** 2026-09-09, moving the build container to AlmaLinux 9. The host's
+  OpenGL driver is dlopened into this process and Mesa 26 needs
+  `GLIBCXX_3.4.32`; AlmaLinux 9 ships 3.4.29, so radeonsi failed to load and
+  SDL reported **"Couldn't find matching GLX visual"**. Nothing named
+  libstdc++, and the obvious suspects (bundled libX11, libxcb-glx, libXext)
+  were each ruled out first. Deleting `_internal/libstdc++.so.6` from a built
+  bundle made the same binary render immediately — that is the test. The spec
+  now filters `libgcc_s.so*` and `libstdc++.so*` out of `a.binaries`: both are
+  on every Linux, both are backward compatible, and the builder's are older
+  than the host's by construction. `libgcc_s` was also costing a whole glibc
+  version — AlmaLinux 9's is built against 2.34 and still references a 2.35
+  symbol.
+
+- **PySide6 sets the Linux glibc floor, not the build container.** Its wheels
+  are tagged `manylinux_2_34` from 6.10 onward, so 2.34 is as low as the floor
+  goes while shipping this Qt: on a glibc 2.28 image pip offers 6.9.3 as its
+  newest. Going lower is a Qt downgrade, not a packaging change. Two dead ends
+  worth not repeating: `python:3.13-slim-bullseye` (2.31) cannot even
+  `apt-get update` any more — Debian 11 left security support on 2026-08-31 and
+  the release file no longer verifies — and the `manylinux` images build their
+  CPythons static, which PyInstaller refuses ("Python was built without a
+  shared library").
+
+- **The build container's compiler is worth a quarter of the frame rate.**
+  AlmaLinux 9's own gcc is 11.5, and libprojectM built with it ran the same
+  preset at **~640 fps** against **~890** for a gcc 12 or gcc 14 build —
+  uncapped, 1280x720, Radeon Pitcairn, one fixed preset, medians of eight
+  five-second samples. Isolated by swapping only the two libprojectM `.so`
+  files between two otherwise identical bundles. The Dockerfile installs
+  `gcc-toolset-14` and puts it first on PATH; it links the newer libstdc++
+  symbols statically, so the built library still needs only `GLIBCXX_3.4.29`
+  and the floor stays at 2.34. Re-measure after any toolset or base change —
+  `BOMSAI_FPS=1` prints a frame rate every five seconds from any build.
 - **Always read a dead helper's stderr.** The recorder set its error from the
   write failure and then skipped reading ffmpeg's output, so the one line that
   explained the failure above was thrown away every time.
@@ -623,10 +661,14 @@ There is no display in an agent shell and SDL needs one, so:
      restacks a newly mapped window on its own event loop, which runs after
      ours. Measured under muffin: a single lower left the visualiser above
      nemo-desktop, and a late one stuck. `x11_lower_to_bottom` therefore lowers
-     and *checks*, up to a second -- `XQueryTree` hands back the root's
-     children bottom first, so being `children[0]` is the whole test. A desktop
-     that never lets go gets a toast rather than a silent failure that looks
-     exactly like success.
+     and *checks*, up to a second. **What it checks against is
+     `_NET_CLIENT_LIST_STACKING`, not `children[0]`** -- see the two entries
+     below, which is where the first version of this went wrong. A desktop that
+     never lets go gets a toast rather than a silent failure that looks exactly
+     like success, and a window manager that leaves us at the same index twice
+     running has refused: it is given up on after ~200 ms rather than the full
+     second, because xfwm4 does exactly that and the wait is a frozen render
+     thread on every toggle.
   3. **Lower the frame, not the client.** xfwm4 reparents even a desktop window
      into a frame of its own; muffin does not. What sits in the root's stack is
      the frame, so `XLowerWindow` on the client handle moves nothing there --
@@ -711,7 +753,25 @@ There is no display in an agent shell and SDL needs one, so:
 
   The rig is `xephyr_test.sh` in the session scratchpad; rebuild it from this
   entry if needed. Xvfb alone cannot find any of this: with no window manager
-  there is nothing to restack against and nothing to reparent.
+  there is nothing to restack against and nothing to reparent. Three things
+  the rig needs that are easy to get wrong:
+  - **`XDG_SESSION_TYPE` leaks as well as `WAYLAND_DISPLAY`.** Unsetting only
+    the latter still leaves `wayland` in the former, and the app correctly
+    refuses — which reads as a broken feature. Every child wants
+    `env -u WAYLAND_DISPLAY XDG_SESSION_TYPE=x11`.
+  - **`muffin --replace` alone aborts under a Wayland session** — it tries the
+    DRM backend and gets `EBUSY` from the real compositor. `muffin --x11
+    --replace`. It also needs `cinnamon-settings-daemon` installed, purely for
+    its gsettings schemas, or it dies on a missing one. Once muffin is up it
+    composites itself and xcompmgr is redundant.
+  - **Test against the extracted tarball, not `build/dist`.** Same tree, but it
+    is the thing that ships.
+
+  **Verified against the shipped 1.7.0 tarball, 2026-09-09.** muffin + nemo:
+  `_NET_CLIENT_LIST_STACKING` = [visualiser, nemo-desktop] with the visualiser
+  first, type `_NET_WM_WINDOW_TYPE_DESKTOP`, full screen, visuals on screen.
+  xfwm4 + xfdesktop: same properties, xfwm4 declines the restack, the app stays
+  second and toasts "could not get below the desktop icons".
 - **A screensaver must not open a dialog, and that includes the no-presets
   one.** `_warn_photosensitivity` already skips for this reason;
   `_on_no_presets` did not, so a fresh install that ticked "use as the Windows

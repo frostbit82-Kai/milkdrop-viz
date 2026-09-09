@@ -5296,6 +5296,7 @@ def x11_lower_to_bottom(lib, dpy, win, timeout=1.0):
     Returns True if it got there.
     """
     deadline = time.monotonic() + timeout
+    stale, was = 0, -1
     while True:
         # Re-read each time round: a window manager can reparent late, and the
         # frame that exists now is the one that has to move.
@@ -5304,6 +5305,15 @@ def x11_lower_to_bottom(lib, dpy, win, timeout=1.0):
         if stack:
             if stack[0] == win:
                 return True
+            # A window manager that will not honour _NET_RESTACK_WINDOW (xfwm4
+            # does not) leaves us exactly where we were, and waiting out the
+            # whole timeout stalls the render thread for a second on every
+            # toggle. Three rounds with no movement is a refusal, not slowness.
+            here = stack.index(win) if win in stack else -1
+            stale = stale + 1 if here >= 0 and here == was else 0
+            was = here
+            if stale >= 3:
+                return False
             # EWMH takes the client window, not the frame.
             x11_restack_below(lib, dpy, win, stack[0])
         lib.XLowerWindow(dpy, top)     # for a window manager with no EWMH restack
@@ -6539,6 +6549,13 @@ class Renderer:
 
         event      = sdl2.SDL_Event()
 
+        # BOMSAI_FPS=1 reports the frame rate every 5s on stderr. It exists so
+        # "is it slow on your machine?" can be answered from a shipped build
+        # rather than a profiler, and it is what caught a build container whose
+        # compiler cost a quarter of the frame rate.
+        _fps_t0 = _time.monotonic() if os.environ.get("BOMSAI_FPS") else None
+        _fps_n = 0
+
         self._emit_current_preset()
 
         while self._running:
@@ -6761,6 +6778,13 @@ class Renderer:
                 self._capture_for_recording()
             self._maybe_thumbnail()
             sdl2.SDL_GL_SwapWindow(self._window)
+
+            if _fps_t0 is not None:
+                _fps_n += 1
+                _dt = _time.monotonic() - _fps_t0
+                if _dt >= 5.0:
+                    print(f"[fps] {_fps_n / _dt:.1f}", file=sys.stderr, flush=True)
+                    _fps_t0, _fps_n = _time.monotonic(), 0
 
             elapsed_frame = _time.monotonic() - t0
             # Read fps live so Settings changes take effect immediately.
