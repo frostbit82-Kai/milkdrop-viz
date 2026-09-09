@@ -163,8 +163,8 @@ class MenuHost:
     def is_borderless(self):      return False
     def is_fullscreen(self):      return False
     def is_recording(self):       return False
-    # Windows only, and _build_wallpaper_entry returns before touching it on
-    # Linux -- so a stub without it builds fine there and crashes here.
+    # The menu asks for this on every platform now. It used to be Windows
+    # only, and a stub without it built fine on Linux and crashed there.
     def is_wallpaper(self):       return False
     def _save_config(self, cfg):  self.saved = dict(cfg)
 
