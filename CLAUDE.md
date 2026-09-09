@@ -655,9 +655,9 @@ There is no display in an agent shell and SDL needs one, so:
   type ATOM and format 32, the app enters with `--wallpaper` at full screen
   geometry, and `d` round-trips it back to `_NET_WM_WINDOW_TYPE_NORMAL` with
   `_NET_WM_STATE` deleted and the old geometry restored. **Stacking against
-  real desktop icons is still unverified** -- it needs a window manager and an
-  icon manager, neither of which is installed on the dev box. Queued for Mint
-  (Cinnamon on X11), because of the compositor question below.
+  real desktop icons is now verified on Mint 21.3 / Cinnamon 6.0.5**, on real
+  hardware (AMD Pitcairn, Mesa 23.2.1) rather than in the rig -- see the two
+  entries below, both of which the rig could not have found.
 
   **The icon layer has to be composited for any of this to show.** Verified in
   Xephyr with muffin + nemo-desktop: after the lower fix the icons are on top,
@@ -668,6 +668,35 @@ There is no display in an agent shell and SDL needs one, so:
   muffin composites and cinnamon draws the wallpaper rather than nemo-desktop.
   So the rig can prove stacking and cannot prove visibility. Check
   `_NET_WM_CM_S0` before reading anything into a black screen.
+
+  **Telling X is not enough on a compositing window manager.** 2026-09-09,
+  Mint 21.3 / Cinnamon 6.0.5. `XLowerWindow` moves the window in the X
+  server's stack; muffin keeps its own and paints from that, so the lower is
+  either undone on its next restack or simply never reaches the screen. The
+  two stacking sources disagreed and the screen followed the window manager:
+  `XQueryTree` had the visualiser at index 6 and nemo-desktop at 12 -- below,
+  correctly -- while `_NET_CLIENT_LIST_STACKING`, and the picture, had it
+  above with every icon covered. `x11_restack_below` sends
+  `_NET_RESTACK_WINDOW` to ask the window manager instead; muffin honours it
+  and the icons come back on top. Keep the `XLowerWindow` too: it is what a
+  window manager with no EWMH restack still understands.
+
+  **`kids[0]` is the wrong test, and it fails on every real desktop.** The
+  check was "am I the bottom of the root's children", which held in the rig
+  and cannot hold on a session that has been up for a while: the Mint box's
+  root had **81** children and the lowest are unmapped utility windows nothing
+  can get under, so the loop could only ever spend its second and toast --
+  including on a desktop where the visuals were correctly behind the icons.
+  `x11_client_stack` reads `_NET_CLIENT_LIST_STACKING`, which holds only
+  managed windows in the order they are drawn, and being its first entry is
+  the real question. Falls back to the old test where no such property exists.
+
+  **`_NET_WM_CM_S0` is not a reliable compositing check, at least not on
+  Cinnamon.** The entry below says to look at it before reading anything into
+  a black screen. On Mint 21.3 / Cinnamon 6.0.5 it has **no owner** while
+  muffin is plainly compositing -- the visuals showed through and the icons
+  composited over them in the same session. An empty result there means
+  nothing; believe the screen.
 
   **Verified end to end in Xephyr, 2026-09-09**, with `xcompmgr -c` supplying
   the compositor:

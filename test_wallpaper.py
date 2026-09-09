@@ -169,6 +169,9 @@ def as_env(env):
 #: Window ids for the fake X server: the root, the icon manager's desktop
 #: window, our client, and the frame a reparenting window manager wraps it in.
 ROOT, ICONS, APP_WIN, FRAME = 0x1, 0x200029, 0x2000001, 0x2000002
+#: Unmapped utility windows. A real root has dozens below everything --
+#: 81 children on the Mint box -- and no lower gets under them.
+JUNK_A, JUNK_B = 0x900001, 0x900002
 
 X11_ENV = {"DISPLAY": ":0", "XDG_SESSION_TYPE": "x11",
            "XDG_CURRENT_DESKTOP": "X-Cinnamon"}
@@ -225,10 +228,18 @@ class FakeXlib:
         self.order = [] if log is None else log
         #: The root's children, bottom first.
         self.stack = []
+        #: What _NET_CLIENT_LIST_STACKING holds: only the windows the window
+        #: manager manages, bottom first. Empty means it publishes no such
+        #: property, and the code falls back to the root's own children.
+        self.clients = []
+        #: (window, sibling, detail) for every _NET_RESTACK_WINDOW sent.
+        self.restacks = []
         #: client -> frame, for a window manager that reparents.
         self.parent = {}
         #: How many XLowerWindow calls the window manager will undo.
         self.reraises = 0
+        #: How many windows sit below anything a lower can reach.
+        self.floor = 0
 
     @property
     def bottom(self):
@@ -252,7 +263,7 @@ class FakeXlib:
             self.reraises -= 1
             self.stack.append(win)
         else:
-            self.stack.insert(0, win)
+            self.stack.insert(self.floor, win)
     def XDefaultRootWindow(self, _dpy):  return ROOT
     def tree(self, win):
         """(parent, children bottom-first) -- what _x11_query_tree extracts."""
@@ -260,6 +271,26 @@ class FakeXlib:
             kids = [w for w in self.stack]
             return 0, kids
         return self.parent.get(win, ROOT), []
+    def XSendEvent(self, _dpy, _win, _prop, mask, ev):
+        """A window manager that honours _NET_RESTACK_WINDOW.
+
+        `byref` keeps the event reachable through `_obj`, so the message is
+        checked as the shipped code built it rather than reimplemented here --
+        which is the point, since a wrong ctypes signature is exactly the bug
+        a test written against a copy would sail past.
+        """
+        e = ev._obj.xclient
+        assert e.format == 32, e.format
+        assert mask == viz_common._X11_WM_EVENT_MASK, mask
+        win, sibling, detail = e.window, e.data.l[1], e.data.l[2]
+        self.restacks.append((win, sibling, detail))
+        if e.message_type != self.atom("_NET_RESTACK_WINDOW"):
+            return 0
+        if detail == 1 and win in self.clients and sibling in self.clients:
+            self.clients.remove(win)
+            self.clients.insert(self.clients.index(sibling), win)
+        return 1
+
     def XSync(self, _dpy, _discard):
         self.synced += 1
         self.order.append("sync")
@@ -298,6 +329,8 @@ def _x11_run(on, displays=TWO, cfg=None):
     lib.stack = [ICONS, APP_WIN]
     real_x11, real_tree = viz_common._libx11, viz_common._x11_query_tree
     real_origin = viz_common.x11_window_origin
+    real_stack = viz_common.x11_client_stack
+    viz_common.x11_client_stack = lambda l, _dpy: list(l.clients)
     viz_common._libx11 = lambda: lib
     # XQueryTree's out-parameters are not worth faking; the tree it reports is.
     viz_common._x11_query_tree = lambda l, _dpy, w: l.tree(w)
@@ -313,12 +346,16 @@ def _x11_run(on, displays=TWO, cfg=None):
         viz_common._libx11 = real_x11
         viz_common._x11_query_tree = real_tree
         viz_common.x11_window_origin = real_origin
+        viz_common.x11_client_stack = real_stack
     return r, lib, fake
 
 
-def _lower(reraises, timeout=1.0, reparented=False):
+def _lower(reraises, timeout=1.0, reparented=False, clients=None, floor=0):
     lib = FakeXlib()
     lib.reraises = reraises
+    lib.floor = floor
+    if clients is not None:
+        lib.clients = list(clients)
     if reparented:
         # xfwm4 puts a frame of its own around the client; the frame is what
         # sits in the root's stack.
@@ -327,12 +364,17 @@ def _lower(reraises, timeout=1.0, reparented=False):
     else:
         lib.stack = [ICONS, APP_WIN]
     real = viz_common._x11_query_tree
+    real_stack = viz_common.x11_client_stack
     viz_common._x11_query_tree = lambda l, _dpy, w: l.tree(w)
+    # XGetWindowProperty's out-parameters are not worth faking either; the
+    # list it reports is.
+    viz_common.x11_client_stack = lambda l, _dpy: list(l.clients)
     try:
         return lib, viz_common.x11_lower_to_bottom(lib, 1, APP_WIN,
                                                    timeout=timeout)
     finally:
         viz_common._x11_query_tree = real
+        viz_common.x11_client_stack = real_stack
 
 def lowering_keeps_at_it_until_the_window_is_really_at_the_bottom():
     """One lower straight after the map is thrown away -- measured under
@@ -350,6 +392,31 @@ def a_reparenting_window_manager_has_its_frame_lowered_not_the_client():
     assert ok, "never reached the bottom on a reparenting window manager"
     assert lib.stack[0] == FRAME, lib.stack
     assert APP_WIN not in lib.stack, "lowered the client instead of the frame"
+
+def a_compositing_window_manager_is_asked_rather_than_told():
+    """XLowerWindow moves the window in the X server's stack. A compositing
+    window manager keeps its own and paints from that, so the lower is either
+    undone on its next restack or never reaches the screen at all. Measured on
+    Cinnamon 6.0.5: the raw X stack had the visualiser below nemo-desktop
+    while _NET_CLIENT_LIST_STACKING -- and the screen -- had it above, with
+    the icons covered. Asking through _NET_RESTACK_WINDOW is what moves it."""
+    lib, ok = _lower(reraises=999, clients=[ICONS, APP_WIN])
+    assert ok, "gave up instead of asking the window manager"
+    assert lib.clients[0] == APP_WIN, lib.clients
+    assert (APP_WIN, ICONS, 1) in lib.restacks, lib.restacks
+
+def the_bottom_of_the_roots_children_is_the_wrong_thing_to_test():
+    """The regression this pair exists for. A real desktop's root has dozens
+    of children and the lowest are unmapped utility windows nothing can get
+    under, so `kids[0]` is never the visualiser however far it is lowered --
+    the old test could only time out and toast, on a session where the visuals
+    were in fact behind the icons. The managed-client stack has only real
+    windows, and answers the question actually being asked."""
+    lib, ok = _lower(reraises=0, floor=2, clients=[ICONS, APP_WIN],
+                     timeout=0.2)
+    assert lib.bottom != APP_WIN, "the junk floor did not hold; test is void"
+    assert ok, "reported failure on a desktop where the icons are on top"
+    assert lib.clients[0] == APP_WIN, lib.clients
 
 def _align(border, reparented, want=(0, 0)):
     """x11_align_frame against a window manager with a known frame border."""
@@ -414,6 +481,8 @@ def a_desktop_that_keeps_the_icons_below_says_so():
     lib = FakeXlib(); lib.reraises = 999; lib.stack = [ICONS, APP_WIN]
     real_x11, real_tree = viz_common._libx11, viz_common._x11_query_tree
     real_origin = viz_common.x11_window_origin
+    real_stack = viz_common.x11_client_stack
+    viz_common.x11_client_stack = lambda l, _dpy: list(l.clients)
     viz_common._libx11 = lambda: lib
     viz_common._x11_query_tree = lambda l, _dpy, w: l.tree(w)
     viz_common.x11_window_origin = lambda l, _dpy, _w: (
@@ -425,6 +494,7 @@ def a_desktop_that_keeps_the_icons_below_says_so():
         viz_common._libx11 = real_x11
         viz_common._x11_query_tree = real_tree
         viz_common.x11_window_origin = real_origin
+        viz_common.x11_client_stack = real_stack
     assert r._wallpaper is True, "gave up on the mode over the stacking alone"
     assert any("icons" in " ".join(map(str, t)) for t in r._bridge.toasts), \
         r._bridge.toasts
@@ -659,6 +729,8 @@ for fn in (the_worker_behind_the_icons_is_chosen,
            a_window_that_is_already_placed_is_left_alone,
            an_unframed_window_is_simply_asked_again,
            a_desktop_that_never_lets_go_is_reported_rather_than_pretended,
+           a_compositing_window_manager_is_asked_rather_than_told,
+           the_bottom_of_the_roots_children_is_the_wrong_thing_to_test,
            a_desktop_that_keeps_the_icons_below_says_so,
            the_property_change_is_flushed_before_the_window_comes_back,
            the_geometry_is_set_again_once_the_window_is_back_up,

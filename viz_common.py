@@ -5058,6 +5058,31 @@ _X11_STATES = ("_NET_WM_STATE_BELOW", "_NET_WM_STATE_SKIP_TASKBAR",
 
 _XA_ATOM, _PROP_REPLACE = 4, 0
 
+#: ClientMessage, and the two masks that send it to the window manager rather
+#: than to the root window itself.
+_X11_CLIENT_MESSAGE = 33
+_X11_WM_EVENT_MASK = (1 << 20) | (1 << 19)   # SubstructureRedirect|Notify
+_XA_WINDOW = 33
+
+
+class _XClientMessageData(ctypes.Union):
+    _fields_ = [("b", ctypes.c_char * 20), ("s", ctypes.c_short * 10),
+                ("l", ctypes.c_long * 5)]
+
+
+class _XClientMessageEvent(ctypes.Structure):
+    _fields_ = [("type", ctypes.c_int), ("serial", ctypes.c_ulong),
+                ("send_event", ctypes.c_int), ("display", ctypes.c_void_p),
+                ("window", ctypes.c_ulong), ("message_type", ctypes.c_ulong),
+                ("format", ctypes.c_int), ("data", _XClientMessageData)]
+
+
+class _XEvent(ctypes.Union):
+    # The pad is what makes this the size Xlib expects; without it XSendEvent
+    # reads past the end of the buffer.
+    _fields_ = [("type", ctypes.c_int), ("xclient", _XClientMessageEvent),
+                ("pad", ctypes.c_long * 24)]
+
 
 def _libx11():
     """Xlib, already loaded into this process by SDL's x11 driver.
@@ -5090,6 +5115,13 @@ def _libx11():
                                  ctypes.POINTER(ctypes.c_uint),
                                  ctypes.POINTER(ctypes.c_uint),
                                  ctypes.POINTER(ctypes.c_uint)]
+    lib.XSendEvent.restype = i
+    lib.XSendEvent.argtypes = [ptr, ulong, i, ctypes.c_long,
+                               ctypes.POINTER(_XEvent)]
+    lib.XGetWindowProperty.argtypes = [
+        ptr, ulong, ulong, ctypes.c_long, ctypes.c_long, i, ulong,
+        ctypes.POINTER(ulong), ctypes.POINTER(i), ctypes.POINTER(ulong),
+        ctypes.POINTER(ulong), ctypes.POINTER(ctypes.POINTER(ctypes.c_ubyte))]
     return lib
 
 
@@ -5178,16 +5210,88 @@ def x11_align_frame(lib, dpy, win, want, move):
         (want_x, want_y)
 
 
+def x11_client_stack(lib, dpy):
+    """The windows the window manager manages, bottom first.
+
+    `_NET_CLIENT_LIST_STACKING` holds only real, managed windows, in the order
+    the window manager stacks them -- which on a compositing one is also the
+    order they are drawn. The root's own children are a different list and the
+    wrong one to reason about: see x11_lower_to_bottom.
+
+    Empty if the property is missing, which is the signal to fall back.
+    """
+    actual_type, actual_format = ctypes.c_ulong(), ctypes.c_int()
+    nitems, bytes_after = ctypes.c_ulong(), ctypes.c_ulong()
+    data = ctypes.POINTER(ctypes.c_ubyte)()
+    prop = lib.XInternAtom(dpy, b"_NET_CLIENT_LIST_STACKING", False)
+    if lib.XGetWindowProperty(
+            dpy, lib.XDefaultRootWindow(dpy), prop, 0, 8192, False, _XA_WINDOW,
+            ctypes.byref(actual_type), ctypes.byref(actual_format),
+            ctypes.byref(nitems), ctypes.byref(bytes_after),
+            ctypes.byref(data)) != 0 or not data:
+        return []
+    try:
+        # Format 32 is an array of *long* in Xlib, not of uint32.
+        if actual_format.value != 32:
+            return []
+        window = ctypes.cast(data, ctypes.POINTER(ctypes.c_ulong))
+        return [window[i] for i in range(nitems.value)]
+    finally:
+        lib.XFree(data)
+
+
+def x11_restack_below(lib, dpy, win, sibling):
+    """Ask the window manager to put `win` directly below `sibling`.
+
+    XLowerWindow talks to the X server. A compositing window manager keeps its
+    own stack and paints from that, so a raw lower is either undone on its
+    next restack or simply never reaches the screen. `_NET_RESTACK_WINDOW` is
+    the EWMH way to ask the window manager itself.
+    """
+    ev = _XEvent()
+    ev.xclient.type = _X11_CLIENT_MESSAGE
+    ev.xclient.serial = 0
+    ev.xclient.send_event = 1
+    ev.xclient.display = dpy
+    ev.xclient.window = win
+    ev.xclient.message_type = lib.XInternAtom(
+        dpy, b"_NET_RESTACK_WINDOW", False)
+    ev.xclient.format = 32
+    ev.xclient.data.l[0] = 2          # source indication: a pager, near enough
+    ev.xclient.data.l[1] = sibling
+    ev.xclient.data.l[2] = 1          # Below
+    return bool(lib.XSendEvent(dpy, lib.XDefaultRootWindow(dpy), False,
+                               _X11_WM_EVENT_MASK, ctypes.byref(ev)))
+
+
 def x11_lower_to_bottom(lib, dpy, win, timeout=1.0):
-    """Lower the window, and keep at it until it really is the bottom one.
+    """Lower the window until it is below everything the desktop draws.
 
     One XLowerWindow straight after the map gets thrown away. A window manager
     restacks a newly mapped window on its own event loop, which runs after
     ours, so the window comes back up above the one drawing the desktop icons
     -- measured under muffin, where a single lower left the visualiser on top
-    and a late one stuck. Rather than guess how long the window manager takes,
-    ask: XQueryTree returns the root's children bottom first, so being the
-    first of them is the whole test.
+    and a late one stuck. So lower, then check, rather than lower and hope.
+
+    Both halves of that had to change when this met a real Cinnamon desktop
+    rather than the Xephyr rig it was written against.
+
+    **Telling X is not enough on a compositing window manager.** XLowerWindow
+    moves the window in the X server's stack; muffin keeps its own and paints
+    from that, so a raw lower is either undone on its next restack or never
+    reaches the screen. Measured on Cinnamon 6.0.5: the raw X stack had the
+    visualiser below nemo-desktop while _NET_CLIENT_LIST_STACKING -- and the
+    screen -- had it above, icons covered. _NET_RESTACK_WINDOW asks the window
+    manager itself, and that is what puts the icons back on top.
+
+    **The root's children are the wrong list to test against.** A real session
+    has dozens (81 on the Mint box) and the lowest are unmapped utility
+    windows nothing can get under, so `kids[0]` is never the visualiser however
+    far it is lowered: the old test could only time out and toast, on desktops
+    where the feature was in fact working. The managed-client stack holds only
+    real windows, in the order they are drawn.
+
+    Falls back to the old behaviour where no client stack is published.
 
     Returns True if it got there.
     """
@@ -5196,9 +5300,15 @@ def x11_lower_to_bottom(lib, dpy, win, timeout=1.0):
         # Re-read each time round: a window manager can reparent late, and the
         # frame that exists now is the one that has to move.
         top = x11_toplevel_of(lib, dpy, win)
-        lib.XLowerWindow(dpy, top)
+        stack = x11_client_stack(lib, dpy)
+        if stack:
+            if stack[0] == win:
+                return True
+            # EWMH takes the client window, not the frame.
+            x11_restack_below(lib, dpy, win, stack[0])
+        lib.XLowerWindow(dpy, top)     # for a window manager with no EWMH restack
         lib.XSync(dpy, False)
-        if x11_bottom_child(lib, dpy) == top:
+        if not stack and x11_bottom_child(lib, dpy) == top:
             return True
         if time.monotonic() >= deadline:
             return False
