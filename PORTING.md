@@ -75,6 +75,10 @@ Done, packaging:
 - [x] libprojectM vendored at `installer/vendor/linux/` rather than rebuilt, with
       projectM's LGPL-2.1 text alongside it in `installer/licenses/`
 - [x] **Old-system build**: `installer/build_linux_docker.sh`, glibc floor 2.43 -> 2.36
+- [x] **Double-click install**: the archive ships Install / Uninstall
+      `.desktop` launchers beside the scripts, so Linux is as close to the
+      Windows setup.exe as a tarball gets. Verified from the built tarball
+      through `GDesktopAppInfo` — install, then uninstall, then reinstall
 - [x] **Status toasts actually appear.** `status_message` was connected to an
       empty method, so every "Mode: Random" / "Hard cuts: ON" / "Sorted by
       rating" was dropped on the floor. Verified with xdotool driving the frozen
@@ -143,8 +147,9 @@ Done, Windows packaging:
 - [x] The release build is **windowed** (no console box behind the visualiser)
       and therefore silent. `MILKDROP_CONSOLE=1` builds a console version, which
       is the only way to debug a frozen failure
-- [x] libprojectM vendored at `installer/vendor/windows/` — the same three DLLs
-      `setup_windows.ps1` gathers, with GLEW's licence added to `licenses/`
+- [x] libprojectM vendored at `installer/vendor/windows/` — the same **two** DLLs
+      `setup_windows.ps1` gathers. `glew32.dll` was the third until the pinned
+      commit stopped linking GLEW; see the GLEW trap in CLAUDE.md
 - [x] App icon generated from the BomsAI logo (`installer/windows/*.ico`)
 
 Done, Windows parity with Linux — every feature added after the port branch,
