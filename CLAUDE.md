@@ -63,7 +63,9 @@ toolchain. `installer/README.md` has the full table.
 `installer/` builds the release. `bash installer/build_linux.sh` produces a
 tarball whose `install.sh` puts the app in `~/.local` with no root. See
 `installer/README.md` for the build, the vendored libprojectM and the glibc
-floor.
+floor. The archive also ships **Install / Uninstall BomsAI Visualizer.desktop**
+so the whole thing is a double-click; both are chmod +x by the build script,
+because a .desktop without the bit set is a text file to every file manager.
 
 `installer/build_windows.ps1` produces `BomsAIVisualizer-<version>-win64-setup.exe`
 through PyInstaller and Inno Setup 6, plus the portable tree beside it.
@@ -168,6 +170,17 @@ There is no display in an agent shell and SDL needs one, so:
   of them is visible from the source, and all three were on screen the whole time.
 
 ## Traps already paid for
+
+- **`desktop-file-validate` and GLib disagree about `Exec`, and GLib is the one
+  that runs it.** The validator demands `\"` and `\\$` inside a double-quoted
+  argument; `GDesktopAppInfo` (GNOME Files, Thunar — anything GLib) refuses to
+  load a file containing `\"` at all, returning NULL with no message, so the
+  launcher silently does nothing. Measured both ways. The two shipped launchers
+  use single quotes, which GLib parses and the validator merely complains about,
+  and they take the archive's location from `%k` **passed as an argument**
+  (`sh -c '...' sh %k`) rather than substituted into the command, so a path with
+  a space in it survives. Verified end to end from the built tarball: launch,
+  install, uninstall.
 
 - **projectM's sprite blend modes do not do what their MilkDrop names say.**
   Mode 0 ("alpha") ignores the texture's alpha channel entirely and draws the

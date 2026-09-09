@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Version=1.0
+Name=Uninstall BomsAI Visualizer
+Comment=Remove it. Ratings, collections and settings are left alone.
+# See the note in the install launcher about %k and the quoting.
+Exec=sh -c 'cd "$(dirname "$1")" || exit 1; ./uninstall.sh; echo; echo "Press Enter to close this window."; read _' sh %k
+Icon=edit-delete
+Terminal=true
+Categories=System;

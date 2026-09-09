@@ -43,9 +43,15 @@ cp -r "$BUILD/dist/BomsAIVisualizer" "$STAGE/app"
 cp "$HERE/linux/install.sh" "$HERE/linux/uninstall.sh" "$STAGE/"
 cp "$HERE/linux/README.txt" "$STAGE/"
 cp "$HERE/linux/bomsai-visualizer.desktop" "$HERE/linux/bomsai-visualizer.svg" "$STAGE/"
+# The two double-click launchers. They have to be executable in the archive:
+# a .desktop file without the bit set is a text file to every file manager.
+cp "$HERE/linux/Install BomsAI Visualizer.desktop" \
+   "$HERE/linux/Uninstall BomsAI Visualizer.desktop" "$STAGE/"
 mkdir -p "$STAGE/licenses"
 cp "$HERE/licenses/"* "$STAGE/licenses/"
-chmod +x "$STAGE/install.sh" "$STAGE/uninstall.sh"
+chmod +x "$STAGE/install.sh" "$STAGE/uninstall.sh" \
+         "$STAGE/Install BomsAI Visualizer.desktop" \
+         "$STAGE/Uninstall BomsAI Visualizer.desktop"
 printf '%s\n' "$VERSION" > "$STAGE/VERSION"
 
 echo "==> [3/3] Compressing"

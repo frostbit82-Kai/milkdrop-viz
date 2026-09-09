@@ -8,13 +8,29 @@ playing — any player, any browser tab, no plugin.
 INSTALL
 -------
 
+Double-click "Install BomsAI Visualizer". A terminal opens, it installs, and it
+waits for you to press Enter before closing.
+
+The first time, your desktop will probably ask whether to trust the launcher --
+that is the desktop protecting you from files that arrive pretending to be
+something else, and it happens to every archive that ships one:
+
+    GNOME Files    right-click the launcher -> Allow Launching, then double-click
+    Thunar / KDE   double-click, then choose Trust and Launch / Execute
+
+If you would rather not, or you are on a machine with no desktop at all, the
+launcher only runs the script sitting next to it:
+
     ./install.sh
 
 Installs to ~/.local, no root needed. It adds an applications-menu entry and a
 `bomsai-viz` command, then starts the app once to check it runs.
 
 To install somewhere else:   PREFIX=/opt ./install.sh    (may need sudo)
-To remove:                   ./uninstall.sh
+To remove:                   double-click "Uninstall BomsAI Visualizer",
+                             or run ./uninstall.sh
+
+Keep this folder. The uninstaller lives in it, not in the installed copy.
 
 
 PRESETS AND TEXTURES ARE NOT INCLUDED
@@ -37,8 +53,9 @@ Put each somewhere permanent, then in the app:
 
     right-click the window  ->  Settings  ->  Preset directory / Texture directory
 
-Until the preset directory is set the window opens and stays idle. That is the
-app waiting for presets, not a crash.
+Until the preset directory is set, the window plays the one preset that does
+ship with it — the BomsAI logo, drawn by the same engine everything else uses.
+That is the app waiting for presets, not a crash.
 
 
 CONTROLS
@@ -49,9 +66,11 @@ CONTROLS
     space             hard cut to the next preset
     r                 random preset
     f  or  F11        fullscreen        (double-click also works)
+    b                 borderless window
     F9                start / stop recording a clip
     escape            quit
     + / -             rate the current preset up or down
+    x                 exclude this one (rate it 0) and move on
     h                 hard cuts on/off
     m                 shuffle the playlist order on / off
     scroll lock       lock the current preset
@@ -78,8 +97,8 @@ RECORDING
 ---------
 
 F9 starts and stops a recording; the right-click menu offers MP4 or GIF and a
-shortcut to the folder they land in. Clips are silent — only the visuals are
-captured — and are written to:
+shortcut to the folder they land in. A clip carries the sound that drove it —
+captured off the same output the visuals are reacting to — and lands in:
 
     ~/.local/share/BomsAIVisualizer/clips
 
