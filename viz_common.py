@@ -2505,7 +2505,8 @@ pyqtSignal = Signal          # the shim modules beside this one still say this
 for _mod, _names in (
     (QtCore, ("Qt", "QObject", "QPoint", "QSize", "QTimer", "QEvent", "QThread",
               "QUrl")),
-    (QtGui,  ("QKeySequence", "QFont", "QCursor", "QAction", "QActionGroup",
+    (QtGui,  ("QKeySequence", "QFont", "QFontDatabase", "QShortcut",
+              "QCursor", "QAction", "QActionGroup",
               "QIcon", "QImage", "QPixmap", "QColor", "QDesktopServices")),
     (QtWidgets, ("QApplication", "QMenu", "QDialog", "QFormLayout",
                  "QVBoxLayout", "QHBoxLayout", "QPushButton", "QLabel",
@@ -2515,7 +2516,7 @@ for _mod, _names in (
                  "QFileDialog", "QSlider", "QWidget", "QWidgetAction",
                  "QListWidget", "QListWidgetItem", "QAbstractItemView",
                  "QProgressBar", "QSystemTrayIcon", "QInputDialog",
-                 "QTabWidget", "QScrollArea")),
+                 "QTabWidget", "QScrollArea", "QPlainTextEdit")),
 ):
     for _n in _names:
         globals()[_n] = getattr(_mod, _n)
@@ -2615,6 +2616,7 @@ _THEME_PALETTES = {
         "bg":            "#141414",
         "fg":            "#e8e8e8",
         "muted":         "#9a9a9a",
+        "bad":           "#e0706a",
         "link":          "#e0b44a",
         "field":         "#1e1e1e",
         "border":        "rgba(255, 255, 255, 40)",
@@ -2651,6 +2653,7 @@ _THEME_PALETTES = {
         "bg":            "#f5f5f5",
         "fg":            "#1c1c1c",
         "muted":         "#5f5f5f",
+        "bad":           "#b3261e",
         "link":          "#8a5d00",
         "field":         "#ffffff",
         "border":        "rgba(0, 0, 0, 55)",
@@ -6362,6 +6365,17 @@ class Renderer:
             return self._pm.current_preset_path() if self._pm else ""
         except Exception:
             return ""
+
+    def last_preset_error(self) -> str:
+        """Why the last edit did not take, or "". Qt thread.
+
+        Two sources because projectM has two: a preset it could not parse
+        raises through the failed-event callback, and a shader it could not
+        compile only reaches the log. Ask no sooner than a few frames after
+        the edit -- the shader one is not written until the preset is drawn.
+        """
+        return (getattr(self._pm, "last_error", "") if self._pm
+                else "") or _LAST_PM_ERROR
 
     def preset_text(self) -> str:
         """The current preset's file, or "". Qt thread -- it is a file read."""

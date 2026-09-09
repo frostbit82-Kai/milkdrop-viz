@@ -22,6 +22,7 @@ from viz_common import (
     PRESET_TWEAKS, preset_scalar, preset_driven_keys, patch_preset,
     preset_textures, texture_override_path, theme_colour,
     QComboBox, SPRITE_MOTIONS, SPRITE_BLENDS, MAX_SPRITES,
+    QPlainTextEdit, QCheckBox, QShortcut, QKeySequence, QFontDatabase,
 )
 
 logger = logging.getLogger(__name__)
@@ -51,12 +52,18 @@ class TweakPanel(QWidget):
     #: Debounce before the preset is rebuilt and reloaded. Each reload
     #: recompiles the preset's shaders, so one per drag step is far too many.
     APPLY_MS = 120
+    #: How long to wait before asking why an edit failed. A preset that will
+    #: not parse is known immediately, but a shader that will not compile is
+    #: not reported until projectM draws the preset, which is a few frames
+    #: later -- so asking straight away reads back the previous answer.
+    ERROR_MS = 400
 
     def __init__(self, host, parent=None):
         super().__init__(parent)
         self._host = host
         self._base = ""          # the preset file's text, never patched
         self._values = {}        # ini key -> current slider value
+        self._touched = set()    # ini keys a slider actually moved
         self._rows = {}          # ini key -> (slider, value label)
         self._stale = True       # the preset changed while we were hidden
 
@@ -80,7 +87,55 @@ class TweakPanel(QWidget):
             Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self._tabs.addTab(scroll, "Tweak")
 
-        # Tab 2 — the pictures.
+        # Tab 2 — the preset's own code, which is what the sliders above are
+        # a safe subset of. Everything a .milk file can say is in here.
+        code_body = QWidget()
+        code_lay = QVBoxLayout(code_body)
+        code_lay.setContentsMargins(4, 4, 4, 4)
+        code_lay.setSpacing(4)
+
+        self._code = QPlainTextEdit()
+        # No wrapping: a per-frame equation is one very long line, and wrapped
+        # it is unreadable and unfindable by line number in an error message.
+        self._code.setLineWrapMode(QPlainTextEdit.LineWrapMode.NoWrap)
+        self._code.setFont(QFontDatabase.systemFont(
+            QFontDatabase.SystemFont.FixedFont))
+        self._code.setMinimumHeight(190)
+        code_lay.addWidget(self._code, 1)
+
+        self._code_error = QLabel()
+        self._code_error.setWordWrap(True)
+        self._code_error.setStyleSheet(
+            f"color:{theme_colour('bad')};font-size:11px;")
+        self._code_error.hide()
+        code_lay.addWidget(self._code_error)
+
+        code_foot = QHBoxLayout()
+        code_foot.setContentsMargins(0, 0, 0, 0)
+        code_foot.setSpacing(6)
+        # Without this the playlist moves on mid-sentence and the box is
+        # showing a preset that is no longer playing. The key exists already;
+        # a checkbox here is what makes it findable while typing.
+        self._code_lock = QCheckBox("Keep this preset on screen")
+        self._code_lock.setToolTip(
+            "Stops the playlist changing the preset while you type. "
+            "Same as the lock in the right-click menu.")
+        self._code_lock.toggled.connect(self._code_lock_toggled)
+        code_foot.addWidget(self._code_lock)
+        code_foot.addStretch(1)
+        btn_apply = QPushButton("Apply")
+        btn_apply.setToolTip("Play what is in the box now (Ctrl+Enter)")
+        btn_apply.clicked.connect(self._apply_code)
+        code_foot.addWidget(btn_apply)
+        code_lay.addLayout(code_foot)
+        self._tabs.addTab(code_body, "Code")
+
+        for _seq in ("Ctrl+Return", "Ctrl+Enter"):
+            _sc = QShortcut(QKeySequence(_seq), self._code)
+            _sc.setContext(Qt.ShortcutContext.WidgetWithChildrenShortcut)
+            _sc.activated.connect(self._apply_code)
+
+        # Tab 3 — the pictures.
         self._tex_body = QWidget()
         self._tex_lay = QVBoxLayout(self._tex_body)
         self._tex_lay.setContentsMargins(4, 4, 4, 4)
@@ -92,7 +147,7 @@ class TweakPanel(QWidget):
             Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self._tabs.addTab(tex_scroll, "Textures")
 
-        # Tab 3 — pictures laid over the render, rather than inside a preset.
+        # Tab 4 — pictures laid over the render, rather than inside a preset.
         self._spr_body = QWidget()
         self._spr_lay = QVBoxLayout(self._spr_body)
         self._spr_lay.setContentsMargins(4, 4, 4, 4)
@@ -158,8 +213,19 @@ class TweakPanel(QWidget):
         except Exception:
             self._base = ""
         self._values.clear()
+        self._touched.clear()
         self._build_tweaks()
         self._build_textures()
+        # An unapplied edit is somebody's work in progress. The preset
+        # changing underneath it is not a reason to throw it away -- Revert is.
+        if not self._code.document().isModified():
+            self._code.setPlainText(self._base)
+            self._code.document().setModified(False)
+        self._code_error.hide()
+        try:
+            self._code_lock.setChecked(bool(self._host.is_locked()))
+        except Exception:
+            pass
 
     def _build_tweaks(self):
         self._rows.clear()
@@ -239,6 +305,7 @@ class TweakPanel(QWidget):
             def changed(i, k=key, l=lo, h=hi, d=decimals, lbl=shown):
                 v = l + (h - l) * i / self.STEPS
                 self._values[k] = v
+                self._touched.add(k)
                 lbl.setText(f"{v:.{d}f}")
                 self._timer.start()
             slider.valueChanged.connect(changed)
@@ -509,14 +576,70 @@ class TweakPanel(QWidget):
     # ── applying ───────────────────────────────────────────────────────
 
     def current_text(self) -> str:
-        return patch_preset(self._base, self._values) if self._base else ""
+        """The preset as this panel would save it.
+
+        Only the sliders somebody moved are patched in. Patching every key the
+        panel knows would rewrite lines nobody touched -- 0.960 comes back as
+        0.96 -- so a preset opened and saved unchanged would no longer match
+        the file it came from, and every diff would be noise.
+        """
+        if not self._base:
+            return ""
+        moved = {k: v for k, v in self._values.items() if k in self._touched}
+        return patch_preset(self._base, moved) if moved else self._base
 
     def _apply(self):
         text = self.current_text()
-        if text:
-            self._host.preview_preset(text)
+        if not text:
+            return
+        self._host.preview_preset(text)
+        # Keep the box showing what is on screen, unless it holds an edit that
+        # has not been applied yet -- that one is not ours to overwrite.
+        if not self._code.document().isModified():
+            self._code.setPlainText(text)
+            self._code.document().setModified(False)
+
+    def _apply_code(self):
+        """Play what is in the editor, and make it the preset the rest of the
+        panel is working from.
+
+        The sliders are rebuilt out of the new text rather than kept and
+        re-patched over it, so there is never a second version of the preset
+        that only one tab knows about.
+        """
+        text = self._code.toPlainText()
+        if not text.strip():
+            return
+        self._base = text
+        self._values.clear()
+        self._touched.clear()
+        self._code.document().setModified(False)
+        self._host.preview_preset(text)
+        self._rebuild_later(self._build_tweaks)
+        self._code_error.hide()
+        QTimer.singleShot(self.ERROR_MS, self._show_code_error)
+
+    def _show_code_error(self):
+        try:
+            why = self._host.last_preset_error()
+        except Exception:
+            why = ""
+        self._code_error.setText(why)
+        self._code_error.setVisible(bool(why))
+
+    def _code_lock_toggled(self, on: bool):
+        # Only when it actually differs: the box is also set from the host in
+        # reload(), and a blind toggle there would unlock what it just read.
+        try:
+            if bool(self._host.is_locked()) != bool(on):
+                self._host.request_toggle_lock()
+        except Exception:
+            pass
 
     def _revert(self):
+        # Revert means the file on disk wins, including over an edit still
+        # sitting in the box.
+        self._code.document().setModified(False)
         self.reload()
         try:
             self._host.revert_preset()
@@ -524,6 +647,10 @@ class TweakPanel(QWidget):
             pass
 
     def _save_as(self):
+        # Save what is in the box, not what happens to be on screen: somebody
+        # who typed and went straight for Save meant the thing they typed.
+        if self._code.document().isModified():
+            self._apply_code()
         text = self.current_text()
         if not text:
             return
