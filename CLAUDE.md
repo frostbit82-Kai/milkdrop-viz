@@ -618,8 +618,15 @@ There is no display in an agent shell and SDL needs one, so:
      stays true -- with an `XSync` between the property change and the map.
   2. **The desktop type does not say where in the bottom layer you land**, and
      the window holding the desktop icons (xfdesktop, Nemo, plasmashell) is
-     already there. `XLowerWindow` after the map is what puts the icons above
-     the visuals. Without it the feature looks like it works and covers them.
+     already there. The window has to be lowered under it -- but **one
+     `XLowerWindow` right after the map is thrown away**: the window manager
+     restacks a newly mapped window on its own event loop, which runs after
+     ours. Measured under muffin: a single lower left the visualiser above
+     nemo-desktop, and a late one stuck. `x11_lower_to_bottom` therefore lowers
+     and *checks*, up to a second -- `XQueryTree` hands back the root's
+     children bottom first, so being `children[0]` is the whole test. A desktop
+     that never lets go gets a toast rather than a silent failure that looks
+     exactly like success.
 
   **ctypes signatures are spelled out in `_libx11` because both defaults are
   wrong.** A returned `Atom` through the default `c_int` restype loses its top
@@ -638,11 +645,23 @@ There is no display in an agent shell and SDL needs one, so:
   `_NET_WM_STATE` deleted and the old geometry restored. **Stacking against
   real desktop icons is still unverified** -- it needs a window manager and an
   icon manager, neither of which is installed on the dev box. Queued for Mint
-  (Cinnamon on X11). If the visuals come out *over* the icons there, the first
-  thing to check is whether the icon window is itself
-  `_NET_WM_WINDOW_TYPE_DESKTOP` (`xprop` it): two desktop windows in the same
-  layer is exactly the case `XLowerWindow` is there to settle, and if Cinnamon
-  re-raises us the fallback is to lower again on the next `MapNotify`.
+  (Cinnamon on X11), because of the compositor question below.
+
+  **The icon layer has to be composited for any of this to show.** Verified in
+  Xephyr with muffin + nemo-desktop: after the lower fix the icons are on top,
+  which is the whole point -- but the visuals stayed black. nemo-desktop's
+  window is **depth 32** (ARGB), and an ARGB window with **no compositing
+  manager running** paints opaque black over whatever is beneath it. The bare
+  rig has none (`_NET_WM_CM_S0` has no owner); real Cinnamon does, because
+  muffin composites and cinnamon draws the wallpaper rather than nemo-desktop.
+  So the rig can prove stacking and cannot prove visibility. Check
+  `_NET_WM_CM_S0` before reading anything into a black screen.
+
+  **XFCE is a different shape and may not work at all**: xfdesktop draws the
+  wallpaper *and* the icons on one window, so there is no transparent icon
+  layer to slot beneath. If that holds, the honest answer on XFCE is that the
+  visuals go in front and the icons are hidden -- which is a different feature,
+  not this one.
 - **A screensaver must not open a dialog, and that includes the no-presets
   one.** `_warn_photosensitivity` already skips for this reason;
   `_on_no_presets` did not, so a fresh install that ticked "use as the Windows

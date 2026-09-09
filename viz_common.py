@@ -5077,7 +5077,58 @@ def _libx11():
     lib.XDeleteProperty.argtypes = [ptr, ulong, ulong]
     lib.XLowerWindow.argtypes = [ptr, ulong]
     lib.XSync.argtypes = [ptr, i]
+    lib.XDefaultRootWindow.restype = ulong
+    lib.XDefaultRootWindow.argtypes = [ptr]
+    lib.XQueryTree.argtypes = [ptr, ulong, ctypes.POINTER(ulong),
+                               ctypes.POINTER(ulong),
+                               ctypes.POINTER(ctypes.POINTER(ulong)),
+                               ctypes.POINTER(ctypes.c_uint)]
+    lib.XFree.argtypes = [ptr]
     return lib
+
+
+def x11_bottom_child(lib, dpy):
+    """The window at the very bottom of the root's stack, or 0.
+
+    XQueryTree hands back the children bottom first, which is the only thing
+    this needs to know.
+    """
+    root = lib.XDefaultRootWindow(dpy)
+    kids = ctypes.POINTER(ctypes.c_ulong)()
+    count = ctypes.c_uint()
+    parent, child_root = ctypes.c_ulong(), ctypes.c_ulong()
+    if not lib.XQueryTree(dpy, root, ctypes.byref(child_root),
+                          ctypes.byref(parent), ctypes.byref(kids),
+                          ctypes.byref(count)) or not count.value:
+        return 0
+    try:
+        return kids[0]
+    finally:
+        lib.XFree(kids)
+
+
+def x11_lower_to_bottom(lib, dpy, win, timeout=1.0):
+    """Lower the window, and keep at it until it really is the bottom one.
+
+    One XLowerWindow straight after the map gets thrown away. A window manager
+    restacks a newly mapped window on its own event loop, which runs after
+    ours, so the window comes back up above the one drawing the desktop icons
+    -- measured under muffin, where a single lower left the visualiser on top
+    and a late one stuck. Rather than guess how long the window manager takes,
+    ask: XQueryTree returns the root's children bottom first, so being the
+    first of them is the whole test.
+
+    Returns True if it got there.
+    """
+    deadline = time.monotonic() + timeout
+    while True:
+        lib.XLowerWindow(dpy, win)
+        lib.XSync(dpy, False)
+        if x11_bottom_child(lib, dpy) == win:
+            return True
+        if time.monotonic() >= deadline:
+            return False
+        time.sleep(0.05)
 
 
 def x11_set_atoms(lib, dpy, win, prop, values):
@@ -7116,7 +7167,14 @@ class Renderer:
         lib.XSync(dpy, False)
         sdl2.SDL_ShowWindow(self._window)
         if on:
-            lib.XLowerWindow(dpy, win)
+            if not x11_lower_to_bottom(lib, dpy, win):
+                # Not fatal: the visuals are up, they are just in front of the
+                # icons. Say so rather than let it look like the feature works.
+                print("[wallpaper] could not get below the desktop icons",
+                      flush=True)
+                self._bridge.show_toast.emit(
+                    "Wallpaper mode is on, but this desktop keeps its icons "
+                    "below the visuals")
             # Again, after the map: a window manager places a desktop window
             # itself, and what it decides overwrites whatever was asked for
             # while the window was down.

@@ -219,6 +219,10 @@ class FakeXlib:
         self.atoms, self.props, self.deleted = {}, {}, []
         self.lowered = self.synced = 0
         self.order = [] if log is None else log
+        #: Whichever window is currently at the bottom of the root's stack.
+        self.bottom = 0
+        #: How many XLowerWindow calls the window manager will undo.
+        self.reraises = 0
     def atom(self, name):
         return self.atoms.setdefault(name, 0x1_0000_0001 + len(self.atoms))
     def XInternAtom(self, _dpy, name, _exists):
@@ -227,7 +231,15 @@ class FakeXlib:
         self.props[prop] = (typ, fmt, list(buf)[:n])
     def XDeleteProperty(self, _dpy, _win, prop):
         self.deleted.append(prop)
-    def XLowerWindow(self, _dpy, _win):  self.lowered += 1
+    def XLowerWindow(self, _dpy, win):
+        self.lowered += 1
+        # A window manager restacks a newly mapped window on its own event
+        # loop, after ours -- so the first few lowers get undone.
+        if self.reraises > 0:
+            self.reraises -= 1
+        else:
+            self.bottom = win
+    def XDefaultRootWindow(self, _dpy):  return 1
     def XSync(self, _dpy, _discard):
         self.synced += 1
         self.order.append("sync")
@@ -263,15 +275,62 @@ def _x11_run(on, displays=TWO, cfg=None):
         r._wp_restore = ((10, 20, 640, 480), False, 0, 0)
     log = []
     lib = FakeXlib(log)
-    real_x11 = viz_common._libx11
+    real_x11, real_bottom = viz_common._libx11, viz_common.x11_bottom_child
     viz_common._libx11 = lambda: lib
+    # XQueryTree's out-parameters are not worth faking; the stack it reports is.
+    viz_common.x11_bottom_child = lambda l, _dpy: l.bottom
     fake = FakeSDL(log)
     try:
         with faked_sdl(fake):
             r._set_x11_wallpaper(on)
     finally:
         viz_common._libx11 = real_x11
+        viz_common.x11_bottom_child = real_bottom
     return r, lib, fake
+
+
+def _lower(reraises, timeout=1.0):
+    lib = FakeXlib()
+    lib.reraises = reraises
+    real = viz_common.x11_bottom_child
+    viz_common.x11_bottom_child = lambda l, _dpy: l.bottom
+    try:
+        return lib, viz_common.x11_lower_to_bottom(lib, 1, 0x2000001,
+                                                   timeout=timeout)
+    finally:
+        viz_common.x11_bottom_child = real
+
+def lowering_keeps_at_it_until_the_window_is_really_at_the_bottom():
+    """One lower straight after the map is thrown away -- measured under
+    muffin, where the visualiser came back up above the icons and a late lower
+    stuck. So lower, then check, rather than lower and hope."""
+    lib, ok = _lower(reraises=2)
+    assert ok, "gave up while the window was still above the icons"
+    assert lib.lowered == 3, lib.lowered
+
+def a_desktop_that_never_lets_go_is_reported_rather_than_pretended():
+    lib, ok = _lower(reraises=999, timeout=0.2)
+    assert not ok, "claimed the window reached the bottom when it never did"
+    assert lib.lowered > 1, "did not even retry"
+
+def a_desktop_that_keeps_the_icons_below_says_so():
+    """The visuals are up either way; only the stacking failed. A silent
+    success there looks exactly like the feature working."""
+    r = bare({"fullscreen_display": 0}, TWO)
+    r._native_handle, r._x11_display = 0x2000001, 1
+    lib = FakeXlib(); lib.reraises = 999
+    real_x11, real_bottom = viz_common._libx11, viz_common.x11_bottom_child
+    viz_common._libx11 = lambda: lib
+    viz_common.x11_bottom_child = lambda l, _dpy: l.bottom
+    try:
+        with faked_sdl(FakeSDL()):
+            r._set_x11_wallpaper(True)
+    finally:
+        viz_common._libx11 = real_x11
+        viz_common.x11_bottom_child = real_bottom
+    assert r._wallpaper is True, "gave up on the mode over the stacking alone"
+    assert any("icons" in " ".join(map(str, t)) for t in r._bridge.toasts), \
+        r._bridge.toasts
 
 def becoming_the_desktop_asks_for_the_desktop_type_and_the_bottom_layer():
     r, lib, fake = _x11_run(True)
@@ -497,6 +556,9 @@ for fn in (the_worker_behind_the_icons_is_chosen,
            an_empty_list_deletes_the_property,
            becoming_the_desktop_asks_for_the_desktop_type_and_the_bottom_layer,
            the_window_is_lowered_under_the_icons,
+           lowering_keeps_at_it_until_the_window_is_really_at_the_bottom,
+           a_desktop_that_never_lets_go_is_reported_rather_than_pretended,
+           a_desktop_that_keeps_the_icons_below_says_so,
            the_property_change_is_flushed_before_the_window_comes_back,
            the_geometry_is_set_again_once_the_window_is_back_up,
            leaving_puts_the_window_back_where_it_was,
