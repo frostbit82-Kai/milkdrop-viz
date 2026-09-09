@@ -7117,6 +7117,10 @@ class Renderer:
         sdl2.SDL_ShowWindow(self._window)
         if on:
             lib.XLowerWindow(dpy, win)
+            # Again, after the map: a window manager places a desktop window
+            # itself, and what it decides overwrites whatever was asked for
+            # while the window was down.
+            self._fit_to_wallpaper()
         else:
             sdl2.SDL_RaiseWindow(self._window)
         lib.XSync(dpy, False)

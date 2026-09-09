@@ -58,7 +58,9 @@ class FakeSDL:
         #: unmap / property change / map dance can be checked across the two.
         self.order = [] if log is None else log
     def SDL_SetWindowPosition(self, _w, x, y):  self.pos = (x, y)
-    def SDL_SetWindowSize(self, _w, w, h):      self.size = (w, h)
+    def SDL_SetWindowSize(self, _w, w, h):
+        self.size = (w, h)
+        self.order.append("geom")
     def SDL_SetWindowBordered(self, _w, v):     self.bordered = v
     def SDL_HideWindow(self, _w):               self.order.append("hide")
     def SDL_ShowWindow(self, _w):               self.order.append("show")
@@ -296,6 +298,14 @@ def the_property_change_is_flushed_before_the_window_comes_back():
     assert fake.order.index("sync") < fake.order.index("show"), fake.order
     assert fake.order.index("hide") < fake.order.index("sync"), fake.order
 
+def the_geometry_is_set_again_once_the_window_is_back_up():
+    """A window manager places a desktop window itself, and what it decides
+    overwrites anything asked for while the window was unmapped."""
+    _r, _lib, fake = _x11_run(True)
+    assert "show" in fake.order, fake.order
+    after = fake.order[fake.order.index("show"):]
+    assert "geom" in after, fake.order
+
 def leaving_puts_the_window_back_where_it_was():
     r, lib, fake = _x11_run(False)
     typ = lib.props[lib.atom("_NET_WM_WINDOW_TYPE")][2]
@@ -488,6 +498,7 @@ for fn in (the_worker_behind_the_icons_is_chosen,
            becoming_the_desktop_asks_for_the_desktop_type_and_the_bottom_layer,
            the_window_is_lowered_under_the_icons,
            the_property_change_is_flushed_before_the_window_comes_back,
+           the_geometry_is_set_again_once_the_window_is_back_up,
            leaving_puts_the_window_back_where_it_was,
            a_window_that_does_not_exist_yet_is_an_error_not_a_lie,
            asking_for_the_mode_it_is_already_in_does_nothing,
