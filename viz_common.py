@@ -1398,6 +1398,13 @@ _LOG_CB = None
 _PM_LOG_WARN = 4
 _PM_LOG_NAMES = {4: "warn", 5: "error", 6: "fatal"}
 
+#: The newest ERROR the library logged. A preset that cannot be *parsed* raises
+#: through projectm_set_preset_switch_failed_event_callback, but a preset whose
+#: *shader* will not compile does not: projectM logs it and renders on with the
+#: broken stage dropped. That second kind is the one somebody editing shader
+#: code hits constantly, so the log is the only place it can be read from.
+_LAST_PM_ERROR = ""
+
 
 def _install_projectm_logging(core) -> bool:
     """Route libprojectM's own log at WARN and above to stdout. Once."""
@@ -1416,9 +1423,12 @@ def _install_projectm_logging(core) -> bool:
         return False
 
     def _on_log(message, level, _user):
+        global _LAST_PM_ERROR
         try:
             text = (message or b"").decode("utf-8", "replace").strip()
             if text:
+                if level >= 5:
+                    _LAST_PM_ERROR = text
                 print(f"[projectm:{_PM_LOG_NAMES.get(level, level)}] {text}",
                       flush=True)
         except Exception:
@@ -1568,6 +1578,23 @@ class ProjectM4:
             print("[projectm_wrapper] projectm_load_preset_data missing — "
                   "live preset tweaking is unavailable")
 
+        # projectm_load_preset_data returns void, so a call that "worked" and
+        # a preset whose shader would not compile look identical from Python.
+        # This callback is the only thing that knows the difference, and it is
+        # what makes an editor possible: without it a bad edit leaves the last
+        # good frame on screen and nothing says why.
+        self.last_error = ""
+        self._fail_cb = None
+        self._fail_proto = ctypes.CFUNCTYPE(None, ctypes.c_char_p,
+                                            ctypes.c_char_p, ctypes.c_void_p)
+        try:
+            C.projectm_set_preset_switch_failed_event_callback.restype = None
+            C.projectm_set_preset_switch_failed_event_callback.argtypes = [
+                ctypes.c_void_p, self._fail_proto, ctypes.c_void_p]
+            self.can_report_failures = True
+        except AttributeError:
+            self.can_report_failures = False
+
         # Drops the scanned texture list, so a texture swapped on disk is
         # picked up without recreating the whole projectM instance.
         try:
@@ -1696,6 +1723,14 @@ class ProjectM4:
         self._core.projectm_set_window_size(self._pm, width, height)
         self._core.projectm_set_fps(self._pm, fps)
 
+        # Held on the instance for the reason the log callback is held at
+        # module scope: ctypes does not own a CFUNCTYPE, and projectM calls
+        # this one from the render thread the moment a preset fails.
+        if self.can_report_failures:
+            self._fail_cb = self._fail_proto(self._on_preset_failed)
+            self._core.projectm_set_preset_switch_failed_event_callback(
+                self._pm, self._fail_cb, None)
+
         if self._playlist:
             self._pl = self._playlist.projectm_playlist_create(self._pm)
             if not self._pl:
@@ -1806,11 +1841,35 @@ class ProjectM4:
             pass
         return ""
 
+    def _on_preset_failed(self, filename, message, _user):
+        """projectM could not compile a preset. Render thread.
+
+        Fires for playlist switches as well as edits, which is why the name is
+        logged: on a 130,000-preset pack "some presets are black" is a report
+        we used to have no answer to.
+        """
+        try:
+            self.last_error = (message or b"").decode("utf-8",
+                                                      "replace").strip()
+            name = os.path.basename(
+                (filename or b"").decode("utf-8", "replace"))
+            print(f"[projectm] preset failed: {name or '<edited>'}: "
+                  f"{self.last_error}", flush=True)
+        except Exception:
+            pass                  # a reporter must never take the app down
+
     def load_preset_data(self, text: str, smooth: bool = False) -> bool:
         """Play a preset held in a string. Render thread only -- it compiles
-        shaders, which needs the GL context."""
+        shaders, which needs the GL context.
+
+        True means the call went through, not that the preset compiled. Read
+        `last_error` after it for that -- it is cleared here and filled in by
+        the callback before this returns.
+        """
+        global _LAST_PM_ERROR
         if not self._pm or not getattr(self, "can_load_data", False):
             return False
+        self.last_error = _LAST_PM_ERROR = ""
         try:
             self._core.projectm_load_preset_data(
                 self._pm, text.encode("utf-8", "replace"), bool(smooth))
@@ -5742,6 +5801,9 @@ class Renderer:
         self._req_preset_data            = None   # preset text to play now
         self._req_reset_textures         = False  # rescan after a swap
         self._req_sprites                = False  # rebuild the overlay list
+        #: Frames left before an edit's error is read back. 0 = not editing,
+        #: which is what keeps a 130,000-preset pack from toasting all night.
+        self._edit_error_in              = 0
         self._rated                      = False  # favorite (rating-weighted) shuffle
         self._rated_history              = deque(maxlen=200)  # native indices for rated prev
 
@@ -6325,15 +6387,15 @@ class Renderer:
         step turns a drag into a smear of half-applied presets."""
         if not self._pm:
             return
-        if self._pm.load_preset_data(text, smooth=False):
-            # Logged because an edited preset that fails to compile just shows
-            # the previous frame forever, and without a line here there is
-            # nothing to tell "the slider did nothing" from "the preset is
-            # broken". Rate-limited by the panel's own debounce.
-            print(f"[tweak] applied {len(text)} bytes", flush=True)
-        else:
+        if not self._pm.load_preset_data(text, smooth=False):
             self._bridge.show_toast.emit(
                 "This build of projectM cannot play an edited preset")
+            return
+        print(f"[tweak] applied {len(text)} bytes", flush=True)
+        # A parse error is already in last_error by now; a shader error is not
+        # logged until the preset is drawn. Ask again once frames have gone by,
+        # rather than reporting success on an edit that is about to fail.
+        self._edit_error_in = 3
 
     def revert_preset(self):
         """Back to the file on disk, discarding an unsaved tweak.
@@ -6778,6 +6840,13 @@ class Renderer:
                 self._capture_for_recording()
             self._maybe_thumbnail()
             sdl2.SDL_GL_SwapWindow(self._window)
+
+            if self._edit_error_in:
+                self._edit_error_in -= 1
+                if not self._edit_error_in:
+                    err = self._pm.last_error or _LAST_PM_ERROR
+                    if err:
+                        self._bridge.show_toast.emit(err)
 
             if _fps_t0 is not None:
                 _fps_n += 1

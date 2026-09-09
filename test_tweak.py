@@ -311,6 +311,118 @@ def patching_real_presets_never_reorders_or_loses_a_line():
         assert len(changed) <= 2, (path, changed)
 
 
+# ── the failure callback ─────────────────────────────────────────────────────
+#
+# projectm_load_preset_data returns void. The only thing that knows whether an
+# edit compiled is the callback, so these run ProjectM4 against a stand-in
+# library rather than testing the text functions above.
+
+class _FakeFn:
+    def __init__(self, lib, name):
+        self._lib, self._name = lib, name
+        self.restype = None
+        self.argtypes = None
+
+    def __call__(self, *a):
+        return self._lib.call(self._name, *a)
+
+
+class _FakeCore:
+    """Enough of libprojectM to drive the error reporting, and no more."""
+
+    def __init__(self, missing=()):
+        self._missing = set(missing)
+        self._fns = {}
+        self.fail_with = b""      # what the next load reports, if anything
+        self.log_error = b""      # what it logs while drawing, if anything
+        self.failed_cb = None
+        self.log_cb = None
+
+    def __getattr__(self, name):
+        if not name.startswith("projectm_") or name in self._missing:
+            raise AttributeError(name)
+        return self._fns.setdefault(name, _FakeFn(self, name))
+
+    def call(self, name, *a):
+        if name == "projectm_create":
+            return 0xBEEF
+        if name == "projectm_set_log_callback":
+            self.log_cb = a[0]
+        if name == "projectm_set_preset_switch_failed_event_callback":
+            self.failed_cb = a[1]
+        if name == "projectm_load_preset_data":
+            if self.fail_with:
+                self.failed_cb(b"/presets/x.milk", self.fail_with, None)
+            if self.log_error:
+                # projectM logs a shader error while the frame is drawn, not
+                # while the preset loads. The order does not matter to the
+                # slot; that it survives the load does.
+                self.log_cb(self.log_error, 5, None)
+        return 0
+
+
+def _pm(missing=()):
+    # The real one installs its log callback once per process and then skips.
+    # Each stand-in library needs its own, so forget the last one.
+    v._LOG_CB = None
+    core = _FakeCore(missing)
+    pm = v.ProjectM4(core, None)
+    pm.create(64, 64)
+    return core, pm
+
+
+def a_preset_that_will_not_compile_reports_why():
+    core, pm = _pm()
+    core.fail_with = b"blur1: syntax error at line 4"
+    assert pm.load_preset_data("[preset00]"), "the call itself should go through"
+    assert pm.last_error == "blur1: syntax error at line 4", pm.last_error
+
+
+def a_preset_that_compiles_leaves_no_error_behind():
+    """The clear has to happen before the load, not after: a stale message from
+    the previous edit would toast on the edit that fixed it."""
+    core, pm = _pm()
+    core.fail_with = b"boom"
+    pm.load_preset_data("[preset00]")
+    assert pm.last_error
+    core.fail_with = b""
+    pm.load_preset_data("[preset00]")
+    assert pm.last_error == "", f"stale error survived: {pm.last_error!r}"
+
+
+def a_shader_that_will_not_compile_is_read_from_the_log():
+    """The failed event fires only when the preset cannot be parsed. A preset
+    that parses and whose shader will not compile is logged instead, and
+    projectM renders on with the broken stage dropped -- which is the error
+    somebody editing shader code hits most, so it has to be readable too."""
+    core, pm = _pm()
+    core.log_error = (b'[PerPixelMesh] Error loading warp shader code:'
+                      b'[MilkdropShader] missing "shader_body" entry point.')
+    pm.load_preset_data("[preset00]")
+    assert pm.last_error == "", "a shader error is not a parse failure"
+    assert "shader_body" in v._LAST_PM_ERROR, v._LAST_PM_ERROR
+
+
+def the_previous_edits_error_does_not_survive_the_next_one():
+    """Otherwise the edit that fixes a preset toasts the error it just fixed."""
+    core, pm = _pm()
+    core.log_error = b"boom"
+    pm.load_preset_data("[preset00]")
+    assert v._LAST_PM_ERROR == "boom"
+    core.log_error = b""
+    pm.load_preset_data("[preset00]")
+    assert v._LAST_PM_ERROR == "", v._LAST_PM_ERROR
+
+
+def a_library_without_the_callback_still_edits():
+    """An older libprojectM loses the error text, not the editor."""
+    core, pm = _pm({"projectm_set_preset_switch_failed_event_callback"})
+    assert not pm.can_report_failures
+    assert core.failed_cb is None, "registered a callback that does not exist"
+    assert pm.load_preset_data("[preset00]")
+    assert pm.last_error == ""
+
+
 for name, fn in list(globals().items()):
     if callable(fn) and not name.startswith(("_", "check")) \
             and getattr(fn, "__module__", None) == "__main__":
