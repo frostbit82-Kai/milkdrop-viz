@@ -166,6 +166,10 @@ def as_env(env):
         viz_common.os.environ = real
 
 
+#: Window ids for the fake X server: the root, the icon manager's desktop
+#: window, our client, and the frame a reparenting window manager wraps it in.
+ROOT, ICONS, APP_WIN, FRAME = 0x1, 0x200029, 0x2000001, 0x2000002
+
 X11_ENV = {"DISPLAY": ":0", "XDG_SESSION_TYPE": "x11",
            "XDG_CURRENT_DESKTOP": "X-Cinnamon"}
 WAYLAND_ENV = {"DISPLAY": ":0", "XDG_SESSION_TYPE": "wayland",
@@ -219,10 +223,16 @@ class FakeXlib:
         self.atoms, self.props, self.deleted = {}, {}, []
         self.lowered = self.synced = 0
         self.order = [] if log is None else log
-        #: Whichever window is currently at the bottom of the root's stack.
-        self.bottom = 0
+        #: The root's children, bottom first.
+        self.stack = []
+        #: client -> frame, for a window manager that reparents.
+        self.parent = {}
         #: How many XLowerWindow calls the window manager will undo.
         self.reraises = 0
+
+    @property
+    def bottom(self):
+        return self.stack[0] if self.stack else 0
     def atom(self, name):
         return self.atoms.setdefault(name, 0x1_0000_0001 + len(self.atoms))
     def XInternAtom(self, _dpy, name, _exists):
@@ -233,13 +243,23 @@ class FakeXlib:
         self.deleted.append(prop)
     def XLowerWindow(self, _dpy, win):
         self.lowered += 1
+        if win not in self.stack:
+            return                      # lowering something not in the stack
+        self.stack.remove(win)
         # A window manager restacks a newly mapped window on its own event
         # loop, after ours -- so the first few lowers get undone.
         if self.reraises > 0:
             self.reraises -= 1
+            self.stack.append(win)
         else:
-            self.bottom = win
-    def XDefaultRootWindow(self, _dpy):  return 1
+            self.stack.insert(0, win)
+    def XDefaultRootWindow(self, _dpy):  return ROOT
+    def tree(self, win):
+        """(parent, children bottom-first) -- what _x11_query_tree extracts."""
+        if win == ROOT:
+            kids = [w for w in self.stack]
+            return 0, kids
+        return self.parent.get(win, ROOT), []
     def XSync(self, _dpy, _discard):
         self.synced += 1
         self.order.append("sync")
@@ -275,30 +295,44 @@ def _x11_run(on, displays=TWO, cfg=None):
         r._wp_restore = ((10, 20, 640, 480), False, 0, 0)
     log = []
     lib = FakeXlib(log)
-    real_x11, real_bottom = viz_common._libx11, viz_common.x11_bottom_child
+    lib.stack = [ICONS, APP_WIN]
+    real_x11, real_tree = viz_common._libx11, viz_common._x11_query_tree
+    real_origin = viz_common.x11_window_origin
     viz_common._libx11 = lambda: lib
-    # XQueryTree's out-parameters are not worth faking; the stack it reports is.
-    viz_common.x11_bottom_child = lambda l, _dpy: l.bottom
+    # XQueryTree's out-parameters are not worth faking; the tree it reports is.
+    viz_common._x11_query_tree = lambda l, _dpy, w: l.tree(w)
+    # A window manager that places the window exactly where it was asked, so
+    # the frame correction is a no-op here. It has its own checks below.
+    viz_common.x11_window_origin = lambda l, _dpy, _w: (
+        r._wallpaper_box() or (0, 0, 0, 0))[:2]
     fake = FakeSDL(log)
     try:
         with faked_sdl(fake):
             r._set_x11_wallpaper(on)
     finally:
         viz_common._libx11 = real_x11
-        viz_common.x11_bottom_child = real_bottom
+        viz_common._x11_query_tree = real_tree
+        viz_common.x11_window_origin = real_origin
     return r, lib, fake
 
 
-def _lower(reraises, timeout=1.0):
+def _lower(reraises, timeout=1.0, reparented=False):
     lib = FakeXlib()
     lib.reraises = reraises
-    real = viz_common.x11_bottom_child
-    viz_common.x11_bottom_child = lambda l, _dpy: l.bottom
+    if reparented:
+        # xfwm4 puts a frame of its own around the client; the frame is what
+        # sits in the root's stack.
+        lib.parent[APP_WIN] = FRAME
+        lib.stack = [ICONS, FRAME]
+    else:
+        lib.stack = [ICONS, APP_WIN]
+    real = viz_common._x11_query_tree
+    viz_common._x11_query_tree = lambda l, _dpy, w: l.tree(w)
     try:
-        return lib, viz_common.x11_lower_to_bottom(lib, 1, 0x2000001,
+        return lib, viz_common.x11_lower_to_bottom(lib, 1, APP_WIN,
                                                    timeout=timeout)
     finally:
-        viz_common.x11_bottom_child = real
+        viz_common._x11_query_tree = real
 
 def lowering_keeps_at_it_until_the_window_is_really_at_the_bottom():
     """One lower straight after the map is thrown away -- measured under
@@ -307,6 +341,65 @@ def lowering_keeps_at_it_until_the_window_is_really_at_the_bottom():
     lib, ok = _lower(reraises=2)
     assert ok, "gave up while the window was still above the icons"
     assert lib.lowered == 3, lib.lowered
+
+def a_reparenting_window_manager_has_its_frame_lowered_not_the_client():
+    """xfwm4 wraps even a desktop window in a frame of its own, and the frame
+    is what sits in the root's stack. Lowering the client there moves nothing
+    and the visuals stay in front of the icons -- measured, before this."""
+    lib, ok = _lower(reraises=0, reparented=True)
+    assert ok, "never reached the bottom on a reparenting window manager"
+    assert lib.stack[0] == FRAME, lib.stack
+    assert APP_WIN not in lib.stack, "lowered the client instead of the frame"
+
+def _align(border, reparented, want=(0, 0)):
+    """x11_align_frame against a window manager with a known frame border."""
+    lib = FakeXlib()
+    if reparented:
+        lib.parent[APP_WIN] = FRAME
+        lib.stack = [ICONS, FRAME]
+    else:
+        lib.stack = [ICONS, APP_WIN]
+    at = {"client": (0, 0)}
+    asked = []
+    def move(x, y):
+        at["client"] = (x, y); asked.append((x, y))
+    def origin(_lib, _dpy, w):
+        cx, cy = at["client"]
+        if w == FRAME:
+            return (cx - border[0], cy - border[1])
+        return (cx, cy)
+    real_t, real_o = viz_common._x11_query_tree, viz_common.x11_window_origin
+    viz_common._x11_query_tree = lambda l, _d, w: l.tree(w)
+    viz_common.x11_window_origin = origin
+    try:
+        ok = viz_common.x11_align_frame(lib, 1, APP_WIN, want, move)
+    finally:
+        viz_common._x11_query_tree = real_t
+        viz_common.x11_window_origin = real_o
+    return ok, asked, origin(lib, 1, FRAME if reparented else APP_WIN)
+
+def a_reparented_window_is_nudged_until_its_frame_lands_on_the_box():
+    """xfwm4 frames even a desktop window and positions the frame, so asking
+    for (0, 0) put the top-left pixel at (5, 29) and left a black strip down
+    the right of the screen and along the bottom. Those are the measured
+    numbers."""
+    ok, asked, frame_at = _align(border=(5, 29), reparented=True)
+    assert ok, "never got the frame onto the box"
+    assert asked[-1] == (5, 29), asked
+    assert frame_at == (0, 0), frame_at
+
+def a_window_that_is_already_placed_is_left_alone():
+    ok, asked, _ = _align(border=(0, 0), reparented=True)
+    assert ok
+    assert asked == [], f"moved a window that was already right: {asked}"
+
+def an_unframed_window_is_simply_asked_again():
+    """muffin does not reparent a desktop window: there the client is the frame
+    and the correction would double-count a border that does not exist."""
+    ok, asked, _ = _align(border=(0, 0), reparented=False, want=(40, 60))
+    assert ok
+    assert asked == [(40, 60)], asked
+
 
 def a_desktop_that_never_lets_go_is_reported_rather_than_pretended():
     lib, ok = _lower(reraises=999, timeout=0.2)
@@ -317,17 +410,21 @@ def a_desktop_that_keeps_the_icons_below_says_so():
     """The visuals are up either way; only the stacking failed. A silent
     success there looks exactly like the feature working."""
     r = bare({"fullscreen_display": 0}, TWO)
-    r._native_handle, r._x11_display = 0x2000001, 1
-    lib = FakeXlib(); lib.reraises = 999
-    real_x11, real_bottom = viz_common._libx11, viz_common.x11_bottom_child
+    r._native_handle, r._x11_display = APP_WIN, 1
+    lib = FakeXlib(); lib.reraises = 999; lib.stack = [ICONS, APP_WIN]
+    real_x11, real_tree = viz_common._libx11, viz_common._x11_query_tree
+    real_origin = viz_common.x11_window_origin
     viz_common._libx11 = lambda: lib
-    viz_common.x11_bottom_child = lambda l, _dpy: l.bottom
+    viz_common._x11_query_tree = lambda l, _dpy, w: l.tree(w)
+    viz_common.x11_window_origin = lambda l, _dpy, _w: (
+        r._wallpaper_box() or (0, 0, 0, 0))[:2]
     try:
         with faked_sdl(FakeSDL()):
             r._set_x11_wallpaper(True)
     finally:
         viz_common._libx11 = real_x11
-        viz_common.x11_bottom_child = real_bottom
+        viz_common._x11_query_tree = real_tree
+        viz_common.x11_window_origin = real_origin
     assert r._wallpaper is True, "gave up on the mode over the stacking alone"
     assert any("icons" in " ".join(map(str, t)) for t in r._bridge.toasts), \
         r._bridge.toasts
@@ -557,6 +654,10 @@ for fn in (the_worker_behind_the_icons_is_chosen,
            becoming_the_desktop_asks_for_the_desktop_type_and_the_bottom_layer,
            the_window_is_lowered_under_the_icons,
            lowering_keeps_at_it_until_the_window_is_really_at_the_bottom,
+           a_reparenting_window_manager_has_its_frame_lowered_not_the_client,
+           a_reparented_window_is_nudged_until_its_frame_lands_on_the_box,
+           a_window_that_is_already_placed_is_left_alone,
+           an_unframed_window_is_simply_asked_again,
            a_desktop_that_never_lets_go_is_reported_rather_than_pretended,
            a_desktop_that_keeps_the_icons_below_says_so,
            the_property_change_is_flushed_before_the_window_comes_back,

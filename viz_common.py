@@ -5084,27 +5084,98 @@ def _libx11():
                                ctypes.POINTER(ctypes.POINTER(ulong)),
                                ctypes.POINTER(ctypes.c_uint)]
     lib.XFree.argtypes = [ptr]
+    lib.XGetGeometry.argtypes = [ptr, ulong, ctypes.POINTER(ulong),
+                                 ctypes.POINTER(i), ctypes.POINTER(i),
+                                 ctypes.POINTER(ctypes.c_uint),
+                                 ctypes.POINTER(ctypes.c_uint),
+                                 ctypes.POINTER(ctypes.c_uint),
+                                 ctypes.POINTER(ctypes.c_uint)]
     return lib
 
 
-def x11_bottom_child(lib, dpy):
-    """The window at the very bottom of the root's stack, or 0.
-
-    XQueryTree hands back the children bottom first, which is the only thing
-    this needs to know.
-    """
-    root = lib.XDefaultRootWindow(dpy)
+def _x11_query_tree(lib, dpy, win):
+    """(parent, [children, bottom first]) for one window. (0, []) on failure."""
+    root_out, parent = ctypes.c_ulong(), ctypes.c_ulong()
     kids = ctypes.POINTER(ctypes.c_ulong)()
     count = ctypes.c_uint()
-    parent, child_root = ctypes.c_ulong(), ctypes.c_ulong()
-    if not lib.XQueryTree(dpy, root, ctypes.byref(child_root),
-                          ctypes.byref(parent), ctypes.byref(kids),
-                          ctypes.byref(count)) or not count.value:
-        return 0
+    if not lib.XQueryTree(dpy, win, ctypes.byref(root_out), ctypes.byref(parent),
+                          ctypes.byref(kids), ctypes.byref(count)):
+        return 0, []
     try:
-        return kids[0]
+        return parent.value, [kids[i] for i in range(count.value)]
     finally:
-        lib.XFree(kids)
+        if kids:
+            lib.XFree(kids)
+
+
+def x11_bottom_child(lib, dpy):
+    """The window at the very bottom of the root's stack, or 0."""
+    _parent, kids = _x11_query_tree(lib, dpy, lib.XDefaultRootWindow(dpy))
+    return kids[0] if kids else 0
+
+
+def x11_toplevel_of(lib, dpy, win):
+    """The ancestor of `win` that is a direct child of the root -- or `win`.
+
+    Some window managers reparent a client into a frame of their own. xfwm4
+    does it even to a desktop window; muffin does not. Restacking happens in
+    the root's stack, and what sits there is the frame, so lowering the client
+    handle on a reparenting window manager moves nothing and the visuals stay
+    in front of the icons.
+    """
+    root = lib.XDefaultRootWindow(dpy)
+    cur = win
+    for _ in range(16):        # a frame chain is one deep; the bound is for cycles
+        parent, _kids = _x11_query_tree(lib, dpy, cur)
+        if not parent or parent == root:
+            return cur
+        cur = parent
+    return cur
+
+
+def x11_window_origin(lib, dpy, win):
+    """(x, y) of a window in its parent's coordinates, or None."""
+    root = ctypes.c_ulong()
+    x, y = ctypes.c_int(), ctypes.c_int()
+    w, h = ctypes.c_uint(), ctypes.c_uint()
+    bw, depth = ctypes.c_uint(), ctypes.c_uint()
+    if not lib.XGetGeometry(dpy, win, ctypes.byref(root), ctypes.byref(x),
+                            ctypes.byref(y), ctypes.byref(w), ctypes.byref(h),
+                            ctypes.byref(bw), ctypes.byref(depth)):
+        return None
+    return x.value, y.value
+
+
+def x11_align_frame(lib, dpy, win, want, move):
+    """Nudge the window until its *frame* sits on `want`, not its client area.
+
+    A reparenting window manager positions the frame and the client sits inside
+    it, so asking for (0, 0) does not put the top-left pixel at (0, 0). xfwm4
+    put the frame at (-5, -29), which left a black strip down the right of the
+    screen and along the bottom. The border is not guessable -- it is a theme
+    setting -- so measure what actually happened and correct by the difference.
+
+    `move` places the client; returns True once the frame is where it should be.
+    """
+    want_x, want_y = want
+    for _ in range(3):        # one correction is enough; the bound is for a fight
+        top = x11_toplevel_of(lib, dpy, win)
+        origin = x11_window_origin(lib, dpy, top)
+        if origin is None:
+            return False
+        if origin == (want_x, want_y):
+            return True
+        here = x11_window_origin(lib, dpy, win) or (want_x, want_y)
+        if top == win:
+            # Not reparented, so the client *is* the frame and the window
+            # manager simply put it elsewhere. Ask again, plainly.
+            move(want_x, want_y)
+        else:
+            move(here[0] + (want_x - origin[0]),
+                 here[1] + (want_y - origin[1]))
+        lib.XSync(dpy, False)
+    return x11_window_origin(lib, dpy, x11_toplevel_of(lib, dpy, win)) == \
+        (want_x, want_y)
 
 
 def x11_lower_to_bottom(lib, dpy, win, timeout=1.0):
@@ -5122,9 +5193,12 @@ def x11_lower_to_bottom(lib, dpy, win, timeout=1.0):
     """
     deadline = time.monotonic() + timeout
     while True:
-        lib.XLowerWindow(dpy, win)
+        # Re-read each time round: a window manager can reparent late, and the
+        # frame that exists now is the one that has to move.
+        top = x11_toplevel_of(lib, dpy, win)
+        lib.XLowerWindow(dpy, top)
         lib.XSync(dpy, False)
-        if x11_bottom_child(lib, dpy) == win:
+        if x11_bottom_child(lib, dpy) == top:
             return True
         if time.monotonic() >= deadline:
             return False
@@ -7178,7 +7252,12 @@ class Renderer:
             # Again, after the map: a window manager places a desktop window
             # itself, and what it decides overwrites whatever was asked for
             # while the window was down.
-            self._fit_to_wallpaper()
+            box = self._fit_to_wallpaper()
+            if box:
+                x11_align_frame(
+                    lib, dpy, win, (box[0], box[1]),
+                    lambda x, y: sdl2.SDL_SetWindowPosition(self._window, x, y))
+                self._track_window()
         else:
             sdl2.SDL_RaiseWindow(self._window)
         lib.XSync(dpy, False)

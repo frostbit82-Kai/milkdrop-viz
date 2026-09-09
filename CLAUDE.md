@@ -627,6 +627,18 @@ There is no display in an agent shell and SDL needs one, so:
      children bottom first, so being `children[0]` is the whole test. A desktop
      that never lets go gets a toast rather than a silent failure that looks
      exactly like success.
+  3. **Lower the frame, not the client.** xfwm4 reparents even a desktop window
+     into a frame of its own; muffin does not. What sits in the root's stack is
+     the frame, so `XLowerWindow` on the client handle moves nothing there --
+     measured: the visualiser stayed above xfdesktop and the toast fired.
+     `x11_toplevel_of` walks up to the root's child, and it is re-read each
+     time round because a window manager can reparent late.
+  4. **A reparenting window manager positions the frame, not the client**, so
+     asking for (0, 0) does not put the top-left pixel there. xfwm4 framed the
+     window at (-5, -29) and left a black strip down the right of the screen
+     and along the bottom. The border is a theme setting, not a constant, so
+     `x11_align_frame` measures where the frame actually landed and corrects by
+     the difference.
 
   **ctypes signatures are spelled out in `_libx11` because both defaults are
   wrong.** A returned `Atom` through the default `c_int` restype loses its top
@@ -657,11 +669,20 @@ There is no display in an agent shell and SDL needs one, so:
   So the rig can prove stacking and cannot prove visibility. Check
   `_NET_WM_CM_S0` before reading anything into a black screen.
 
-  **XFCE is a different shape and may not work at all**: xfdesktop draws the
-  wallpaper *and* the icons on one window, so there is no transparent icon
-  layer to slot beneath. If that holds, the honest answer on XFCE is that the
-  visuals go in front and the icons are hidden -- which is a different feature,
-  not this one.
+  **Verified end to end in Xephyr, 2026-09-09**, with `xcompmgr -c` supplying
+  the compositor:
+  - **muffin + nemo-desktop (Cinnamon, the Mint case): correct.** Visuals fill
+    the screen as the wallpaper, desktop icons draw on top, `d` round-trips
+    back to a normal window and in again. This is the shipped target.
+  - **xfwm4 + xfdesktop (XFCE): visuals fill the screen, icons are hidden.**
+    Not a bug that can be fixed here -- xfdesktop draws the wallpaper *and* the
+    icons on one window, so there is no transparent icon layer to slot beneath.
+    Getting under it would mean being invisible. The toast says the icons are
+    below the visuals, which is the truth.
+
+  The rig is `xephyr_test.sh` in the session scratchpad; rebuild it from this
+  entry if needed. Xvfb alone cannot find any of this: with no window manager
+  there is nothing to restack against and nothing to reparent.
 - **A screensaver must not open a dialog, and that includes the no-presets
   one.** `_warn_photosensitivity` already skips for this reason;
   `_on_no_presets` did not, so a fresh install that ticked "use as the Windows
