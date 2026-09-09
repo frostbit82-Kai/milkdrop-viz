@@ -353,32 +353,47 @@ start on, and the user saw a DLL entry-point error instead of a refusal.
 no wheels for a current Python and is end-of-life. Windows 7 would need Python
 3.9. Either is a rewrite of the Qt layer for an out-of-support platform.
 
-### Fullscreen and wallpaper mode do not resize the render — open
+### Fullscreen and wallpaper mode: a defect that was not there — 2026-09-08
 
-Both leave the picture at the size the window had before, drawn into the
-top-left corner of an otherwise black screen. Reproduced on the frozen build
-and from source, on 11 Pro 26200.
+Driving the app for screenshots, both modes *appeared* to leave the picture at
+the previous window size in the top-left corner of an otherwise black screen.
+That was written up here as a defect. **It was the measuring instrument, not
+the app.** Recorded so nobody spends the afternoon on it again.
 
-What has been ruled out:
+Instrumenting the running renderer shows every value correct the moment the
+resize lands, and still correct at draw time a second later:
 
-- **The SDL event.** `SDL_SetWindowFullscreen` does fire
-  `SDL_WINDOWEVENT_RESIZED` with the new size — measured with a standalone
-  probe and again with the real renderer instrumented, which logged
-  `RESIZED -> glViewport 1920x1080`. So the handler runs and both
-  `glViewport` and `projectm_set_window_size` are called with the right size.
-- **projectM.** A probe that creates projectM at 640x480, calls
-  `projectm_set_window_size(1280, 720)` and reads the pixels back finds
-  `projectm_get_window_size` reporting 1280x720 and the render filling the
-  whole buffer. The library resizes correctly at the pinned commit.
+    just after RESIZED 1920x1080:
+      viewport=0,0,1920x1080  pm=1920x1080  sdlwin=1920x1080  drawable=1920x1080
 
-So the fault is in our own code, somewhere between the resize handler and the
-frame that reaches the screen, and it is *not* the pin bump. Worth knowing:
-recording in fullscreen produced a 28 KB all-black clip where the same
-recording windowed produced 4.2 MB of real video, so whatever is wrong affects
-`glReadPixels` as well as the visible frame. Note that GDI screen capture is
-useless for checking this — a borderless window exactly covering the screen
-trips DWM's fullscreen optimisation and captures black — so verify with a
-recorded clip or by eye.
+Wallpaper mode likewise — `_wallpaper_box()` returns `(0, 0, 1920, 1080)`,
+`SetWindowPos` returns 1 with `GetLastError` 0, and `GetWindowRect` on the
+HWND straight afterwards answers `0,0 1920x1080`.
+
+Two independent probes agree: `SDL_SetWindowFullscreen` does fire
+`SDL_WINDOWEVENT_RESIZED` with the new size, and projectM resizes correctly at
+the pinned commit — create at 640x480, `projectm_set_window_size(1280, 720)`,
+and the render fills the whole 1280x720 readback.
+
+**What lied.** GDI capture (`Graphics.CopyFromScreen`) cannot see either mode:
+
+- A window that covers the screen exactly — SDL's `FULLSCREEN_DESKTOP`, or a
+  borderless window sized to the display — trips DWM's fullscreen
+  optimisation. The capture comes back black, or shows the *last composited
+  frame from before the transition*, which is what "old size in the corner"
+  actually was.
+- A layered child of WorkerW has the same problem for the reason already in
+  CLAUDE.md: DWM composites that surface on its own schedule and a reader gets
+  a stale one.
+
+**So verify these two modes by eye, or with a recorded clip — never with a
+screen grab.** And when a clip does come back black, check the preset first:
+sampling ten at random off this library gave nine with a mean brightness under
+26/255 and one at 95, so an all-black five seconds is unremarkable.
+
+Still genuinely unconfirmed either way: whether fullscreen looks right to a
+person sitting in front of it. Every measurement says it should. Worth one
+glance before it is called done.
 
 **Audio — done, but only the capture half is proven.** `AudioCapture` keeps its
 public API (`start`/`stop`/`is_alive`/`get_chunk`/`update_device`) and delegates to a

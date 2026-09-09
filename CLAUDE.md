@@ -134,6 +134,18 @@ There is no display in an agent shell and SDL needs one, so:
   because no Python exception is involved. Defer with `QTimer.singleShot(0, ...)`
   -- `TweakPanel._rebuild_later`. Measured: changing a sprite's movement killed
   the app every time, and only the live run could see it.
+- **A screen grab cannot see fullscreen or wallpaper mode, and lies
+  convincingly.** `Graphics.CopyFromScreen` on a window that covers the screen
+  exactly -- SDL's `FULLSCREEN_DESKTOP`, or a borderless window sized to the
+  display -- trips DWM's fullscreen optimisation: it returns black, or the last
+  frame composited *before* the transition, which reads as "the render stayed
+  at the old size in the corner". A layered child of WorkerW is stale for the
+  same reason as the note further down. An afternoon went into a resize defect
+  that was not there; the renderer, instrumented, had `viewport`, projectM's
+  window size, `SDL_GetWindowSize` and `SDL_GL_GetDrawableSize` all correct the
+  whole time. Verify those two modes by eye or with a recorded clip. And if a
+  clip is black, suspect the preset before the code: ten sampled at random off
+  the library gave nine under 26/255 mean brightness.
 - **Take the screenshot and look at it.** Driving the app for the site's pictures
   on 2026-09-08 found three defects that seventeen passing suites could not: the
   Backup menu read "Back up ratings _collections…" because Qt eats a lone `&` in
