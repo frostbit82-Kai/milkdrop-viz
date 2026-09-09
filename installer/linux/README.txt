@@ -142,6 +142,21 @@ XWayland does not add one. If your login screen offers a session ending in "on
 Xorg", picking that gets you wallpaper mode; the menu entry says so and stays
 greyed out otherwise. Everything else in the app works the same either way.
 
+How your desktop draws its icons decides what you get:
+
+  Cinnamon, and anything else that draws icons on a see-through layer of
+  their own, is the one this was built for. The visuals become the wallpaper
+  and your icons stay on top of them, exactly as on Windows.
+
+  XFCE paints the wallpaper and the icons on the same window, so there is no
+  layer to slip underneath. Wallpaper mode still fills the screen, but your
+  desktop icons are covered while it is on. The app says so when it happens
+  rather than leaving you to notice. Turning off desktop icons in the XFCE
+  settings, if you do not use them, gets you the rest of the feature.
+
+Either way this only shows up if your desktop has compositing switched on,
+which it is by default nearly everywhere.
+
 
 THEME
 -----
