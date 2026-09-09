@@ -10,6 +10,7 @@ reset_all_ratings, delete_zero_rated.
 """
 import logging
 import os
+import random
 
 # Qt comes from viz_common, which picks the binding (PySide6, or PyQt6 when
 # this file is running inside Bomsai Player). Importing PyQt6 directly here
@@ -23,6 +24,7 @@ from viz_common import (
     preset_textures, texture_override_path, theme_colour,
     QComboBox, SPRITE_MOTIONS, SPRITE_BLENDS, MAX_SPRITES,
     QPlainTextEdit, QCheckBox, QShortcut, QKeySequence, QFontDatabase,
+    shift_preset_colours, add_per_frame_line, QTextCursor,
 )
 
 logger = logging.getLogger(__name__)
@@ -94,6 +96,28 @@ class TweakPanel(QWidget):
         code_lay.setContentsMargins(4, 4, 4, 4)
         code_lay.setSpacing(4)
 
+        find_row = QHBoxLayout()
+        find_row.setContentsMargins(0, 0, 0, 0)
+        find_row.setSpacing(4)
+        self._find = QLineEdit()
+        self._find.setPlaceholderText("Find\u2026")
+        self._find.returnPressed.connect(self._find_next)
+        find_row.addWidget(self._find, 1)
+        self._repl = QLineEdit()
+        self._repl.setPlaceholderText("Replace with\u2026")
+        find_row.addWidget(self._repl, 1)
+        btn_next = QPushButton("Next")
+        btn_next.setFixedWidth(52)
+        btn_next.clicked.connect(self._find_next)
+        find_row.addWidget(btn_next)
+        btn_all = QPushButton("All")
+        btn_all.setFixedWidth(44)
+        btn_all.setToolTip("Replace every match. Nothing is played until "
+                           "Apply, so a bad replace costs nothing.")
+        btn_all.clicked.connect(self._replace_all)
+        find_row.addWidget(btn_all)
+        code_lay.addLayout(find_row)
+
         self._code = QPlainTextEdit()
         # No wrapping: a per-frame equation is one very long line, and wrapped
         # it is unreadable and unfindable by line number in an error message.
@@ -122,7 +146,19 @@ class TweakPanel(QWidget):
             "Same as the lock in the right-click menu.")
         self._code_lock.toggled.connect(self._code_lock_toggled)
         code_foot.addWidget(self._code_lock)
+        btn_pf = QPushButton("+ per-frame")
+        btn_pf.setToolTip(
+            "Add the next free per_frame_N= line, in the right place. "
+            "Type the rest -- q1=bass, and so on.")
+        btn_pf.clicked.connect(self._add_per_frame)
+        code_foot.addWidget(btn_pf)
         code_foot.addStretch(1)
+        btn_hue = QPushButton("Shift colours")
+        btn_hue.setToolTip(
+            "Turn every colour in the preset the same way round the hue "
+            "wheel. Press again for another. Revert puts it back.")
+        btn_hue.clicked.connect(self._shift_colours)
+        code_foot.addWidget(btn_hue)
         btn_apply = QPushButton("Apply")
         btn_apply.setToolTip("Play what is in the box now (Ctrl+Enter)")
         btn_apply.clicked.connect(self._apply_code)
@@ -624,8 +660,82 @@ class TweakPanel(QWidget):
             why = self._host.last_preset_error()
         except Exception:
             why = ""
-        self._code_error.setText(why)
-        self._code_error.setVisible(bool(why))
+        self._note(why)
+
+    def _note(self, text: str, bad: bool = True):
+        """One line under the editor. Red when something went wrong."""
+        colour = theme_colour("bad" if bad else "muted")
+        self._code_error.setStyleSheet(f"color:{colour};font-size:11px;")
+        self._code_error.setText(text)
+        self._code_error.setVisible(bool(text))
+
+    def _find_next(self):
+        """Next match, wrapping once. Qt's own search, cursor and all."""
+        needle = self._find.text()
+        if not needle:
+            return
+        if self._code.find(needle):
+            self._note("")
+            return
+        cursor = self._code.textCursor()
+        cursor.movePosition(QTextCursor.MoveOperation.Start)
+        self._code.setTextCursor(cursor)
+        if self._code.find(needle):
+            self._note("")
+        else:
+            self._note(f"\u201c{needle}\u201d is not in this preset.",
+                       bad=False)
+
+    def _replace_all(self):
+        """Every match at once, into the box only.
+
+        Deliberately not applied: a replace across a shader can break it in
+        ways a single Apply cannot undo, and leaving it as a draft means Revert
+        is still the whole way back.
+        """
+        needle = self._find.text()
+        if not needle:
+            return
+        text = self._code.toPlainText()
+        hits = text.count(needle)
+        if not hits:
+            self._note(f"\u201c{needle}\u201d is not in this preset.",
+                       bad=False)
+            return
+        self._code.setPlainText(text.replace(needle, self._repl.text()))
+        self._code.document().setModified(True)
+        self._note(f"Replaced {hits}. Apply to play it.", bad=False)
+
+    def _add_per_frame(self):
+        text, at = add_per_frame_line(self._code.toPlainText()
+                                      or self.current_text())
+        self._code.setPlainText(text)
+        cursor = self._code.textCursor()
+        cursor.setPosition(at)
+        self._code.setTextCursor(cursor)
+        self._code.document().setModified(True)
+        self._code.setFocus()
+
+    def _shift_colours(self):
+        """A new colour scheme for the preset on screen, from one keypress.
+
+        The offset is random but shared by every colour in the preset, so the
+        result is the same preset in a different key rather than a different
+        preset. Applied straight away: a colour scheme is something you judge
+        by looking at it, and a button that only filled the box would make
+        every try two clicks.
+        """
+        base = self._code.toPlainText() or self.current_text()
+        if not base:
+            return
+        out = shift_preset_colours(base, random.uniform(0.08, 0.92))
+        if out == base:
+            self._note("This preset states no colours these can turn -- its "
+                       "colour comes from its own code.", bad=False)
+            return
+        self._code.setPlainText(out)
+        self._code.document().setModified(True)
+        self._apply_code()
 
     def _code_lock_toggled(self, on: bool):
         # Only when it actually differs: the box is also set from the host in

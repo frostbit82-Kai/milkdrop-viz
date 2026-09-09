@@ -311,6 +311,123 @@ def patching_real_presets_never_reorders_or_loses_a_line():
         assert len(changed) <= 2, (path, changed)
 
 
+# ── colour shifting ─────────────────────────────────────────────────────────
+
+COLOURED = """MILKDROP_PRESET_VERSION=201
+PSVERSION=2
+[preset00]
+fDecay=0.960
+wave_r=1.000
+wave_g=0.000
+wave_b=0.000
+ob_r=0.100
+ob_g=0.100
+ob_b=0.100
+mv_r=0.500
+mv_a=1.000
+shapecode_1_r=0.000
+shapecode_1_g=1.000
+shapecode_1_b=0.000
+shapecode_1_r2=0.200
+shapecode_1_g2=0.400
+shapecode_1_b2=0.800
+comp_1=`ret = float3(0.900,0.100,0.100) * uv.x;
+comp_2=`dir = float3(1.500,0.000,0.000);
+comp_3=`c = float3(x,0.5,0.5);
+comp_4=`a = float4(0.200,0.400,0.800,1.000);
+"""
+
+
+def _hue(r, g, b):
+    import colorsys
+    return colorsys.rgb_to_hsv(r, g, b)[0]
+
+
+def a_shift_turns_every_colour_the_same_way():
+    """The relationships between a preset's colours are most of its design, so
+    they have to survive: recolouring is a key change, not a new preset."""
+    out = v.shift_preset_colours(COLOURED, 0.25)
+    wave = _hue(v.preset_scalar(out, "wave_r"), v.preset_scalar(out, "wave_g"),
+                v.preset_scalar(out, "wave_b"))
+    shape = _hue(v.preset_scalar(out, "shapecode_1_r"),
+                 v.preset_scalar(out, "shapecode_1_g"),
+                 v.preset_scalar(out, "shapecode_1_b"))
+    assert abs(wave - 0.25) < 0.01, wave          # red, turned a quarter
+    assert abs(shape - (1 / 3 + 0.25)) < 0.01, shape
+
+
+def a_full_turn_changes_nothing_at_all():
+    assert v.shift_preset_colours(COLOURED, 1.0) == COLOURED
+
+
+def a_grey_has_no_hue_and_survives():
+    """Which is what keeps a black background black."""
+    out = v.shift_preset_colours(COLOURED, 0.4)
+    for ch in "rgb":
+        assert v.preset_scalar(out, f"ob_{ch}") == 0.1, out
+
+
+def half_a_colour_is_not_one():
+    """mv_r has no mv_g or mv_b in this preset. Rotating one channel of a
+    colour whose other two are elsewhere would just corrupt it."""
+    out = v.shift_preset_colours(COLOURED, 0.4)
+    assert v.preset_scalar(out, "mv_r") == 0.5, out
+
+
+def a_shader_literal_that_is_not_a_colour_is_left_alone():
+    """float3 in a shader is as likely to be a direction or a coordinate. One
+    outside 0..1 is certainly not a colour, and one built from a variable
+    cannot be read at all -- rotating either bends the geometry."""
+    out = v.shift_preset_colours(COLOURED, 0.4)
+    assert "float3(1.500,0.000,0.000)" in out
+    assert "float3(x,0.5,0.5)" in out
+
+
+def a_shader_colour_is_turned_with_the_rest():
+    out = v.shift_preset_colours(COLOURED, 0.5)
+    import re
+    m = re.search(r"ret = float3\(([^)]*)\)", out)
+    assert m, out
+    rgb = [float(x) for x in m.group(1).split(",")]
+    assert abs(_hue(*rgb) - (_hue(0.9, 0.1, 0.1) + 0.5) % 1.0) < 0.01, rgb
+
+
+def alpha_is_not_a_colour_channel():
+    out = v.shift_preset_colours(COLOURED, 0.4)
+    import re
+    m = re.search(r"float4\(([^)]*)\)", out)
+    assert m.group(1).split(",")[3] == "1.000", m.group(1)
+
+
+def shifting_never_reorders_or_loses_a_line():
+    out = v.shift_preset_colours(COLOURED, 0.4)
+    assert len(out.splitlines()) == len(COLOURED.splitlines())
+    assert out.splitlines()[0] == "MILKDROP_PRESET_VERSION=201"
+
+
+def the_decimals_the_file_used_are_kept():
+    """A preset that has been recoloured still has to diff cleanly against the
+    one it came from -- 1.000 coming back as 1.0 makes noise of every line."""
+    out = v.shift_preset_colours(COLOURED, 0.4)
+    import re
+    for line in out.splitlines():
+        if re.match(r"^(wave|shapecode_1)_[rgb]2?=", line):
+            assert re.match(r"^[a-z_0-9]+=\d\.\d{3}$", line), line
+
+
+def shifting_real_presets_never_reorders_or_loses_a_line():
+    files = _library()
+    if not files:
+        print("      (no preset library configured — skipped)")
+        return
+    for path in files[::max(1, len(files) // 120)][:120]:
+        with open(path, encoding="utf-8", errors="replace") as f:
+            text = f.read()
+        out = v.shift_preset_colours(text, 0.37)
+        assert len(out.splitlines()) == len(text.splitlines()), path
+        assert v.shift_preset_colours(text, 1.0) == text, path
+
+
 # ── the failure callback ─────────────────────────────────────────────────────
 #
 # projectm_load_preset_data returns void. The only thing that knows whether an

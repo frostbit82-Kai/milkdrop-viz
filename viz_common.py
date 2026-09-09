@@ -2192,6 +2192,136 @@ def patch_preset(text: str, updates: dict) -> str:
     return text
 
 
+#: Preset keys that spell one colour as three numbers. A shape carries a
+#: second colour in r2/g2/b2, so the trailing digit belongs to the group and
+#: not to the channel.
+_COLOUR_PREFIXES = ("wave", "ob", "ib", "mv")
+
+
+def shift_preset_colours(text: str, turns: float) -> str:
+    """Return `text` with every colour rotated the same way round the hue wheel.
+
+    One offset for the whole preset rather than a fresh random colour per slot.
+    The relationships between a preset's colours are most of its design, and
+    rolling each one on its own gives a different preset every time instead of
+    the same preset in another key. A grey has no hue and comes back unchanged,
+    which is what keeps a black background black.
+
+    Two things carry colour. The named triples -- wave_, ob_, ib_, mv_ and each
+    shape's own pair -- and float3/float4 literals in the shaders. A literal is
+    only touched when its three colour components all read as plain numbers in
+    0..1: a float3 in a shader is just as likely to be a direction or a texture
+    coordinate, and rotating one of those bends the geometry rather than
+    recolouring it.
+
+    Nothing else in the file moves, decimal places included, so a preset that
+    has been recoloured still diffs cleanly against the one it came from.
+    """
+    import re
+    import colorsys
+
+    def rotate(r, g, b):
+        h, s, v = colorsys.rgb_to_hsv(r, g, b)
+        return colorsys.hsv_to_rgb((h + turns) % 1.0, s, v)
+
+    def like(sample: str, value: float) -> str:
+        """The number, written with the decimals the file already used.
+
+        Only ever called for a value that actually moved. Comparing the
+        rotated number against the old one rather than comparing the two
+        spellings is what keeps a full turn a genuine no-op: presets in the
+        wild write plain `1` where this would write `1.000`, and rewriting
+        those would make noise of every line in the diff.
+        """
+        t = sample.strip()
+        dec = len(t) - t.find(".") - 1 if "." in t else 3
+        return f"{value:.{min(max(dec, 1), 6)}f}"
+
+    edits = []                    # (start, end, replacement)
+
+    named = re.compile(
+        r"^[ \t]*(?P<name>[A-Za-z_0-9]+?)_(?P<ch>[rgb])(?P<slot>2?)"
+        r"[ \t]*=[ \t]*(?P<val>[-+0-9.]+)[ \t]*$",
+        re.IGNORECASE | re.MULTILINE)
+    groups = {}
+    for m in named.finditer(text):
+        name = m.group("name").lower()
+        if name not in _COLOUR_PREFIXES \
+                and not re.fullmatch(r"shapecode_\d+", name):
+            continue
+        groups.setdefault((name, m.group("slot")), {})[m.group("ch").lower()] = m
+    for chans in groups.values():
+        if set(chans) != {"r", "g", "b"}:
+            continue              # half a colour is not one
+        try:
+            rgb = [float(chans[c].group("val")) for c in "rgb"]
+        except ValueError:
+            continue
+        if not all(0.0 <= v <= 1.0 for v in rgb):
+            continue
+        for c, v, old in zip("rgb", rotate(*rgb), rgb):
+            if abs(v - old) < 5e-7:
+                continue          # this channel did not move
+            m = chans[c]
+            edits.append((m.start("val"), m.end("val"),
+                          like(m.group("val"), v)))
+
+    literal = re.compile(r"\bfloat([34])[ \t]*\(([^()]*)\)", re.IGNORECASE)
+    for m in literal.finditer(text):
+        parts = m.group(2).split(",")
+        if len(parts) != int(m.group(1)):
+            continue
+        try:
+            nums = [float(p) for p in parts]
+        except ValueError:
+            continue              # an expression, not a colour
+        if not all(0.0 <= v <= 1.0 for v in nums[:3]):
+            continue
+        out = list(rotate(*nums[:3])) + nums[3:]
+        if all(abs(a - b) < 5e-7 for a, b in zip(nums, out)):
+            continue
+        edits.append((m.start(2), m.end(2),
+                      ",".join(like(p, v) for p, v in zip(parts, out))))
+
+    for start, end, rep in sorted(edits, key=lambda e: e[0], reverse=True):
+        text = text[:start] + rep + text[end:]
+    return text
+
+
+def add_per_frame_line(text: str):
+    """Insert the next free `per_frame_N=` line. Returns (text, cursor offset).
+
+    This is the generic form of MilkDrop 3's inject-a-Q-variable button, and a
+    smaller one: the editor can already type `per_frame_12=q1=bass`, and the
+    only thing that is genuinely awkward by hand is knowing that 12 is free.
+
+    Placement is the other half. A per-frame line has to sit in the per-frame
+    block: after the last one if there is one, and otherwise ahead of the first
+    line of whatever block comes next, because everything after that point is
+    code of another kind. Appending to the end of the file would drop it inside
+    a shader.
+    """
+    import re
+    used = [int(m.group(1)) for m in
+            re.finditer(r"^per_frame_(\d+)[ \t]*=", text,
+                        re.IGNORECASE | re.MULTILINE)]
+    line = f"per_frame_{max(used) + 1 if used else 1}="
+
+    last = None
+    for m in re.finditer(r"^per_frame_\d+[ \t]*=[^\r\n]*\r?\n?", text,
+                         re.IGNORECASE | re.MULTILINE):
+        last = m
+    if last is not None:
+        at = last.end()
+    else:
+        nxt = re.search(r"^(?:per_pixel_|warp_|comp_|shapecode_|wavecode_)",
+                        text, re.IGNORECASE | re.MULTILINE)
+        at = nxt.start() if nxt else len(text)
+    if at and not text[:at].endswith("\n"):
+        line = "\n" + line
+    return text[:at] + line + "\n" + text[at:], at + len(line)
+
+
 def preset_textures(text: str) -> list:
     """File textures this preset samples, in first-seen order.
 
@@ -2506,6 +2636,7 @@ for _mod, _names in (
     (QtCore, ("Qt", "QObject", "QPoint", "QSize", "QTimer", "QEvent", "QThread",
               "QUrl")),
     (QtGui,  ("QKeySequence", "QFont", "QFontDatabase", "QShortcut",
+              "QTextCursor",
               "QCursor", "QAction", "QActionGroup",
               "QIcon", "QImage", "QPixmap", "QColor", "QDesktopServices")),
     (QtWidgets, ("QApplication", "QMenu", "QDialog", "QFormLayout",

@@ -25,6 +25,20 @@ warp_1=`shader_body { ret = 0; }
 """
 EDITED = ORIGINAL.replace("fDecay=0.960", "fDecay=0.500")
 
+COLOURFUL = """[preset00]
+fDecay=0.960
+wave_r=1.000
+wave_g=0.000
+wave_b=0.000
+"""
+
+WITH_CODE = """[preset00]
+fDecay=0.960
+per_frame_1=q1=bass
+per_frame_2=q2=treb
+warp_1=`ret=0;
+"""
+
 
 class FakeHost:
     """Only the surface TweakPanel touches."""
@@ -221,6 +235,76 @@ def ticking_the_lock_box_locks_the_preset():
     panel._code_lock.setChecked(True)
     assert host.toggles == 1
     assert host.locked
+
+
+def shifting_colours_plays_it_and_leaves_it_in_the_box():
+    """One press, one new colour scheme on screen. A button that only filled
+    the box would make every try two clicks."""
+    host, panel = _panel()
+    _type(panel, COLOURFUL)
+    panel._apply_code()
+    app.processEvents()
+    before = panel._code.toPlainText()
+    panel._shift_colours()
+    app.processEvents()
+    after = panel._code.toPlainText()
+    assert after != before, "nothing moved"
+    assert host.previewed[-1] == after, "played something other than the box"
+    assert "wave_r=" in after and len(after.splitlines()) == \
+        len(before.splitlines())
+
+
+def a_preset_with_no_stated_colours_says_so():
+    """Rather than a button that appears to do nothing."""
+    _host, panel = _panel()
+    _type(panel, "[preset00]\nfDecay=0.500\n")
+    panel._apply_code()
+    app.processEvents()
+    panel._shift_colours()
+    assert "no colours" in panel._code_error.text(), panel._code_error.text()
+
+
+def replace_all_stays_in_the_box_until_apply():
+    """A replace across a shader can break it in ways one Apply cannot undo."""
+    host, panel = _panel()
+    played = len(host.previewed)
+    panel._find.setText("fDecay")
+    panel._repl.setText("fdecay")
+    panel._replace_all()
+    assert "fdecay=0.960" in panel._code.toPlainText()
+    assert panel._code.document().isModified()
+    assert len(host.previewed) == played, "played an unapplied replace"
+
+
+def a_search_that_finds_nothing_says_so():
+    _host, panel = _panel()
+    panel._find.setText("no_such_key")
+    panel._replace_all()
+    assert "not in this preset" in panel._code_error.text()
+    assert panel._code.toPlainText() == ORIGINAL, "changed it anyway"
+
+
+def find_wraps_round_the_end():
+    _host, panel = _panel()
+    cursor = panel._code.textCursor()
+    cursor.movePosition(cursor.MoveOperation.End)
+    panel._code.setTextCursor(cursor)
+    panel._find.setText("fRating")
+    panel._find_next()
+    assert panel._code.textCursor().hasSelection(), "did not wrap"
+
+
+def a_per_frame_line_lands_in_the_per_frame_block():
+    """Not at the end of the file, which is inside a shader."""
+    _host, panel = _panel()
+    _type(panel, WITH_CODE)
+    panel._add_per_frame()
+    out = panel._code.toPlainText()
+    lines = out.splitlines()
+    assert "per_frame_3=" in lines, lines
+    assert lines.index("per_frame_3=") < lines.index("warp_1=`ret=0;"), lines
+    assert panel._code.textCursor().position() == len("\n".join(
+        lines[:lines.index("per_frame_3=") + 1])), "cursor not on the new line"
 
 
 for name, fn in list(globals().items()):
