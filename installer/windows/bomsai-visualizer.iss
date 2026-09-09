@@ -33,6 +33,15 @@ WizardStyle=modern
 ; The app and its Qt libraries are x64 only.
 ArchitecturesAllowed=x64compatible
 ArchitecturesInstallIn64BitMode=x64compatible
+; Windows 10 1607 (build 14393), and the floor is the dependencies, not us --
+; nothing this app calls itself needs more than Vista, and the one modern call
+; (DWM's immersive dark mode) already checks its own return. Qt6Core imports
+; SetThreadDescription, which arrived in 1607, and python314.dll imports
+; PathCchCombineEx from api-ms-win-core-path, which is Windows 8 and later.
+; Both are load-time imports: without this line Inno's own default of Windows 7
+; SP1 lets the install finish on a machine where the app then dies with an
+; entry-point error naming a DLL, and no way for the user to know why.
+MinVersion=10.0.14393
 ; Program Files needs elevation; per-user would dodge it but Steam and the
 ; Start Menu both expect a normal machine-wide install.
 PrivilegesRequired=admin

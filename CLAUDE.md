@@ -371,6 +371,22 @@ There is no display in an agent shell and SDL needs one, so:
   -LogName Application` filtered to `Application Error` gives the faulting DLL
   and offset. That is what separated "projectM crashed" from "PyAudioWPatch
   crashed" after an afternoon of guessing at the Python side.
+- **A Qt dialog with no native owner falls behind the SDL window.** Windows
+  keeps an owned window above its owner; with `owner=0` there is no
+  relationship at all, and one click on the visuals drops the dialog behind
+  them with the taskbar entry the only way back. Every dialog had this: they
+  are parented to `ContextMenu._tmp_parent`, a QWidget that is never shown, so
+  it has no HWND for Qt to make the owner. Worst on a fresh install, where Get
+  Presets opens behind the window it exists to explain. `keep_dialogs_above_
+  visuals` sets `GWLP_HWNDPARENT` to the SDL window for every top-level Qt
+  window, through one application event filter rather than a line at each of
+  the nine places a dialog is made. It has to be **deferred by a
+  `QTimer.singleShot(0, ...)`**: setting the owner inside the show event does
+  take -- reading it straight back returns the handle just written -- and then
+  Qt finishes raising the dialog modally and the owner is 0 again. Linux needs
+  none of it; the window manager already keeps a dialog above its parent.
+  Note that walking the z-order with `GetTopWindow`/`GetWindow` misreports
+  owned windows: check with a screenshot, not with an enumeration.
 - **Synthetic mouse input needs a real move event.** `SetCursorPos` alone does
   not update Qt's idea of the pointer, so a click on a menu item lands where Qt
   last saw the cursor — the menu closes without triggering and it looks exactly
@@ -619,6 +635,8 @@ There is no display in an agent shell and SDL needs one, so:
   conversion turns `app.scr /c` into `app.scr C:/`, so the screensaver argument
   tests appear to fail when the app is fine. Drive those from PowerShell, or
   hard-code the flag inside the test script rather than passing it through the
-  shell.
+  shell. It catches MSVC tools too: `dumpbin /imports foo.dll` becomes
+  `dumpbin 'C:\Program Files\Git\imports' foo.dll` and reports LNK1181 on a
+  file you never named.
 
 See PORTING.md for port status and the Windows setup recipe.

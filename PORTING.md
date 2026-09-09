@@ -318,32 +318,67 @@ See the trap in `CLAUDE.md`. The script already works around it.
 
 ## Next
 
-### The Windows installer needs rebuilding — 2026-09-08
+### How old a Windows can this run on — settled 2026-09-08
 
-The Windows 1.7.0 installer built on 2026-09-08 predates four app changes made
-the same day, so the two platforms are no longer identical at the same version
-number. Rebuild it from the current tree; the version stays 1.7.0 unless the
-owner says otherwise.
+**Windows 10 version 1607 (build 14393), x64.** The store page's "Windows 10 /
+11 (x64)" is accurate. The floor is set entirely by the dependencies; nothing
+this app calls itself needs more than Vista:
 
-What changed after that build:
+| what | oldest Windows | evidence |
+|---|---|---|
+| `Qt6Core.dll` | **10 1607** | imports `SetThreadDescription`, added in 1607 |
+| `python314.dll` | 8 | imports `PathCchCombineEx` from `api-ms-win-core-path` |
+| Python 3.14 itself | 10 | python.org dropped 8.1 at 3.13 |
+| SDL2 2.32, projectM 4 | Vista or older | no gating imports |
+| our own Win32 calls | Vista | see below |
 
-- **The overlay blend modes were renamed and remapped.** "Normal" is now
-  projectM mode 4, which honours a PNG's transparency; mode 0, which ignores it
-  and drew every cut-out picture as a black rectangle, is now called "Solid". A
-  config written by the older build still loads.
-- **Sprite size no longer double-corrects for the picture's aspect ratio**, so a
-  wide picture is no longer squashed.
-- **`assets/welcome.milk` and `assets/textures/bomsai.png` are new files** and
-  the installer must carry them, or a fresh install shows projectM's own "M"
-  logo until a preset folder is chosen. `installer/bomsai-visualizer.spec`
-  bundles the whole `assets` directory, so this needs no spec change — but check
-  both files are in the packaged output, the way the Linux tarball was checked.
-- **Thumbnails no longer overflow the row below them** in the preset browser.
+Both of those are **load-time** imports, so an older machine does not get a
+message — the process dies with an entry-point error naming a DLL.
 
-Worth a look on the real machine while the build is fresh: open the Overlay tab,
-add a cut-out PNG on "Normal" and confirm it is not a black box, and start the
-app once with no preset folder configured to confirm the welcome screen.
+Our own Windows API use is `EnumWindows`, `FindWindowW`/`FindWindowExW`,
+`SendMessageTimeoutW`, `SetParent`, `SetWindowPos`, `InvalidateRect`,
+`GetWindowLongPtrW`/`SetWindowLongPtrW`, `SetLayeredWindowAttributes`,
+`SHQueryUserNotificationState` (Vista) and `winreg` under HKCU — all Vista or
+older. The one modern call is DWM's immersive-dark-mode attribute, and
+`apply_window_theme` already tries 20 then 19 and checks the return, so an
+older Windows just gets a light title bar. Wallpaper mode picks its desktop
+host by probing rather than by version check, so it needs no floor of its own.
 
+`bomsai-visualizer.iss` now says `MinVersion=10.0.14393`. Without it Inno's own
+default is Windows 7 SP1: the install completed on a machine the app cannot
+start on, and the user saw a DLL entry-point error instead of a refusal.
+
+**Going lower is not worth it.** Windows 8.1 would need Python 3.12 or older
+*and* Qt 5 — PySide2, since PyQt5 is GPL and cannot ship here — and PySide2 has
+no wheels for a current Python and is end-of-life. Windows 7 would need Python
+3.9. Either is a rewrite of the Qt layer for an out-of-support platform.
+
+### Fullscreen and wallpaper mode do not resize the render — open
+
+Both leave the picture at the size the window had before, drawn into the
+top-left corner of an otherwise black screen. Reproduced on the frozen build
+and from source, on 11 Pro 26200.
+
+What has been ruled out:
+
+- **The SDL event.** `SDL_SetWindowFullscreen` does fire
+  `SDL_WINDOWEVENT_RESIZED` with the new size — measured with a standalone
+  probe and again with the real renderer instrumented, which logged
+  `RESIZED -> glViewport 1920x1080`. So the handler runs and both
+  `glViewport` and `projectm_set_window_size` are called with the right size.
+- **projectM.** A probe that creates projectM at 640x480, calls
+  `projectm_set_window_size(1280, 720)` and reads the pixels back finds
+  `projectm_get_window_size` reporting 1280x720 and the render filling the
+  whole buffer. The library resizes correctly at the pinned commit.
+
+So the fault is in our own code, somewhere between the resize handler and the
+frame that reaches the screen, and it is *not* the pin bump. Worth knowing:
+recording in fullscreen produced a 28 KB all-black clip where the same
+recording windowed produced 4.2 MB of real video, so whatever is wrong affects
+`glReadPixels` as well as the visible frame. Note that GDI screen capture is
+useless for checking this — a borderless window exactly covering the screen
+trips DWM's fullscreen optimisation and captures black — so verify with a
+recorded clip or by eye.
 
 **Audio — done, but only the capture half is proven.** `AudioCapture` keeps its
 public API (`start`/`stop`/`is_alive`/`get_chunk`/`update_device`) and delegates to a

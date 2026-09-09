@@ -46,7 +46,7 @@ from renderer import Renderer
 from ui import (Bridge, ContextMenu, ToastLabel, SettingsDialog, QDialog, QMessageBox,
                 APP_NAME, app_icon,
                 QApplication, QSystemTrayIcon, Signal, set_app_theme, browser_qss,
-                PresetPackDialog)
+                PresetPackDialog, keep_dialogs_above_visuals)
 
 
 def _parse_geometry(geo_str: str) -> tuple[int, int, int, int] | None:
@@ -99,6 +99,11 @@ class App:
             ratings=self._ratings,
             keymaps=self._keymaps,
         )
+
+        # Kept on self so the filter is not garbage collected: Qt holds only
+        # a borrowed reference to it.
+        self._dialog_owner = keep_dialogs_above_visuals(self._qt_app,
+                                                        self._renderer)
 
         # Apply borderless immediately if requested
         if start_borderless:

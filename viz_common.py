@@ -2860,6 +2860,68 @@ def apply_window_theme(handle, theme: str = None) -> bool:
     return applied
 
 
+class _OwnedByVisuals(QObject):
+    """Give every Qt window the visualiser as its native owner, on Windows.
+
+    Windows keeps an owned window above its owner and never behind it. Nothing
+    here had an owner: the dialogs are parented to a QWidget that is never
+    shown, so it has no native handle and Qt sets none -- every dialog came up
+    with owner=0, and one click on the visuals dropped it behind them with the
+    taskbar entry the only way back. Worst on a fresh install, where Get
+    Presets opens *behind* the window it exists to explain. Measured on 11 Pro
+    26200: with the owner set, the same click leaves the dialog on top.
+
+    An event filter rather than a line at each of the nine places a dialog is
+    made -- they are spread over three files, a static QMessageBox call among
+    them, and the tenth would be written without it. Linux needs none of this:
+    the window manager keeps a dialog above the window it came from.
+
+    The owner is set from a zero-delay timer, not straight from the show
+    event. Setting it inside the event does take -- reading it back in the
+    same call returns the handle just written -- and then Qt finishes raising
+    the dialog modally and the owner is 0 again. Deferring by one turn of the
+    event loop is the same trick, and for the same reason, as
+    TweakPanel._rebuild_later.
+    """
+
+    _GWLP_HWNDPARENT = -8
+
+    def __init__(self, host):
+        super().__init__()
+        self._host = host          # the Renderer, for its SDL window handle
+
+    def eventFilter(self, obj, event):
+        if (event.type() == QEvent.Type.Show
+                and isinstance(obj, QWidget) and obj.isWindow()):
+            QTimer.singleShot(0, lambda w=obj: self._own(w))
+        return False
+
+    def _own(self, w):
+        hwnd = getattr(self._host, "_native_handle", None)
+        if not hwnd or not w.isVisible():
+            return                 # no SDL window yet, or already dismissed
+        try:
+            u = _ctypes.windll.user32
+            u.SetWindowLongPtrW.restype  = _ctypes.c_void_p
+            u.SetWindowLongPtrW.argtypes = [_ctypes.c_void_p, _ctypes.c_int,
+                                            _ctypes.c_void_p]
+            u.SetWindowLongPtrW(_ctypes.c_void_p(int(w.winId())),
+                                self._GWLP_HWNDPARENT,
+                                _ctypes.c_void_p(int(hwnd)))
+        except Exception as e:
+            print(f"[ui] could not own {type(w).__name__}"
+                  f" to the visualiser: {e}", flush=True)
+
+
+def keep_dialogs_above_visuals(app, host):
+    """Install _OwnedByVisuals on the application. Windows only; no-op elsewhere."""
+    if sys.platform != "win32":
+        return None
+    f = _OwnedByVisuals(host)
+    app.installEventFilter(f)
+    return f          # returned so the caller keeps it alive
+
+
 def theme_colour(key: str, theme: str = None) -> str:
     """One palette entry, for the few labels that set their own colour."""
     return _THEME_PALETTES[resolve_theme(theme)].get(key, "")

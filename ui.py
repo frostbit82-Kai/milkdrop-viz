@@ -8,6 +8,7 @@ from viz_common import (
     QUALITY_MESH, DEFAULT_KEYMAPS, ACTION_LABELS, ACTION_NOTES,
     THEMES, set_app_theme, resolve_theme, apply_window_theme,
     dialog_qss, menu_qss, browser_qss, theme_colour,
+    keep_dialogs_above_visuals,
     # Qt itself, so nothing beside this file has to name a binding.
     QApplication, QDialog, QMessageBox, QSystemTrayIcon, Signal, QT_BINDING,
 )
@@ -20,4 +21,5 @@ __all__ = [
     "QT_BINDING",
     "THEMES", "set_app_theme", "resolve_theme", "apply_window_theme",
     "dialog_qss", "menu_qss", "browser_qss", "theme_colour",
+    "keep_dialogs_above_visuals",
 ]
