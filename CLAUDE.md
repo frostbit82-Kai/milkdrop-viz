@@ -134,6 +134,20 @@ There is no display in an agent shell and SDL needs one, so:
   because no Python exception is involved. Defer with `QTimer.singleShot(0, ...)`
   -- `TweakPanel._rebuild_later`. Measured: changing a sprite's movement killed
   the app every time, and only the live run could see it.
+- **Windows will not composite anything over a window whose rectangle is
+  exactly the monitor's.** It hands that window the display and the context
+  menu is never drawn -- while genuinely being in front: z-order puts it at
+  the top, it is the foreground window, it holds the pointer grab and it takes
+  clicks. Reported as "the menu flashes once, disappears, and still works as
+  if hidden behind the visuals", plus the whole screen flashing as the
+  compositor changed mode around it. `_toggle_fullscreen` now calls
+  `_overhang_display`, which sits the window `_FS_OVERHANG` pixels past every
+  edge: the same pixels are covered and the rectangle is no longer the
+  monitor's. Two pixels, not one -- 1920x1081 and 1920x1082 still covered the
+  monitor exactly and stayed uncomposited. SDL is not told; the resize comes
+  back as a normal `SDL_WINDOWEVENT_RESIZED` and the viewport follows.
+  Disabling "fullscreen optimizations" on the exe is *not* a fix -- it reduced
+  the flashing to one and left the menu just as invisible.
 - **A screen grab cannot see fullscreen or wallpaper mode, and lies
   convincingly.** `Graphics.CopyFromScreen` on a window that covers the screen
   exactly -- SDL's `FULLSCREEN_DESKTOP`, or a borderless window sized to the

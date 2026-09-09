@@ -4926,6 +4926,7 @@ _WS_EX_LAYERED, _LWA_ALPHA = 0x00080000, 0x02
 _HWND_TOP = ctypes.c_void_p(0)
 _SWP_NOSIZE, _SWP_NOMOVE, _SWP_NOZORDER = 0x0001, 0x0002, 0x0004
 _SWP_FRAMECHANGED, _SWP_SHOWWINDOW = 0x0020, 0x0040
+_SWP_NOACTIVATE = 0x0010
 
 
 def _user32():
@@ -7278,6 +7279,45 @@ class Renderer:
                                        y + max(0, h - wh.value) // 2)
             return
 
+    #: How far past each edge of the display the fullscreen window sits, in
+    #: pixels. Windows hands a window whose rectangle is exactly the monitor's
+    #: the display itself and stops compositing anything over it, so the
+    #: context menu -- genuinely in front, holding the pointer grab, taking
+    #: clicks -- is never drawn: it appears for one frame and is gone, and the
+    #: whole screen flashes as the compositor changes mode around it. Sitting
+    #: a little past every edge covers the same pixels and leaves the
+    #: rectangle different from the monitor's, which is all it takes.
+    #: Measured on 11 Pro 26200 by grabbing the screen twice in a row: at
+    #: exactly 1920x1080 four pairs out of four are byte-identical, so nothing
+    #: is reaching the compositor; two pixels over each edge and none are.
+    #: Two, not one: the same test at 1920x1081 and 1920x1082 still covered
+    #: the monitor exactly and stayed uncomposited.
+    _FS_OVERHANG = 2
+
+    def _overhang_display(self):
+        """Sit the fullscreen window just past the display edges. Windows only.
+
+        SDL is not told: it keeps its own idea of a fullscreen window, and the
+        resize this causes comes back through SDL_WINDOWEVENT_RESIZED like any
+        other, so the GL viewport and projectM follow on their own.
+        """
+        if sys.platform != "win32" or not self._native_handle:
+            return
+        idx = sdl2.SDL_GetWindowDisplayIndex(self._window)
+        if idx < 0:
+            return
+        r = sdl2.SDL_Rect()
+        if sdl2.SDL_GetDisplayBounds(idx, ctypes.byref(r)) != 0:
+            return
+        o = self._FS_OVERHANG
+        try:
+            _user32().SetWindowPos(
+                ctypes.c_void_p(self._native_handle), _HWND_TOP,
+                r.x - o, r.y - o, r.w + 2 * o, r.h + 2 * o,
+                _SWP_NOZORDER | _SWP_NOACTIVATE)
+        except Exception as e:
+            print(f"[renderer] could not overhang the display: {e}", flush=True)
+
     def _toggle_fullscreen(self):
         flags = sdl2.SDL_GetWindowFlags(self._window)
         if flags & sdl2.SDL_WINDOW_FULLSCREEN_DESKTOP:
@@ -7289,6 +7329,7 @@ class Renderer:
                 self._window, sdl2.SDL_WINDOW_FULLSCREEN_DESKTOP
             )
             self._fullscreen = True
+            self._overhang_display()
 
     def _toggle_borderless(self):
         self._borderless = not self._borderless
