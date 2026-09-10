@@ -174,12 +174,30 @@ class BrowserHost:
     def jump_to_order(self, i):    pass
 
 
-def the_browser_shows_a_cached_thumbnail_and_skips_the_rest():
-    path = thumb_path(NAME)
+def _write_thumb(path):
+    """A 96x54 JPEG at `path`, or an assertion that says what went wrong.
+
+    Retried once because this is Windows: a file created a moment ago can
+    still be held by a virus scanner, and QImage.save then returns a bare
+    False. That flaked this suite twice, in two different sessions, always on
+    the same line and always with an empty assertion message -- which is the
+    other half of what is fixed here.
+    """
     os.makedirs(os.path.dirname(path), exist_ok=True)
     img = QImage(96, 54, QImage.Format.Format_RGB888)
     img.fill(0x3366cc)
-    assert img.save(path, "JPG", 80)
+    for attempt in (1, 2):
+        if img.save(path, "JPG", 80):
+            return
+        time.sleep(0.25)
+    raise AssertionError(
+        f"could not write the test thumbnail to {path} in {attempt} attempts "
+        f"(directory exists: {os.path.isdir(os.path.dirname(path))})")
+
+
+def the_browser_shows_a_cached_thumbnail_and_skips_the_rest():
+    path = thumb_path(NAME)
+    _write_thumb(path)
     win = PresetPlaylistWindow(host=BrowserHost())
     win.resize(420, 400)
     win.show()
@@ -200,10 +218,7 @@ def a_thumbnail_below_an_unwatched_row_is_not_squashed_into_it():
     a 26px row and spilled over its neighbours. Seen in a screenshot, not in
     a test, which is why there is one now."""
     path = thumb_path(NAME)
-    os.makedirs(os.path.dirname(path), exist_ok=True)
-    img = QImage(96, 54, QImage.Format.Format_RGB888)
-    img.fill(0x3366cc)
-    assert img.save(path, "JPG", 80)
+    _write_thumb(path)
 
     class TopUnwatched(BrowserHost):
         entries = [("never watched", 5), (NAME, 9), ("nor this", 5)]
