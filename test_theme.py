@@ -155,7 +155,13 @@ def the_scroll_handle_survives_ten_thousand_presets():
     rounded away -- the bar looked like it had no handle at all, which is
     exactly how it was reported. Measured, not grepped: the real widget, the
     real sheet, the style's own idea of where the slider goes."""
-    from PySide6.QtWidgets import QStyle, QStyleOptionSlider
+    # Through viz_common's own QtWidgets, not `from PySide6 import ...`:
+    # nothing in this repo names a binding, because viz_common picks between
+    # PySide6 and PyQt6 at import and a test that pins one is a test that
+    # fails on the other. QStyle is not in the re-export table because the
+    # application never uses it -- only this measurement does.
+    QStyle = v.QtWidgets.QStyle
+    QStyleOptionSlider = v.QtWidgets.QStyleOptionSlider
 
     for theme in ("dark", "light"):
         for qss in (v.browser_qss(theme), v.dialog_qss(theme)):
@@ -176,11 +182,32 @@ def the_scroll_handle_survives_ten_thousand_presets():
             assert h >= 20, f"{theme}: handle is {h}px tall at 9795 rows"
 
 
-def the_handle_is_a_different_colour_from_its_trough():
+def _relative_luminance(colour):
+    """WCAG 2.1 relative luminance of a QColor."""
+    def channel(v8):
+        c = v8 / 255.0
+        return c / 12.92 if c <= 0.03928 else ((c + 0.055) / 1.055) ** 2.4
+    return (0.2126 * channel(colour.red())
+            + 0.7152 * channel(colour.green())
+            + 0.0722 * channel(colour.blue()))
+
+
+def _contrast(a, b):
+    lo, hi = sorted((_relative_luminance(a), _relative_luminance(b)))
+    return (hi + 0.05) / (lo + 0.05)
+
+
+def the_handle_has_3_to_1_against_its_trough():
     """The other half of the same report -- a handle the colour of the bar is
-    indistinguishable from no handle. Reads the pixels off a painted bar
-    rather than comparing the tokens, because the handle colour is an alpha
-    over the trough and the tokens do not say what that composites to."""
+    indistinguishable from no handle. WCAG 1.4.11 puts the floor at 3:1 for a
+    control you have to see to operate, and both themes sat under 2.1:1 when
+    this was reported.
+
+    Measured off the painted bar rather than compared between tokens: the
+    handle colour is an alpha *over* the trough, so the token says
+    `rgba(255, 255, 255, 85)` and the screen says #666666, and only one of
+    those two can be checked against a contrast floor. Asserting merely that
+    the two differ would pass at alpha 1."""
     for theme in ("dark", "light"):
         w = v.QListWidget()
         w.setStyleSheet(v.browser_qss(theme))
@@ -192,8 +219,10 @@ def the_handle_is_a_different_colour_from_its_trough():
         on_handle = img.pixelColor(img.width() // 2, 8)
         on_trough = img.pixelColor(img.width() // 2, img.height() - 8)
         w.close()
-        assert on_handle != on_trough, (
-            f"{theme}: handle and trough both paint {on_handle.name()}")
+        ratio = _contrast(on_handle, on_trough)
+        assert ratio >= 3.0, (
+            f"{theme}: handle {on_handle.name()} against trough "
+            f"{on_trough.name()} is {ratio:.2f}:1, under WCAG 1.4.11's 3:1")
 
 
 if __name__ == "__main__":
@@ -209,6 +238,6 @@ if __name__ == "__main__":
                default_config_ships_a_valid_theme,
                an_old_config_without_a_theme_stays_dark,
                the_scroll_handle_survives_ten_thousand_presets,
-               the_handle_is_a_different_colour_from_its_trough):
+               the_handle_has_3_to_1_against_its_trough):
         check(fn.__name__, fn)
     print("all theme checks passed")
