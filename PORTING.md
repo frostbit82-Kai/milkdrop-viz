@@ -764,6 +764,15 @@ are both **"not available"**, with the active port on **Line In**; nothing is
 plugged into either jack. Roadmap D's last item needs a machine with a headset,
 and there is nothing about the Linux path Mint can add without one.
 
+**And one found after installing.** The preset browser's vertical scroll bar
+had no visible handle. Styling `QScrollBar::handle` takes the sub-control away
+from the native style, `PM_ScrollBarSliderMin` goes with it, and the handle is
+then sized purely by page/range -- **1px** at 9,795 rows, which the 4px radius
+rounds away to nothing. Both sheets now floor it, and while measuring it the
+handle turned out to be 2.0:1 against its own trough in both themes, so
+`scroll_handle` went to 3.0:1 as well. `test_theme.py` measures the real
+widget at a real row count; twenty rows of test data hides this completely.
+
 **And one thing that was not on the list.** `import sounddevice` raises
 `OSError`, not `ImportError`, when PortAudio is missing, and the guard in
 `viz_common` caught only `ImportError` -- so a Linux box that never installed

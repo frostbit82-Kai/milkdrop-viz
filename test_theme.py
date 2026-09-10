@@ -146,6 +146,56 @@ def an_old_config_without_a_theme_stays_dark():
     assert v.resolve_theme(merged.get("theme")) == "dark"
 
 
+# --- scroll bars --------------------------------------------------------
+def the_scroll_handle_survives_ten_thousand_presets():
+    """A stylesheet-drawn handle has no minimum of its own: Qt's
+    PM_ScrollBarSliderMin stops applying once the sub-control comes from a
+    sheet, so the handle is sized purely by page/range. At the ~10k presets
+    this browser exists for that was **one pixel**, which the 4px radius then
+    rounded away -- the bar looked like it had no handle at all, which is
+    exactly how it was reported. Measured, not grepped: the real widget, the
+    real sheet, the style's own idea of where the slider goes."""
+    from PySide6.QtWidgets import QStyle, QStyleOptionSlider
+
+    for theme in ("dark", "light"):
+        for qss in (v.browser_qss(theme), v.dialog_qss(theme)):
+            w = v.QListWidget()
+            w.setStyleSheet(qss)
+            w.addItems([str(i) for i in range(9795)])
+            w.resize(440, 560)
+            w.show()
+            app.processEvents()
+            sb = w.verticalScrollBar()
+            opt = QStyleOptionSlider()
+            sb.initStyleOption(opt)
+            h = sb.style().subControlRect(QStyle.CC_ScrollBar, opt,
+                                          QStyle.SC_ScrollBarSlider, sb).height()
+            w.close()
+            # 8 is the floor the radius alone needs; 20 is roughly what Qt's
+            # own default gives, and anything under it is not grabbable.
+            assert h >= 20, f"{theme}: handle is {h}px tall at 9795 rows"
+
+
+def the_handle_is_a_different_colour_from_its_trough():
+    """The other half of the same report -- a handle the colour of the bar is
+    indistinguishable from no handle. Reads the pixels off a painted bar
+    rather than comparing the tokens, because the handle colour is an alpha
+    over the trough and the tokens do not say what that composites to."""
+    for theme in ("dark", "light"):
+        w = v.QListWidget()
+        w.setStyleSheet(v.browser_qss(theme))
+        w.addItems([str(i) for i in range(9795)])
+        w.resize(440, 560)
+        w.show()
+        app.processEvents()
+        img = w.verticalScrollBar().grab().toImage()
+        on_handle = img.pixelColor(img.width() // 2, 8)
+        on_trough = img.pixelColor(img.width() // 2, img.height() - 8)
+        w.close()
+        assert on_handle != on_trough, (
+            f"{theme}: handle and trough both paint {on_handle.name()}")
+
+
 if __name__ == "__main__":
     for fn in (explicit_themes_ignore_the_system,
                system_follows_qts_colour_scheme,
@@ -157,6 +207,8 @@ if __name__ == "__main__":
                palettes_carry_the_same_keys,
                dialog_qss_constant_is_still_the_dark_sheet,
                default_config_ships_a_valid_theme,
-               an_old_config_without_a_theme_stays_dark):
+               an_old_config_without_a_theme_stays_dark,
+               the_scroll_handle_survives_ten_thousand_presets,
+               the_handle_is_a_different_colour_from_its_trough):
         check(fn.__name__, fn)
     print("all theme checks passed")

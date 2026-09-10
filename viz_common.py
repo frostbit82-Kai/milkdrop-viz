@@ -2893,7 +2893,11 @@ _THEME_PALETTES = {
         "groove":        "rgba(255, 255, 255, 45)",
         "handle":        "#e8e8e8",
         "scroll_bg":     "#1a1a1a",
-        "scroll_handle": "rgba(255, 255, 255, 55)",
+        #: 85, not 55. Composited over the trough that is 3.0:1 against
+        #: it; 55 gave 2.0:1, under WCAG 1.4.11's floor for a control
+        #: you have to see to use, and it was reported as looking like
+        #: no handle at all.
+        "scroll_handle": "rgba(255, 255, 255, 85)",
         "menu_bg":       "rgba(18, 18, 18, 235)",
         "menu_border":   "rgba(255, 255, 255, 55)",
         "menu_hover":    "rgba(255, 255, 255, 22)",
@@ -2932,7 +2936,8 @@ _THEME_PALETTES = {
         "groove":        "rgba(0, 0, 0, 55)",
         "handle":        "#444444",
         "scroll_bg":     "#ededed",
-        "scroll_handle": "rgba(0, 0, 0, 70)",
+        #: 109 for the same 3.0:1 the dark sheet gets; 70 gave 1.9:1.
+        "scroll_handle": "rgba(0, 0, 0, 109)",
         "menu_bg":       "rgba(250, 250, 250, 242)",
         "menu_border":   "rgba(0, 0, 0, 60)",
         "menu_hover":    "rgba(0, 0, 0, 22)",
@@ -3018,6 +3023,14 @@ _DIALOG_QSS_TEMPLATE = """
     }
     QScrollBar:vertical, QScrollBar:horizontal { background: @scroll_bg@; border: 0; }
     QScrollBar::handle { background: @scroll_handle@; border-radius: 4px; }
+    /* min-height/min-width are not decoration. A stylesheet-drawn handle has
+       no floor of its own -- Qt's PM_ScrollBarSliderMin stops applying once
+       the sub-control is drawn from a sheet -- so it is sized purely by the
+       page/range ratio. On the ten thousand presets this browser is built for
+       that comes out at ONE pixel, which the 4px radius then rounds away to
+       nothing, and the bar reads as having no handle at all. */
+    QScrollBar::handle:vertical { min-height: 28px; }
+    QScrollBar::handle:horizontal { min-width: 28px; }
     QScrollBar::add-line, QScrollBar::sub-line { height: 0; width: 0; }
     QToolTip { background: @field@; color: @fg@; border: 1px solid @border@; }
 """
@@ -3092,6 +3105,14 @@ _BROWSER_QSS_TEMPLATE = """
     QSlider::handle:horizontal:disabled { background: @button_border@; }
     QScrollBar:vertical, QScrollBar:horizontal { background: @scroll_bg@; border: 0; }
     QScrollBar::handle { background: @scroll_handle@; border-radius: 4px; }
+    /* min-height/min-width are not decoration. A stylesheet-drawn handle has
+       no floor of its own -- Qt's PM_ScrollBarSliderMin stops applying once
+       the sub-control is drawn from a sheet -- so it is sized purely by the
+       page/range ratio. On the ten thousand presets this browser is built for
+       that comes out at ONE pixel, which the 4px radius then rounds away to
+       nothing, and the bar reads as having no handle at all. */
+    QScrollBar::handle:vertical { min-height: 28px; }
+    QScrollBar::handle:horizontal { min-width: 28px; }
     QScrollBar::add-line, QScrollBar::sub-line { height: 0; width: 0; }
 """
 

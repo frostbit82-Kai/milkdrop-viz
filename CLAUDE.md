@@ -205,6 +205,24 @@ There is no display in an agent shell and SDL needs one, so:
 
 ## Traps already paid for
 
+- **A stylesheet-drawn scroll bar handle has no minimum size, and on ten
+  thousand presets it comes out one pixel tall.** Reported from Mint on
+  10 Sep 2026 as "there either isn't a vertical scrollbar adjuster, or the
+  adjuster is the same colour as the bar". It was the first: styling
+  `QScrollBar::handle` at all takes the sub-control away from the native
+  style, and `PM_ScrollBarSliderMin` — the ~20px floor Qt would otherwise
+  apply — goes with it. The handle is then sized purely by page/range, which
+  at 9,795 rows in a 560px list is **1px**, and `border-radius: 4px` rounds
+  that away to nothing. Both sheets now set `min-height` on the vertical
+  handle and `min-width` on the horizontal one. Measure it with
+  `QStyle.subControlRect(CC_ScrollBar, opt, SC_ScrollBarSlider)` on a real
+  widget with a real row count — a sheet that *looks* complete tells you
+  nothing, and twenty rows of test data hides it completely.
+  The second half of the report was real too, just secondary: the handle
+  composited to 2.0:1 against its own trough in both themes, under WCAG
+  1.4.11's 3:1 for a control you have to see to use. `scroll_handle` is now
+  alpha 85 (dark) and 109 (light), which is 3.0:1 in both.
+
 - **`import sounddevice` raises `OSError`, not `ImportError`, when PortAudio is
   missing — so the usual guard does not catch it and the app will not start.**
   Found on Mint, 10 Sep 2026. sounddevice is a ctypes binding: the *package*
