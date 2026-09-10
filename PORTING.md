@@ -786,6 +786,44 @@ shipping an unversioned `libportaudio.so` beside it is the untested change that
 would actually switch the fallback back on.
 
 
+### The Windows installer needs rebuilding — 2026-09-10
+
+**`BomsAIVisualizer-2.0.0-win64-setup.exe` on the NTFS drive is stale, and no
+longer only cosmetically.** It was built at 03:52, six commits before the tree
+it now sits in. Checked against the artifact rather than assumed, by scanning
+the zlib blobs inside `app/BomsAIVisualizer.exe` for the stylesheet:
+
+| string | in the shipped exe |
+|---|---|
+| `rgba(255, 255, 255, 55)` — the old handle alpha | **present** |
+| `rgba(255, 255, 255, 85)` — the new one | absent |
+| `min-height: 28px` — the handle floor | absent |
+
+So the installed Windows build has exactly the defect Mint reported after
+installing: a scroll bar whose handle is one pixel tall and the colour of the
+trough. It is a shared stylesheet, so Windows was never a separate bug — only
+a separate package. `licenses/EULA.txt` in the same tree is the old wording
+too (`Version 2.0.0 — 8 September 2026` rather than "Applies to version 2.0.0
+· terms of 8 September 2026").
+
+The checkout there is already at `0bc88dc`, so the rebuild is just
+`installer/build_windows.ps1` — nothing to merge first. **The Inno `AppId`
+GUID does not move**, so the new package upgrades the installed one rather
+than sitting beside it.
+
+Worth checking while the tree is open, because it is one line and it settles a
+question this session raised and could not answer from Linux: the Windows
+bundle **does** carry
+`_internal/_sounddevice_data/portaudio-binaries/libportaudio64bit.dll`.
+That is why `add5384` is a Linux-only story — sounddevice's own `except
+OSError` loads that copy on Windows, and the branch for every other platform
+is a bare `raise`. Nothing to fix there; just do not go looking for it.
+
+**The Linux tarball is current**: rebuilt at 14:19 from `0bc88dc`, 86 MB,
+md5 `97fdba8f19dc2f21fdf8550019537570`, floor GLIBC_2.34, and verified to
+start on a stock `ubuntu:24.04` with no libportaudio2.
+
+
 ## Notes
 
 - `SDL_GetWindowWMInfo` is used once, for the embedded-in-BomsAI-Studio case. The
