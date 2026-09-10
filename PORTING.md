@@ -621,6 +621,77 @@ of the AMD legacy driver, which the later healthy reading disproves.
   2026", which is both, unambiguously.
 
 
+### Handing over to Mint — 2026-09-10
+
+**The checkout was brought up to date from Linux.** `~/mintdrop-viz` was
+fast-forwarded on 2026-09-10 while its drive was mounted, from six commits
+behind to level with `origin/master`, tree clean; both machines are uid 1000,
+so nothing changed owner on the way in. Run `git pull --ff-only` there anyway
+before starting — it costs nothing and Linux may have pushed since. Either
+drive can be updated this way whenever it is mounted, which is cheaper than
+booting the box to run one command.
+
+The trip is one screenshot the other two boxes cannot take, and a smoke test
+of the six commits Mint has not run.
+
+**1. Shoot wallpaper mode on the real session.** Four site screenshots were
+re-shot on Linux on 2026-09-10 — the Code tab, a compile failure caught, the
+right-click menu with *Always on top*, and the key list with the new row —
+and they are already in the site repo. The gap left is wallpaper mode: the
+guide pairs every feature with a Linux shot and a Windows one, and wallpaper
+mode has only `win-wallpaper.webp`, because the Linux half of the feature
+landed in `3e994ae` *after* the last shot run.
+
+Cinnamon is the shipped target and the only desktop where this is verified end
+to end, so no rig is wanted: run the built package with `--wallpaper` on the
+ordinary session, let a preset settle, and grab the whole screen with the
+desktop icons drawing over the visuals. That picture is the feature.
+
+Do not try this in a nested Xephyr. It was attempted on Linux first and the
+stacking was right — `_NET_CLIENT_LIST_STACKING` had the visualiser below
+nemo-desktop's window — but nemo-desktop stops drawing icons the moment a
+second `_NET_WM_WINDOW_TYPE_DESKTOP` window appears, and restarting it refuses
+outright with *"Desktop already managed by another application, skipping
+desktop setup."* On a real Cinnamon session nemo-desktop is already up and
+managing before the app ever starts, so the case never arises. That is the
+whole reason the shot belongs on Mint.
+
+**Read it before it ships.** The usual rule is about preset names; here the
+risk is the desktop itself — icon filenames, a panel, a notification, anything
+in a window title. Tidy the desktop first rather than crop around it after.
+
+Commit it as `store/screenshots/linux-wallpaper.png`. It is a **courier for
+the site guide, not a Store shot** — Linux is not in the Microsoft Store
+listing — and it gets moved into `bomsai-software` from the Linux box, where
+that repo lives. Mint has no checkout of the site.
+
+**2. Smoke-test what Mint has not seen run.** Mint was last on `9afa718`, its
+own commit. Six landed after it, three of them worth a minute each:
+
+- **`49c7bd6`, the syntax highlighter.** Open the Code tab on a preset with a
+  real shader and check three things colour differently: keywords, numbers and
+  `//` comments. A plain-looking editor means the `QSyntaxHighlighter` was
+  collected — it is held on the panel deliberately for that reason.
+- **`8bcf446`, the vsync probe.** Never run on that hardware (AMD Pitcairn,
+  Mesa 23.2.1). It times six swaps at startup and turns vsync off if they pace
+  below half the refresh rate. **Silence is the pass** — Windows only ever saw
+  it speak because that box was stalling at 3.5 fps. `BOMSAI_FPS=1` prints a
+  rate every five seconds if you want the number.
+- **`0158ca7`.** Mint's fix was right and its *reason* was wrong: the level is
+  chosen per stage, not per severity, so a comp failure at WARN and a warp
+  failure at ERROR are both normal. Composite *load* failure spells it
+  `Error loading…` and was matching only by accident; that word is in the list
+  now. The table is in `CLAUDE.md`.
+
+All nineteen suites should pass, `test_vsync.py` among them.
+
+**3. The microphone, if that box has a headset.** The last open item on
+roadmap D. The Linux path opens a real input and delivers samples; nobody has
+spoken into one. A headset and one sentence closes it.
+
+**VERSION is 2.0.0** and does not move again unless asked.
+
+
 ## Notes
 
 - `SDL_GetWindowWMInfo` is used once, for the embedded-in-BomsAI-Studio case. The
