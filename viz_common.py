@@ -5909,6 +5909,29 @@ def should_idle(mode: str, wallpaper: bool, silent_for: float,
 SILENCE_PEAK = 0.002
 
 
+# ─── vsync ────────────────────────────────────────────────────────────────────
+
+#: A swap rate below this fraction of the display's refresh rate means vsync is
+#: blocking rather than pacing. Loose on purpose: a driver dropping the odd
+#: frame keeps its vsync, and the collapse this exists to catch is an order of
+#: magnitude, not a few per cent.
+VSYNC_MIN_FRACTION = 0.5
+
+
+def vsync_paces(frames: int, seconds: float, refresh_hz: int) -> bool:
+    """Did `frames` swaps in `seconds` keep up with the monitor?
+
+    A plain function for the same reason `should_idle` is one: the answer is a
+    policy question and the thing it is measured from needs a GPU. Anything it
+    cannot judge is True -- vsync is the default, and refusing to turn it off
+    is the safe way to be wrong.
+    """
+    if frames <= 0 or seconds <= 0:
+        return True                    # nothing measured
+    hz = refresh_hz if refresh_hz and refresh_hz > 0 else 60
+    return frames / seconds >= hz * VSYNC_MIN_FRACTION
+
+
 # ─── start at login ───────────────────────────────────────────────────────────
 
 #: Registry value name on Windows, and the .desktop basename on Linux. Fixed,
@@ -6194,6 +6217,9 @@ class Renderer:
         self._idle_since = 0.0
         self._fs_app = False
         self._fs_app_checked = 0.0
+        #: Whether this machine's vsync actually paces frames. None until it
+        #: has been measured, once, just after the GL context is made.
+        self._vsync_ok = None
         #: Name of the collection being played, or "" for the whole library.
         self._collection = ""
         #: Loaded on first use, not here: this runs before the data directory
@@ -6282,10 +6308,7 @@ class Renderer:
             print(f"[renderer] SDL_GL_CreateContext failed: {sdl2.SDL_GetError()}")
             return False
 
-        # fps == 0 → uncapped: turn vsync off so we're not pinned to the
-        # monitor refresh rate.
-        _fps0 = self._cfg.get("fps", 60)
-        sdl2.SDL_GL_SetSwapInterval(0 if (not _fps0 or _fps0 <= 0) else 1)
+        self._set_swap_interval(self._cfg.get("fps", 60))
 
         # Embedded mode only: park off-screen until the Qt host adopts and
         # repositions the window. Standalone must stay on-screen and clickable
@@ -7108,9 +7131,7 @@ class Renderer:
                     # partial dict would quietly reset whatever is missing.
                     self._apply_pm_settings(self._cfg)
                     if "fps" in updates:
-                        _f = updates.get("fps", 60)
-                        sdl2.SDL_GL_SetSwapInterval(
-                            0 if (not _f or _f <= 0) else 1)
+                        self._set_swap_interval(updates.get("fps", 60))
                     if "audio_device" in updates:
                         self._audio.update_device(updates["audio_device"])
                     if "audio_gain" in updates:
@@ -8159,6 +8180,80 @@ class Renderer:
     #: Two, not one: the same test at 1920x1081 and 1920x1082 still covered
     #: the monitor exactly and stayed uncomposited.
     _FS_OVERHANG = 2
+
+    #: How long to spend measuring vsync, and how many frames at most.
+    #: Bounded both ways on purpose: six frames on a healthy 60 Hz display
+    #: cost 100 ms, and on a driver where a vsynced swap blocks for a quarter
+    #: of a second the time limit stops the measurement after one.
+    _VSYNC_PROBE_S, _VSYNC_PROBE_FRAMES = 0.25, 6
+
+    def _set_swap_interval(self, fps):
+        """vsync on, unless the frame rate is uncapped or vsync does not work.
+
+        `fps <= 0` means uncapped, and being pinned to the refresh rate is
+        precisely what that asks not to happen. The measurement below is done
+        once per run and remembered, so changing the frame rate in Settings
+        does not pay for it again.
+        """
+        if not fps or fps <= 0:
+            sdl2.SDL_GL_SetSwapInterval(0)
+            return
+        sdl2.SDL_GL_SetSwapInterval(1)
+        if self._vsync_ok is None:
+            self._vsync_ok = self._vsync_paces()
+            if not self._vsync_ok:
+                print("[renderer] vsync is not pacing frames here - "
+                      "capping in software instead", flush=True)
+        if not self._vsync_ok:
+            sdl2.SDL_GL_SetSwapInterval(0)
+
+    def _vsync_paces(self) -> bool:
+        """Is vsync pacing frames to the refresh rate, or stalling on it?
+
+        SDL hands back the interval it was asked for and every frame the
+        driver produces is correct -- just very late -- so nothing else in
+        the app can tell the difference.
+
+        Measured on this project's own Windows box, 10 Sep 2026 (AMD
+        Pitcairn, legacy driver 27.20.1034.6, Windows 11 build 26200): a
+        windowed vsynced swap blocked for about 250 ms instead of 17 ms --
+        4 fps on a card that does 4,500 uncapped. Reproduced three times by a
+        probe containing none of this app's code, foreground and background,
+        at two window sizes. An hour later, with no driver change and no
+        reboot, the same probe read a healthy 59.9 fps.
+
+        So it is an intermittent stall somewhere in the compositing stack,
+        **not** a property of the driver, and the cause is not established --
+        the suspicion is DWM left degraded, because the machine had spent the
+        afternoon with windows parented into Explorer's WorkerW for wallpaper
+        mode. Do not write it up as a driver bug without measuring again.
+
+        That is the argument for measuring rather than assuming in either
+        direction. Where vsync is healthy this costs six swaps at startup and
+        changes nothing; where it has collapsed it is the difference between
+        4 fps and the frame cap. The same driver also ignores the interval
+        entirely once the window is fullscreen, so measuring once, windowed,
+        at startup is safe: where vsync does nothing anyway, turning it off
+        costs nothing.
+
+        The software frame cap at the bottom of `run` is what holds the rate
+        afterwards, and it is already there for the uncapped case.
+        """
+        # The first swap after a context is created is not representative on
+        # any driver; it is the one that allocates the back buffers.
+        sdl2.SDL_GL_SwapWindow(self._window)
+        t0, n = _time.monotonic(), 0
+        while (n < self._VSYNC_PROBE_FRAMES
+               and _time.monotonic() - t0 < self._VSYNC_PROBE_S):
+            sdl2.SDL_GL_SwapWindow(self._window)
+            n += 1
+        dt = _time.monotonic() - t0
+        mode = sdl2.SDL_DisplayMode()
+        idx = max(sdl2.SDL_GetWindowDisplayIndex(self._window), 0)
+        hz = (mode.refresh_rate
+              if sdl2.SDL_GetCurrentDisplayMode(idx, _ctypes.byref(mode)) == 0
+              else 0)
+        return vsync_paces(n, dt, hz)
 
     def _overhang_display(self):
         """Sit the fullscreen window just past the display edges. Windows only.
