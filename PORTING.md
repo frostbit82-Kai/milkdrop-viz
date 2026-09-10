@@ -518,6 +518,92 @@ changes.
 listing.
 
 
+### Windows caught up with 2.0 — 2026-09-10
+
+Everything in the handover above was run on this box against the real
+library, and then again against the built 2.0.0 package. Section A and C1
+behave the same as they do on Linux and on Mint; what differed was one defect
+of our own and two of my own mistakes, all below.
+
+**All nineteen suites pass**, including a new `test_vsync.py`.
+
+**What the handover asked for, answered**
+
+1. **The Code tab** — opens, loads the preset's own text, highlights it, and
+   Ctrl+Enter / Apply compiles. Find-and-replace, `+ per-frame`, `Shift
+   colours` and `Mash up` are all wired; the mashup names what it borrowed
+   ("Both shaders from …") exactly as it does on Mint.
+2. **The log level** — both halves arrive here, and the fix from Mint holds:
+   breaking `shader_body` gave `[projectm:error] [PerPixelMesh] …` at ERROR
+   **and** `[projectm:warn] [FinalComposite] … Using fallback shader.` at
+   WARN, with the WARN one being the text that reached the red line under the
+   editor. Revert put the preset back (6633 bytes to 6631, the two inserted
+   characters gone).
+3. **`t`, always on top** — `WS_EX_TOPMOST` goes on (exstyle `0x110` to
+   `0x118`) and the toast says so. Into wallpaper mode and back: on-top is
+   dropped *first* (`Always on top: OFF` in the log, before the reparent), the
+   window returns to its exact original geometry, `WS_EX_TOPMOST` is **not**
+   restored with the saved exstyle, and the menu agrees. That ordering is
+   correct on Windows.
+4. **Wallpaper mode** — still takes the Windows 11 layered-child path
+   (`WS_EX_LAYERED` set, `WS_CHILD` set, no longer a top-level window), the
+   desktop icons stay on top, the tray icon appears, its menu leaves the mode,
+   and the window comes back bordered at its old size.
+5. **The microphone** — still not done, and not doable from here. It needs a
+   person, a headset and a sentence. Unchanged from the roadmap.
+
+**One real defect, fixed: the frame rate.** The app opened at **3.5 fps**. It
+is not the app -- a probe with none of its code in it swapped at 4.0 fps with
+`SDL_GL_SetSwapInterval(1)` and 4,472 with it off, on a Radeon HD 7800 and a
+59 Hz panel, reproducing foreground and background and at two window sizes.
+An hour later the same probe read a healthy 59.9 fps with no driver change and
+no reboot, so it is an intermittent stall in the compositing stack rather than
+a driver trait, and the cause is not established. `Renderer._vsync_paces` now
+measures six swaps at startup and hands the number to `vsync_paces`, which
+turns vsync off when it cannot keep up with the refresh rate and lets the
+software frame cap hold the rate instead: 3.5 fps became 111. Where vsync is
+healthy it costs six swaps and changes nothing, which is what the machine now
+does. `test_vsync.py` covers the policy; the full write-up is in `CLAUDE.md`.
+
+**One cross-platform test bug, fixed.** `test_wallpaper.py`'s `FakeXlib.atom`
+issued atom values above 2**32 -- deliberately, to catch a ctypes signature
+that narrows one to `c_int`. A Windows `c_ulong` is four bytes, not eight, so
+those values simply truncated and five X11 checks failed on the fixture rather
+than on the shipped code. The base is now sized to the platform's `long` and
+keeps the top bit set, so the guard still bites. The X11 code itself is
+correct: format 32 really is an array of `long`.
+
+**A flake made deterministic.** `test_thumbnails`'s
+`the_browser_shows_a_cached_thumbnail_and_skips_the_rest` failed on the second
+full run of the day and passed 3/3 alone -- the same flake as the previous
+session, always `assert img.save(...)` with no message. It now retries once
+and says what failed. Worth knowing separately: the app's own `_ThumbWriter`
+was seen logging `[WinError 5] Access is denied` on its `.part` to `.jpg`
+`os.replace` while the browser had the old file open. It degrades to a log
+line and no thumbnail, which is acceptable, but `os.replace` being atomic on
+Windows does not make it immune to a sharing violation.
+
+**Two things I got wrong, recorded so the next session does not repeat them.**
+I reported the tray icon as never appearing in wallpaper mode -- it was there
+the whole time and I had read it as another app's icon; see the note in
+`CLAUDE.md`. And the first version of the vsync write-up called it a property
+of the AMD legacy driver, which the later healthy reading disproves.
+
+**Still open for Linux**
+
+- `check_sync.py` skips here ("no BomsAI Studio copy found beside this repo"),
+  and `viz_common.py` has moved: `vsync_paces`, `VSYNC_MIN_FRACTION`,
+  `Renderer._set_swap_interval` and `Renderer._vsync_paces`. Run
+  `python check_sync.py --fix` on the box that has Bomsai Player beside it.
+- The vsync work is platform-neutral by construction -- it measures rather
+  than tests `sys.platform` -- so Linux gets the same guard. It should be a
+  no-op on a healthy Mesa stack, but the first Linux run is worth watching for
+  the `vsync is not pacing frames here` line, which would mean the threshold wants
+  looking at rather than that Linux is broken.
+- `installer/licenses/EULA.txt` says "Version 2.0.0 — 8 September 2026" while
+  the bump landed on the 9th. One line, and it is the Linux tarball's copy too.
+
+
 ## Notes
 
 - `SDL_GetWindowWMInfo` is used once, for the embedded-in-BomsAI-Studio case. The

@@ -105,8 +105,8 @@ the only way to see why a frozen build failed.
 `QT_QPA_PLATFORM=offscreen`: `browser_search`, `browser_title`, `display_picker`,
 `recording` (needs ffmpeg and ffprobe), `clip_audio` (same), `thumbnails`,
 `screensaver`, `wallpaper`, `packs`, `settings_diff`, `shuffle`, `theme`,
-`idle_pause`, `collections`, `backup`, `tweak`, `sprites`, `code_editor`. All
-eighteen must pass before a release.
+`idle_pause`, `collections`, `backup`, `tweak`, `sprites`, `code_editor`,
+`vsync`. All nineteen must pass before a release.
 
 There is no display in an agent shell and SDL needs one, so:
 
@@ -167,6 +167,35 @@ There is no display in an agent shell and SDL needs one, so:
   whole time. Verify those two modes by eye or with a recorded clip. And if a
   clip is black, suspect the preset before the code: ten sampled at random off
   the library gave nine under 26/255 mean brightness.
+- **Do not read an unfamiliar tray icon as an absent one.** Windows 11 hides
+  new tray icons in the chevron flyout, and this app's 16x16 logo there is a
+  small dark square with a gold mark that looks like half a dozen other
+  utilities. It was read as "another app's icon", which turned "the tray icon
+  never appears" into a confident and completely wrong defect report --
+  wallpaper mode's only way out, supposedly broken. What settled it in one
+  step: start a **second** process showing the same `app_icon()` and count the
+  icons. Two identical ones appeared where there had been one. `HKCU\Control
+  Panel\NotifyIconSettings` also lists every icon Windows has registered, by
+  executable path, which is the cheaper check and should have been first.
+
+- **vsync can be accepted, reported back, and still not pace anything.**
+  10 Sep 2026, this project's Windows box: the app ran at 3.5 fps. A probe with
+  none of the app's code in it -- create a window, swap, count -- gave 4.0 fps
+  with `SDL_GL_SetSwapInterval(1)` and 4,472 with it off, on a card and display
+  that are fine. Foreground or background, 902x632 or 640x480, alone or not: the
+  same 4 fps. Fullscreen was the mirror image, ignoring the interval completely
+  and running uncapped at 2,648 on a 59 Hz panel. **An hour later the same probe
+  read 59.9 fps with no driver change and no reboot**, so it is an intermittent
+  stall in the compositing stack and not a driver trait -- the suspicion, not
+  established, is DWM left degraded by an afternoon of windows parented into
+  Explorer's WorkerW. `_vsync_paces` therefore *measures* six swaps at startup
+  and turns vsync off when they do not keep up with the refresh rate, leaving
+  the software frame cap to hold the rate; `vsync_paces` is the policy half and
+  `test_vsync.py` covers it. Nothing else in the app can see this: SDL reports
+  the interval it was asked for and every frame is correct, only late. If the
+  frame rate is mysteriously terrible, measure a bare swap loop before
+  suspecting anything in this repo.
+
 - **Take the screenshot and look at it.** Driving the app for the site's pictures
   on 2026-09-08 found three defects that seventeen passing suites could not: the
   Backup menu read "Back up ratings _collections…" because Qt eats a lone `&` in
