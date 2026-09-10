@@ -591,17 +591,21 @@ of the AMD legacy driver, which the later healthy reading disproves.
 
 **Still open for Linux**
 
-- `check_sync.py` skips here ("no BomsAI Studio copy found beside this repo"),
-  and `viz_common.py` has moved: `vsync_paces`, `VSYNC_MIN_FRACTION`,
-  `Renderer._set_swap_interval` and `Renderer._vsync_paces`. Run
-  `python check_sync.py --fix` on the box that has Bomsai Player beside it.
-- The vsync work is platform-neutral by construction -- it measures rather
-  than tests `sys.platform` -- so Linux gets the same guard. It should be a
-  no-op on a healthy Mesa stack, but the first Linux run is worth watching for
-  the `vsync is not pacing frames here` line, which would mean the threshold wants
-  looking at rather than that Linux is broken.
-- `installer/licenses/EULA.txt` says "Version 2.0.0 — 8 September 2026" while
-  the bump landed on the 9th. One line, and it is the Linux tarball's copy too.
+- ~~Run `python check_sync.py --fix` on the box that has Bomsai Player beside
+  it.~~ **Done 10 Sep**, Player commit `0a7cc8f`; its 107 tests pass with the
+  vsync work in.
+- ~~The first Linux run is worth watching for the `vsync is not pacing frames
+  here` line.~~ **Run 10 Sep: silent.** Source build under a nested X server
+  with llvmpipe, `BOMSAI_FPS=1`, steady 44–45 fps against a 60 fps cap — the
+  probe judged vsync healthy and left it alone, which is the intended no-op.
+  The threshold has not been exercised on a real Linux GPU where vsync is
+  genuinely broken, because nothing here reproduces that.
+- ~~`installer/licenses/EULA.txt` says "Version 2.0.0 — 8 September 2026" while
+  the bump landed on the 9th.~~ **Answered 10 Sep.** The date was deliberate —
+  a licence is dated by when its *terms* were written, and they have not
+  changed — but the line read as one thing dated wrongly rather than two facts
+  side by side. It now says "Applies to version 2.0.0 · terms of 8 September
+  2026", which is both, unambiguously.
 
 
 ## Notes
