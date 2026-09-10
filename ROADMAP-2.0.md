@@ -109,10 +109,13 @@ A monospace editor beside the existing tweak sliders, on the same panel.
 Ship the highlighter last — a plain `QPlainTextEdit` that compiles on Ctrl+Enter
 is already the feature.
 
-**Still outstanding:** the highlighter. There is no `QSyntaxHighlighter` in the
-tree and the editor renders one colour throughout. Everything else in A2 works
-on real hardware; this bullet is the only part of section A that has not
-shipped.
+**The highlighter shipped afterwards**, once Mint reported it as the only part
+of section A missing. `MilkHighlighter` colours the key, the numbers, the
+shader and equation keywords, and `//` comments, in both themes. The keyword
+rule runs only where `preset_bin` says the value is code — otherwise every
+preset whose title contains `sin` or `min` gets a function-coloured word in
+the middle of its name. Formats are built per panel rather than cached on the
+class, so a theme change is not left painting in the old palette.
 
 ### A3. Colour randomiser — done, as a hue shift
 

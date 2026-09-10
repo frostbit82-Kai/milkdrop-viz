@@ -15,7 +15,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import viz_common
-from viz_common import QApplication
+from viz_common import QApplication, theme_colour
 from preset_browser import TweakPanel
 
 ORIGINAL = """[preset00]
@@ -460,6 +460,43 @@ def the_rest_of_the_warn_channel_is_not_an_error():
     cb(b'[TextureManager] Failed to find requested texture "grad3"', 4, None)
     assert viz_common._LAST_PM_ERROR == "", \
         f"benign warning reported as an error: {viz_common._LAST_PM_ERROR!r}"
+
+
+def _colours(panel, line):
+    """What the highlighter painted on one line, as {colour: "text"}."""
+    panel._code.setPlainText(line)
+    block = panel._code.document().findBlockByNumber(0)
+    out = {}
+    for r in block.layout().formats():
+        colour = r.format.foreground().color().name()
+        out.setdefault(colour, "")
+        out[colour] += line[r.start:r.start + r.length]
+    return out
+
+
+def the_key_and_the_numbers_are_coloured():
+    _host, panel = _panel()
+    painted = _colours(panel, "fDecay=0.960")
+    assert theme_colour("link") in painted, painted
+    assert "fDecay" in painted[theme_colour("link")], painted
+    assert painted.get(theme_colour("code_num"), "") == "0.960", painted
+
+
+def a_word_in_a_title_is_not_a_shader_keyword():
+    """The rules run on values, and a title is a value. `preset_bin` is what
+    separates the two -- without it every preset whose name contains `sin` or
+    `min` gets a function-coloured word in the middle of it."""
+    _host, panel = _panel()
+    painted = _colours(panel, "sTitle=cos and sin")
+    assert theme_colour("code_kw") not in painted, painted
+    painted = _colours(panel, "warp_1=ret = sin(uv.x);")
+    assert "sin" in painted.get(theme_colour("code_kw"), ""), painted
+
+
+def a_line_that_is_not_key_equals_value_is_left_alone():
+    _host, panel = _panel()
+    assert _colours(panel, "   ") == {}
+    assert list(_colours(panel, "[preset00]")) == [theme_colour("muted")]
 
 
 for name, fn in list(globals().items()):

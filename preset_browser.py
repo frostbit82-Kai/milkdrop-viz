@@ -25,6 +25,7 @@ from viz_common import (
     QComboBox, SPRITE_MOTIONS, SPRITE_BLENDS, MAX_SPRITES,
     QPlainTextEdit, QCheckBox, QShortcut, QKeySequence, QFontDatabase,
     shift_preset_colours, add_per_frame_line, mashup_preset, QTextCursor,
+    MilkHighlighter,
 )
 
 logger = logging.getLogger(__name__)
@@ -126,6 +127,10 @@ class TweakPanel(QWidget):
         self._code.setFont(QFontDatabase.systemFont(
             QFontDatabase.SystemFont.FixedFont))
         self._code.setMinimumHeight(190)
+        # Held on the panel: a QSyntaxHighlighter is owned by its document on
+        # the C++ side, but dropping the last Python reference collects the
+        # subclass and the editor goes plain again.
+        self._code_hl = MilkHighlighter(self._code.document())
         code_lay.addWidget(self._code, 1)
 
         self._code_error = QLabel()

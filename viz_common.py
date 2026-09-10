@@ -2750,7 +2750,7 @@ for _mod, _names in (
     (QtCore, ("Qt", "QObject", "QPoint", "QSize", "QTimer", "QEvent", "QThread",
               "QUrl")),
     (QtGui,  ("QKeySequence", "QFont", "QFontDatabase", "QShortcut",
-              "QTextCursor",
+              "QTextCursor", "QSyntaxHighlighter", "QTextCharFormat",
               "QCursor", "QAction", "QActionGroup",
               "QIcon", "QImage", "QPixmap", "QColor", "QDesktopServices")),
     (QtWidgets, ("QApplication", "QMenu", "QDialog", "QFormLayout",
@@ -2863,6 +2863,8 @@ _THEME_PALETTES = {
         "muted":         "#9a9a9a",
         "bad":           "#e0706a",
         "link":          "#e0b44a",
+        "code_kw":       "#7fb7d9",
+        "code_num":      "#b5c46a",
         "field":         "#1e1e1e",
         "border":        "rgba(255, 255, 255, 40)",
         "sel_bg":        "#3a6ea5",
@@ -2900,6 +2902,8 @@ _THEME_PALETTES = {
         "muted":         "#5f5f5f",
         "bad":           "#b3261e",
         "link":          "#8a5d00",
+        "code_kw":       "#1c5f86",
+        "code_num":      "#4a6112",
         "field":         "#ffffff",
         "border":        "rgba(0, 0, 0, 55)",
         "sel_bg":        "#3a6ea5",
@@ -3241,6 +3245,83 @@ def keep_dialogs_above_visuals(app, host):
 def theme_colour(key: str, theme: str = None) -> str:
     """One palette entry, for the few labels that set their own colour."""
     return _THEME_PALETTES[resolve_theme(theme)].get(key, "")
+
+
+class MilkHighlighter(QSyntaxHighlighter):
+    """Colour a .milk file in the Code tab.
+
+    A .milk is `key=value` per line, and the shader bodies are values like
+    every other line -- `warp_1=` through `warp_20=` concatenate into one HLSL
+    program. So the key is coloured separately from what follows it, and the
+    keyword rule is applied only where the value is *code*, which `preset_bin`
+    already knows: `sin` in a warp shader is a function, `sin` in
+    `sTitle=cos and sin` is a word in a title.
+    """
+
+    #: HLSL types and the built-ins Milkdrop's own shaders lean on, plus the
+    #: per-frame equation keywords. One list on purpose: the two languages are
+    #: never in the same *value*, so there is nothing to tell apart.
+    _WORDS = (
+        "float float2 float3 float4 float2x2 float3x3 float4x4 half int bool "
+        "void return if else while for sampler sampler2D sampler3D "
+        "tex2D tex3D tex2Dbias lerp saturate frac fmod pow exp exp2 log log2 "
+        "sqrt rsqrt abs sign min max clamp step smoothstep length normalize "
+        "dot cross reflect ddx ddy sin cos tan asin acos atan atan2 "
+        "floor ceil round trunc mul div rand above below equal bnot bor band "
+        "sigmoid sqr rad deg megabuf gmegabuf loop while exec2 exec3"
+    ).split()
+
+    @staticmethod
+    def _build_rules():
+        """Not cached on the class: the formats hold resolved colours, and a
+        cached set would still be in the old palette after a theme change."""
+        import re
+
+        def fmt(colour, italic=False):
+            f = QTextCharFormat()
+            f.setForeground(QColor(colour))
+            if italic:
+                f.setFontItalic(True)
+            return f
+
+        # Order matters: comments are applied last so a // inside a shader
+        # body wins over anything coloured underneath it. `code_only` says
+        # whether the rule may run on a plain `key=value` line.
+        return [
+            (re.compile(r"\b\d+\.?\d*(?:[eE][-+]?\d+)?\b"),
+             fmt(theme_colour("code_num")), False),
+            (re.compile(r"\b(?:%s)\b" % "|".join(MilkHighlighter._WORDS)),
+             fmt(theme_colour("code_kw")), True),
+            (re.compile(r"//[^\n]*"),
+             fmt(theme_colour("muted"), italic=True), False),
+        ]
+
+    def __init__(self, document):
+        super().__init__(document)
+        import re
+        self._value_rules = self._build_rules()
+        self._key = re.compile(r"^[ \t]*([A-Za-z_][A-Za-z_0-9]*)[ \t]*=")
+        self._section = re.compile(r"^\[[^\]]*\][ \t]*$")
+        self._key_fmt = QTextCharFormat()
+        self._key_fmt.setForeground(QColor(theme_colour("link")))
+        self._sec_fmt = QTextCharFormat()
+        self._sec_fmt.setForeground(QColor(theme_colour("muted")))
+
+    def highlightBlock(self, text: str):
+        if self._section.match(text):
+            self.setFormat(0, len(text), self._sec_fmt)
+            return
+        m = self._key.match(text)
+        if not m:
+            return                      # not a key=value line; leave it plain
+        self.setFormat(m.start(1), m.end(1) - m.start(1), self._key_fmt)
+        start = m.end()
+        is_code = bool(preset_bin(text))
+        for pattern, fmt, code_only in self._value_rules:
+            if code_only and not is_code:
+                continue
+            for hit in pattern.finditer(text, start):
+                self.setFormat(hit.start(), hit.end() - hit.start(), fmt)
 
 
 def _build_qss(template: str, theme: str = None) -> str:
