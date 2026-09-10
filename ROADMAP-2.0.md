@@ -12,6 +12,11 @@ VERSION stays 1.7.0 until the whole of section A ships. The Inno Setup `AppId`
 GUID never changes, 2.0 or not — it is what makes the installer an upgrade
 rather than a second copy.
 
+**Section A is done as of 2026-09-09** — A1 `20c81a4`, A2 `86bd51f`,
+A3 and A4 `1501131`, A5 `7362428`. B, C and D are all optional to the version
+number; the release is whatever ships alongside them. Still to do before the
+bump: run it on Mint, then match Windows.
+
 ## Already shipped — not in scope
 
 Listed because they read like MilkDrop 3 features and are not work:
@@ -42,13 +47,13 @@ source is not somewhere to start living.
 
 ---
 
-## A. Preset Studio
+## A. Preset Studio — done
 
 The plumbing is done. `preset_text()`, `preview_preset(text)`, `save_preset_as()`
 and `revert_preset()` already exist and already work — the tweak panel drives
 them with sliders. Everything below is a new face on calls that ship today.
 
-### A1. Bind the preset-failure callback — do this first
+### A1. Bind the preset-failure callback — done, and it was half the story
 
 `projectm_set_preset_switch_failed_event_callback` hands back a message and a
 filename. Bind it the way the log callback is bound at `viz_common.py:1390` —
@@ -63,7 +68,13 @@ editor.
 Surfaces as: the failure text under the editor, and the toast that already exists
 for a libprojectM too old to load from a string.
 
-### A2. Shader and preset code editor
+**What the real run found:** the callback covers preset *parse* failures only.
+A preset that parses and whose shader will not compile is logged instead, and
+projectM renders on with that stage dropped — which is the error somebody
+editing shader code hits most. Both are now kept, and the log one is read back
+three frames later because it is not written until the preset is drawn.
+
+### A2. Shader and preset code editor — done
 
 A monospace editor beside the existing tweak sliders, on the same panel.
 
@@ -77,7 +88,7 @@ A monospace editor beside the existing tweak sliders, on the same panel.
 Ship the highlighter last — a plain `QPlainTextEdit` that compiles on Ctrl+Enter
 is already the feature.
 
-### A3. Colour randomiser
+### A3. Colour randomiser — done, as a hue shift
 
 MilkDrop 3's `c` key. Rewrite the float3/float4 literals in the comp and warp
 shader text, push through `preview_preset()`, keep the previous text for a
@@ -87,12 +98,12 @@ Text-only, no engine involvement. Refuse to touch anything outside the shader
 blocks — the existing tweak code already holds that line and the reason is in
 `test_tweak.py`'s docstring: a `.milk` file is somebody else's work.
 
-### A4. Search and replace, Q-variable injection
+### A4. Search and replace, Q-variable injection — done
 
 Falls out of A2 for nothing. A find/replace bar over the editor buffer, and a
 button that inserts a `q1=` line into the right section.
 
-### A5. Mashup
+### A5. Mashup — done
 
 Swap named sections between two presets — MilkDrop 3's `a`/`m`/`z` keys, minus
 the deep-mashup mode they themselves call unstable.

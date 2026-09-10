@@ -105,8 +105,8 @@ the only way to see why a frozen build failed.
 `QT_QPA_PLATFORM=offscreen`: `browser_search`, `browser_title`, `display_picker`,
 `recording` (needs ffmpeg and ffprobe), `clip_audio` (same), `thumbnails`,
 `screensaver`, `wallpaper`, `packs`, `settings_diff`, `shuffle`, `theme`,
-`idle_pause`, `collections`, `backup`, `tweak`, `sprites`. All seventeen must
-pass before a release.
+`idle_pause`, `collections`, `backup`, `tweak`, `sprites`, `code_editor`. All
+eighteen must pass before a release.
 
 There is no display in an agent shell and SDL needs one, so:
 
@@ -121,9 +121,14 @@ There is no display in an agent shell and SDL needs one, so:
   you. `xwininfo -root -children` lists *unmapped* windows, so a window in that
   list proves nothing — grep its `Map State: IsViewable`. And
   `xdotool search --onlyvisible` finds nothing at all under a WM-less Xvfb.
-- **Kill background helpers by PID.** `pkill -f "Xvfb :77"` also matches the
-  agent's own shell command line, which contains that string, so it kills the
-  shell running the test.
+- **Kill background helpers by PID, listed in a separate call.** Any
+  `pkill -f` / `pgrep -f` / `ps | grep` whose pattern text also appears
+  anywhere in the same command line matches the agent's own shell and kills
+  it (exit 144). Bracketing the pattern is not enough, and this has now
+  happened three ways: `pkill -f 'scratchpad/.../BomsAIVisualizer'`;
+  `pgrep -f 'main[.]py'` where a `grep ... main.py` argument sat later on the
+  same line; and `ps | grep 'Xephyr :7'` in a command that went on to launch
+  Xephyr. List the PIDs in one call, kill the numbers in the next.
 - **Never build a test rig out of symlinks to the source files.** Python resolves
   symlinks in `__file__` for *imported* modules but not for `__main__`, so a rig
   whose `main.py` and `config.py` are links reads and writes the real repo's
@@ -853,5 +858,35 @@ There is no display in an agent shell and SDL needs one, so:
   shell. It catches MSVC tools too: `dumpbin /imports foo.dll` becomes
   `dumpbin 'C:\Program Files\Git\imports' foo.dll` and reports LNK1181 on a
   file you never named.
+
+- **`ffmpeg -f x11grab -i :0` captures black on this machine.** The desktop is
+  Wayland and `:0` is Xwayland, whose root window is not what is on screen. The
+  app runs there fine and `xdotool` drives it fine — only the screenshot is
+  empty, which reads as "the app drew nothing". Nested Xephyr is the only way
+  to see the UI: `Xephyr :7 -screen 1280x820 -ac -noreset`, `xfwm4` inside it,
+  then grab `:7`.
+- **`xdotool type` swallows newlines.** A multi-line string typed into a
+  `QPlainTextEdit` arrives as one line, which for a `.milk` file means a preset
+  that parses into nothing and reports no error. Send each line separately with
+  `xdotool key Return` between them.
+- **A source checkout ignores `XDG_CONFIG_HOME`.** `config.py:_base_dir` keeps
+  `config.json` beside the code unless `sys.frozen`, so a rig that redirects
+  that variable silently runs on the repo's own config — the photosensitivity
+  dialog then blocks startup and the app prints nothing at all for the whole
+  run. The bench script works because it runs the *frozen* build. From source,
+  edit the repo's `config.json` and restore it afterwards.
+- **A preset with no `PSVERSION` is read as version 1 and its shader lines are
+  never compiled.** Testing shader-error reporting with a hand-written preset
+  therefore reports success no matter how broken the shader is. Any fixture
+  meant to fail needs `MILKDROP_PRESET_VERSION`, `PSVERSION` and
+  `PSVERSION_WARP`. Same reason `mashup_preset` carries PSVERSION across with
+  the shader it belongs to.
+- **projectM reports a preset it cannot parse and a shader it cannot compile
+  through two different channels.** `projectm_set_preset_switch_failed_event_callback`
+  fires only from the `catch` around `CreatePresetFromStream`, so it covers
+  parse failures alone; a shader that will not compile is merely logged, and
+  projectM renders on with that stage dropped. The editor needs both, and the
+  log one does not arrive until the preset is *drawn* — `_edit_error_in` waits
+  three frames rather than reading back the previous answer.
 
 See PORTING.md for port status and the Windows setup recipe.
