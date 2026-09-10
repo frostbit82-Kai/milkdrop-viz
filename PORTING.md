@@ -467,11 +467,24 @@ Linux is finished for 2.0's section A and for C1. Windows now has to match it.
 What follows is the whole of what changed since Windows was last opened, and
 what to look at rather than re-derive.
 
-**Set the checkout up, do not copy one.** `git clone` the repo and run
-`setup_windows.ps1`. A folder copied off a Linux box brings a `.venv` full of
-Linux wheels and a `__pycache__` to match; `config.json`, `ratings.json` and
-`keymaps.json` are gitignored and are that machine's own state, not something
-to inherit.
+**Pull the checkout that is already there — do not copy one, and do not clone
+a second.** Each machine keeps its own checkout and they meet on GitHub:
+Windows at `Projects\milkdrop-viz` on the NTFS drive, Mint at
+`~/mintdrop-viz`, Linux at `~/Projects/milkdrop-viz`. The Windows one carries
+about 1.4 GB that is **not** in git and is expensive to rebuild — a native
+`.venv\Scripts` and the 115 MB LGPL `ffmpeg.exe` that `build_windows.ps1`
+fetches once — so `git pull` there and leave the rest alone. A fresh clone
+throws both away; a folder copied off a Linux box is worse, bringing a `.venv`
+full of Linux wheels. `config.json`, `ratings.json` and `keymaps.json` are
+gitignored on purpose: they are each machine's own state, not something to
+inherit.
+
+One thing a pull does not fix. Files that predate `.gitattributes` in a
+checkout keep whatever line endings they were committed with, because an
+unchanged file never goes through the filter — the three `.ps1` files arrived
+here as LF that way. `git ls-files '*.ps1' '*.bat' | xargs rm` then
+`git checkout -- .` re-runs the filter, and the tree stays clean afterwards
+because the index side is unchanged.
 
 **What landed, newest first**
 
