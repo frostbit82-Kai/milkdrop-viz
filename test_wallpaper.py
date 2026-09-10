@@ -269,11 +269,21 @@ class FakeXlib:
         #: _NET_RESTACK_WINDOW all the same -- xfwm4 does exactly this.
         self.refuses_restack = False
 
+    #: Atoms sit above what a signed 32-bit int holds, so a ctypes signature
+    #: that narrows one to c_int is caught here rather than sailing past on
+    #: small numbers. How far above depends on the C ABI running the test: an
+    #: X11 format-32 property is an array of *long*, 8 bytes on Linux and 4 on
+    #: Windows, so a base over 2**32 is not something a Windows ctypes can
+    #: hold -- it truncates, and five tests then fail on the fixture rather
+    #: than on the shipped code. The top bit is what the guard actually needs.
+    _ATOM_BASE = (0x1_0000_0001 if ctypes.sizeof(ctypes.c_ulong) >= 8
+                  else 0x8000_0001)
+
     @property
     def bottom(self):
         return self.stack[0] if self.stack else 0
     def atom(self, name):
-        return self.atoms.setdefault(name, 0x1_0000_0001 + len(self.atoms))
+        return self.atoms.setdefault(name, self._ATOM_BASE + len(self.atoms))
     def XInternAtom(self, _dpy, name, _exists):
         return self.atom(name.decode())
     def XChangeProperty(self, _dpy, _win, prop, typ, fmt, _mode, buf, n):
