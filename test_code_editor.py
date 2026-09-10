@@ -408,10 +408,15 @@ def a_shader_that_will_not_compile_is_read_off_the_log():
 
         [FinalComposite] Error compiling composite warp shader code
 
-    at level 4 -- WARN, not ERROR. Every compile failure the library has goes
-    out at that level, so a threshold of "ERROR and above" caught none of
-    them and the editor showed no error line for the one failure that editing
-    shader code causes constantly. Which is the whole of A1.
+    at level 4 -- WARN, not ERROR, so a threshold of "ERROR and above" caught
+    it and every other composite-shader failure with it, and the editor showed
+    no error line for the one failure that editing a comp shader causes.
+    Which is the whole of A1.
+
+    The level is chosen per *stage*, not per severity: warp failures are
+    LOG_ERROR (PerPixelMesh.cpp:61,80) and composite ones LOG_WARN
+    (FinalComposite.cpp:49,87), which is why breaking a warp shader on the
+    other machine looked fine.
     """
     cb = _log_callback()
     viz_common._LAST_PM_ERROR = ""
@@ -426,11 +431,24 @@ def the_other_compile_failures_are_caught_too():
     """The library has several spellings and they are not interchangeable."""
     for line in (b"[PerPixelContext] Could not compile per-pixel code.",
                  b"[MilkdropShader] Error translating HLSL ",
+                 b"[FinalComposite] Error loading composite warp shader code: "
+                 b"x - Using fallback shader.",
                  b"[PerPixelMesh] Error compiling warp shader code."):
         cb = _log_callback()
         viz_common._LAST_PM_ERROR = ""
         cb(line, 4, None)
         assert viz_common._LAST_PM_ERROR, f"dropped: {line!r}"
+
+
+def an_error_level_failure_is_still_kept_on_its_level_alone():
+    """The text match is an addition, not a replacement. A warp shader that
+    will not compile goes out at ERROR (PerPixelMesh.cpp:80) and so does the
+    GLSL compiler's own message (Shader.cpp:215), which has no fixed wording
+    at all -- dropping the level test would lose it."""
+    cb = _log_callback()
+    viz_common._LAST_PM_ERROR = ""
+    cb(b"0:42(7): error: no matching function for call to zzz()", 5, None)
+    assert viz_common._LAST_PM_ERROR, "an ERROR-level line was dropped"
 
 
 def the_rest_of_the_warn_channel_is_not_an_error():

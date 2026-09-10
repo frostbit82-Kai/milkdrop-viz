@@ -74,18 +74,26 @@ projectM renders on with that stage dropped — which is the error somebody
 editing shader code hits most. Both are now kept, and the log one is read back
 three frames later because it is not written until the preset is drawn.
 
-**What Mint found, 9 Sep 2026:** the log half never reached the editor. Every
-compile failure libprojectM has is logged at **WARN**, not ERROR — measured
-against the shipped 4.2.0 library, where a comp shader with a bad type gives
-`[FinalComposite] Error compiling composite warp shader code` at level 4 — and
-the capture kept only level ≥ 5. So `_LAST_PM_ERROR` stayed empty and the
-editor showed nothing for exactly the failure this item exists to surface. The
-timing was never the problem, and 400 ms was always long enough. Matched on the
-message text now rather than on the level alone, because the rest of WARN is
-noise the editor must not present as a failure — most of it
-`[TextureManager] Failed to find requested texture`, which a preset pack
-triggers constantly and which stops nothing being drawn. `test_code_editor.py`
-covers both directions.
+**What Mint found, 9 Sep 2026:** the log half never reached the editor. A comp
+shader with a bad type gives `[FinalComposite] Error compiling composite warp
+shader code` at level 4 — WARN — and the capture kept only level ≥ 5, so
+`_LAST_PM_ERROR` stayed empty and the editor showed nothing for exactly the
+failure this item exists to surface. The timing was never the problem, and
+400 ms was always long enough.
+
+Checked against the 4.2.0 source afterwards, because neither machine could see
+the whole shape on its own: libprojectM picks the level by **stage**, not by
+severity. Warp-shader failures are `LOG_ERROR` (`PerPixelMesh.cpp:61,80`),
+composite ones are `LOG_WARN` (`FinalComposite.cpp:49,87`), and the per-pixel,
+per-frame, shape and wave failures are thrown rather than logged and arrive
+through the failed-preset callback instead. Breaking a warp shader here
+reported at ERROR and looked fine; breaking a comp shader on Mint reported at
+WARN and vanished. Matched on the message text as well as the level now, and
+not on the whole of WARN, because the rest of that level is noise the editor
+must not present as a failure — most of it `[TextureManager] Failed to find
+requested texture`, which a preset pack triggers constantly and which stops
+nothing being drawn. `test_code_editor.py` covers both directions and both
+levels.
 
 ### A2. Shader and preset code editor — done
 

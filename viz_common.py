@@ -1399,14 +1399,28 @@ _LOG_CB = None
 _PM_LOG_WARN = 4
 _PM_LOG_NAMES = {4: "warn", 5: "error", 6: "fatal"}
 
-#: What libprojectM says when an edit will not compile. Measured against the
-#: shipped 4.2.0 library, because the level is not the one you would expect:
-#: every one of these is logged at WARN, not ERROR, so a threshold of
-#: "ERROR and above" captures none of them. Matched on the text instead --
-#: the rest of WARN is noise the editor must not present as a failure, and
-#: most of it is `[TextureManager] Failed to find requested texture`, which a
-#: preset pack triggers constantly and which stops nothing being drawn.
-_PM_COMPILE_FAIL = ("error compiling", "error translating", "could not compile")
+#: What libprojectM says when an edit will not compile. The level is not a
+#: usable filter, because it is chosen per *stage* rather than per severity --
+#: read off the 4.2.0 source at the pinned commit:
+#:
+#:   warp shader     PerPixelMesh.cpp:61,80    LOG_ERROR  (5)
+#:   composite       FinalComposite.cpp:49,87  LOG_WARN   (4)
+#:   the GLSL text   Shader.cpp:215            LOG_ERROR  (5)
+#:   per-pixel, per-frame, shape, wave         thrown, never logged above DEBUG
+#:
+#: So "ERROR and above" silently drops every composite-shader failure, which is
+#: what editing a comp shader produces. Matched on the text as well as the
+#: level. Not the whole of WARN: most of that level is `[TextureManager] Failed
+#: to find requested texture`, which a preset pack triggers constantly and
+#: which stops nothing being drawn, and a red line under the editor on every
+#: other preset is worse than the silence it replaced.
+#:
+#: "could not compile" is the per-pixel and per-frame spelling. Those are
+#: thrown rather than logged, so they arrive through the failed-preset callback
+#: instead and this never matches them -- kept because it costs nothing and the
+#: two channels have swapped before.
+_PM_COMPILE_FAIL = ("error compiling", "error translating",
+                    "error loading", "could not compile")
 
 #: The newest failure the library logged. A preset that cannot be *parsed*
 #: raises through projectm_set_preset_switch_failed_event_callback, but a
