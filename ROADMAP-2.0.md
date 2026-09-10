@@ -160,10 +160,22 @@ first where it is nearly free.
 
 Not features. Things believed to work that nobody has run.
 
-- **Microphone capture** on all three backends. The pickers list inputs; nobody
-  has spoken into one.
-- **Bluetooth output**, whose monitor source appears and disappears with the
-  device — the parec backend resolves the default sink's monitor once.
+- **Bluetooth output — verified 2026-09-09**, against a real speaker rather than
+  a stand-in. The picker lists it by its own name ("Monitor of Game Day Party"),
+  capture pinned to it reads the tone back, and on Auto the follow watchdog moves
+  onto it when it takes the default output and back off when it gives it up:
+  `default output changed to 'bluez_output…monitor' — reopening capture`. The
+  worry in the earlier draft — that the monitor is resolved once — was wrong;
+  `_follow_tick` re-asks the backend class every `FOLLOW_POLL_S`.
+  A pinned source that vanishes and returns also recovers, because parec
+  reconnects to a re-created source of the same name by itself.
+  Still unverified: a speaker with a **microphone**, which this one has not got —
+  its card offers `a2dp-sink` and `headset-output`, no source at all.
+- **Microphone capture**, half done. The Linux path opens the machine's real
+  analog input (not a monitor) and delivers chunks continuously; at full input
+  gain the noise floor reads 0.000536, so samples are genuinely arriving. What
+  nobody has done is speak into one and watch the visual react, and the Windows
+  and sounddevice backends have not been tried at all.
 
 ---
 
@@ -173,4 +185,4 @@ A1, then A2. Those two are the release. A3 and A4 are cheap once the editor is
 there; A5 only if the splitter's round-trip test comes out clean. C1 done.
 B after A, because it is the one item that can cost frame rate. C2 last, or never.
 
-D can be done from a chair with a microphone and is worth doing before any of it.
+D's Bluetooth half is done. What is left of it needs a chair and a microphone.

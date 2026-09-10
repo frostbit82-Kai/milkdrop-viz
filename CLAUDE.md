@@ -889,4 +889,19 @@ There is no display in an agent shell and SDL needs one, so:
   log one does not arrive until the preset is *drawn* — `_edit_error_in` waits
   three frames rather than reading back the previous answer.
 
+- **`xdotool key --window <id>` does not reach SDL.** It sends the event with
+  XSendEvent, and SDL ignores synthetic key events; the app sits there while the
+  test reports success. Activate the window and send the key with plain
+  `xdotool key`. `--window` is fine for pointer clicks, which is why half a rig
+  can look like it works.
+- **An input source can be open, delivering chunks, and still read exactly
+  0.000000** — this machine's analog input sits at 2% (-101 dB), and nothing
+  about the capture path says so. Raise it with
+  `pactl set-source-volume <src> 100%` before concluding anything about a
+  microphone, and put it back afterwards.
+- **A parec backend outliving its source proves nothing.** Unload the module
+  behind a monitor and `is_alive()` still says True, because parec stays up and
+  reconnects to a source of the same name when it returns. Liveness is not audio
+  — test with a tone and a peak, never with a process check.
+
 See PORTING.md for port status and the Windows setup recipe.
