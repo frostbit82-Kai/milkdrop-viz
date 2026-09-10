@@ -692,6 +692,91 @@ spoken into one. A headset and one sentence closes it.
 **VERSION is 2.0.0** and does not move again unless asked.
 
 
+### What Mint found — 2026-09-10
+
+Answering the three items above, in order. The checkout was already level with
+`origin/master` on arrival; `git pull --ff-only` changed nothing.
+
+**Everything was run from a package built here, not from source.**
+`installer/build_linux_docker.sh` found no projectM tree at the pin and reused
+`installer/vendor/linux/` as it says it will, and produced
+`BomsAIVisualizer-2.0.0-linux-x86_64.tar.gz`, 86 MB, floor **GLIBC_2.34**. The
+tarball ships a portable `app/` tree, so it was extracted and run in place --
+the installed copy on this box is still 1.7.0 and was left alone.
+
+**1. The screenshot is `store/screenshots/linux-wallpaper.png`** (1920x1080,
+2.0.0, Cinnamon 6.0.5 on X11). It had to be **force-added**: `.gitignore:36`
+excludes `store/screenshots/` because store media is uploaded by hand and does
+not normally travel. This one does travel -- it is the courier for the site
+guide -- so it is in the tree deliberately and should be **deleted from this
+repo once it is in `bomsai-software`**, or the ignore rule stops meaning
+anything.
+
+Read before shipping, as instructed: the six desktop icons are `dataset_1MM`,
+`Downloads`, and launchers for Chrome Remote Desktop, Firefox, Chrome and
+VirtualBox; the two desklets show CPU and disk *percentages*; the panel is
+launchers, tray and a clock. No filenames, no titles, no notifications, nothing
+personal. The Claude window was minimised for the shot and restored after, so
+the panel's window list is empty, which reads cleaner than it would otherwise.
+
+The stacking held on the real session exactly as `c6378b4` intended --
+`_NET_CLIENT_LIST_STACKING` bottom to top was **visualiser, nemo-desktop,
+everything else**, and nemo-desktop went on drawing icons throughout, which is
+the failure the Xephyr attempt hit. The window carried
+`_NET_WM_WINDOW_TYPE_DESKTOP` plus SKIP_PAGER, SKIP_TASKBAR and STICKY. Worth
+knowing: **muffin does not keep `_NET_WM_STATE_BELOW` on the window** -- it is
+asked for and is not in `_NET_WM_STATE` afterwards. The stack is right anyway,
+because the EWMH restack is what does the work; a check written against BELOW
+would report a failure that is not there.
+
+**2. All twenty suites pass** on Python 3.10 / PySide6 6.11.2 -- a different
+interpreter and numpy (2.2.6) from the box they were written on, which is worth
+something on its own. `check_sync.py` skips here: no Bomsai Player copy beside
+this clone, so the two `viz_common.py` copies are still unverified from Mint
+and must be checked on Linux after pulling.
+
+- **`49c7bd6`, the highlighter: works.** Read back off the document rather than
+  eyeballed -- key `#e0b44a`, number `#b5c46a`, `tex2D` inside `warp_7`
+  `#7fb7d9`, `//Geiss's Motion Blur` `#9a9a9a` italic, blank line untouched.
+  Four roles, four colours, and the `QSyntaxHighlighter` was not collected.
+- **`8bcf446`, the vsync probe: silent, which is the pass.** AMD Pitcairn,
+  Mesa 23.2.1, nothing printed at startup and no swap-interval change. The
+  Windows stall does not reproduce on this card under Mesa.
+- **`0158ca7`: confirmed against Mint's own binary, not just the source.** A
+  probe broke one `float2` declaration at a time in a preset carrying both
+  shader blocks and read the level the callback was handed:
+
+  | what was broken | level | message |
+  |---|---|---|
+  | `warp_4` | **5 ERROR** | `[PerPixelMesh] Error compiling warp shader code.` |
+  | `comp_6` | **4 WARN** | `[FinalComposite] Error compiling composite warp shader code - Using fallback shader.` |
+  | nothing (control) | — | nothing logged |
+
+  Both filled `_LAST_PM_ERROR` through the shipped predicate, so the editor
+  reports either kind. Per stage, not per severity, exactly as written down.
+  The `[TextureManager] Failed to find requested texture` noise that argues
+  against widening to the whole of WARN showed up unprompted in the wallpaper
+  run, for `"grad3"`.
+
+**3. The microphone cannot be closed here — this box has no microphone.**
+`pactl` reports one input card whose Front Microphone and Rear Microphone ports
+are both **"not available"**, with the active port on **Line In**; nothing is
+plugged into either jack. Roadmap D's last item needs a machine with a headset,
+and there is nothing about the Linux path Mint can add without one.
+
+**And one thing that was not on the list.** `import sounddevice` raises
+`OSError`, not `ImportError`, when PortAudio is missing, and the guard in
+`viz_common` caught only `ImportError` -- so a Linux box that never installed
+`libportaudio2` could not start the app at all, over a capture backend that
+Linux does not even lead with. It hid because every machine that has run this
+also has the system package; reproduced by poisoning
+`ctypes.util.find_library` in a subprocess. Fixed, with `test_audio_import.py`
+covering it, and the comment in `bomsai-visualizer.spec` claiming the bundled
+`libportaudio.so.2` is what sounddevice finds is corrected -- it is not, and
+shipping an unversioned `libportaudio.so` beside it is the untested change that
+would actually switch the fallback back on.
+
+
 ## Notes
 
 - `SDL_GetWindowWMInfo` is used once, for the embedded-in-BomsAI-Studio case. The
