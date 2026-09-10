@@ -508,9 +508,11 @@ and on Mint's own hardware, so a difference is a Windows difference.
    nobody has spoken into one, and the Windows and sounddevice backends have
    not been tried at all. A headset and one sentence closes roadmap D.
 
-**VERSION stays 1.7.0.** It is bumped to 2.0.0 only when asked, and only once
-Windows matches. The Inno `AppId` GUID never changes, 2.0 or not — it is what
-makes the installer an upgrade rather than a second copy.
+**VERSION is 2.0.0.** Bumped on 2026-09-09, once section A was complete; both
+build scripts read the `VERSION` file, so nothing else needs editing to make a
+2.0.0 package. The Inno `AppId` GUID does **not** move with it — that GUID is
+what makes the installer an upgrade rather than a second copy, and it never
+changes.
 
 **`wallpaper-mode.png` still needs re-shooting on Windows** for the store
 listing.
