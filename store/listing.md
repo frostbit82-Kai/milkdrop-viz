@@ -202,6 +202,17 @@ no ads, no in-app purchases, no gambling.
 - EULA: paste `installer/licenses/EULA.txt` into the store's own field.
   Complete — section 12 names Wisconsin.
 
+## Not yet in this listing — 2.0
+
+**Every word above the screenshot list is 1.x copy.** Name, short description,
+description, feature bullets and search terms were all written before section
+A, and none of them mentions the Preset Studio, editing a preset's own text,
+shader compile errors being reported, or *Always on top*. The screenshots
+below have been brought up to 2.0; the copy has not. Deliberate — it is being
+written last, so it is written once — but it must not go to submission this
+way, because the headline feature of the version being submitted is currently
+invisible in the listing.
+
 ## Screenshots to capture  (Microsoft Store wants 1366×768 or larger, up to 10)
 
 **Read every browser screenshot before it goes in.** Preset names come from
@@ -218,13 +229,22 @@ Shoot these in order — they tell the story in the order the description does:
 2. The same, different preset, showing texture-heavy work rendering properly.
 3. The browser sorted by rating — the top of the list, all high scores, with
    thumbnails filled in. The clearest single picture of what this app is for.
-4. Your own picture laid over a preset — the overlay tab open beside it.
-5. The tweak sliders, mid-change, on a preset that is visibly responding.
-6. The search box with a name typed and the list narrowed.
-7. The Collections menu open, showing named sets.
-8. Wallpaper mode: the desktop, icons over the visuals, tray icon visible.
-9. Settings, showing the preset and texture folder rows.
+4. **The Preset Studio** — the Code tab open on a preset with a real shader,
+   syntax-coloured, and the red line under the box after breaking one on
+   purpose. This is 2.0's headline and the thing projectM's own free player
+   cannot do; the Linux version of this shot is
+   `bomsai-software/src/assets/apps/milkdrop-visualizer/code-error.webp`.
+5. Your own picture laid over a preset — the overlay tab open beside it.
+6. The tweak sliders, mid-change, on a preset that is visibly responding.
+7. The search box with a name typed and the list narrowed.
+8. The Collections menu open, showing named sets.
+9. Wallpaper mode: the desktop, icons over the visuals, tray icon visible.
 10. Get presets, mid-download, progress bar visible.
+
+Settings was cut when the Preset Studio went in: the Store takes ten, and a
+folder-picker is the least persuasive of the eleven. Get presets stayed
+because this app ships no presets, so where they come from is the first
+question a buyer has.
 
 A short recorded clip is also the best possible store video — the app now makes
 one of itself.
