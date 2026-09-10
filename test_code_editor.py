@@ -32,6 +32,13 @@ wave_g=0.000
 wave_b=0.000
 """
 
+DONOR = """PSVERSION=3
+PSVERSION_WARP=3
+[preset00]
+fDecay=0.100
+warp_1=`ret = 9;
+"""
+
 WITH_CODE = """[preset00]
 fDecay=0.960
 per_frame_1=q1=bass
@@ -51,6 +58,7 @@ class FakeHost:
         self.locked = False
         self.toggles = 0
         self.error = ""
+        self.donor = ("other one", DONOR)
 
     # editing
     def can_tweak(self):              return True
@@ -63,6 +71,8 @@ class FakeHost:
     def save_preset_as(self, text, name):
         self.saved = (text, name)
         return ""
+
+    def donor_preset(self):           return self.donor
 
     # locking
     def is_locked(self):              return self.locked
@@ -305,6 +315,58 @@ def a_per_frame_line_lands_in_the_per_frame_block():
     assert lines.index("per_frame_3=") < lines.index("warp_1=`ret=0;"), lines
     assert panel._code.textCursor().position() == len("\n".join(
         lines[:lines.index("per_frame_3=") + 1])), "cursor not on the new line"
+
+
+def mashing_plays_the_result_and_names_what_it_took():
+    host, panel = _panel()
+    _type(panel, ORIGINAL)
+    panel._apply_code()
+    app.processEvents()
+    panel._mash_bins.setCurrentIndex(1)          # Warp shader
+    panel._mash_up()
+    app.processEvents()
+    out = panel._code.toPlainText()
+    assert "ret = 9" in out, out
+    assert "shader_body { ret = 0; }" not in out, "kept the old warp shader"
+    assert "fDecay=0.960" in out, "dragged the donor's scalars in"
+    assert host.previewed[-1] == out
+    panel._show_code_error()
+    assert "other one" in panel._code_error.text(), panel._code_error.text()
+
+
+def a_failed_mash_says_why_instead_of_the_donors_name():
+    """The error wins: knowing where it came from is no help when it will not
+    compile."""
+    host, panel = _panel()
+    _type(panel, ORIGINAL)
+    panel._apply_code()
+    app.processEvents()
+    panel._mash_bins.setCurrentIndex(1)
+    panel._mash_up()
+    host.error = "[MilkdropShader] no shader_body"
+    panel._show_code_error()
+    assert "shader_body" in panel._code_error.text()
+
+
+def a_donor_with_nothing_to_give_is_reported():
+    host, panel = _panel()
+    host.donor = ("empty one", "[preset00]\nfDecay=0.2\n")
+    _type(panel, "[preset00]\nfDecay=0.960\n")
+    panel._apply_code()
+    app.processEvents()
+    played = len(host.previewed)
+    panel._mash_bins.setCurrentIndex(1)
+    panel._mash_up()
+    assert "nothing" in panel._code_error.text() or \
+        "to give" in panel._code_error.text(), panel._code_error.text()
+    assert len(host.previewed) == played, "played an unchanged preset"
+
+
+def no_other_preset_at_all_is_reported():
+    host, panel = _panel()
+    host.donor = ("", "")
+    panel._mash_up()
+    assert "no other preset" in panel._code_error.text()
 
 
 for name, fn in list(globals().items()):

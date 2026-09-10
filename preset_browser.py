@@ -24,7 +24,7 @@ from viz_common import (
     preset_textures, texture_override_path, theme_colour,
     QComboBox, SPRITE_MOTIONS, SPRITE_BLENDS, MAX_SPRITES,
     QPlainTextEdit, QCheckBox, QShortcut, QKeySequence, QFontDatabase,
-    shift_preset_colours, add_per_frame_line, QTextCursor,
+    shift_preset_colours, add_per_frame_line, mashup_preset, QTextCursor,
 )
 
 logger = logging.getLogger(__name__)
@@ -66,6 +66,7 @@ class TweakPanel(QWidget):
         self._base = ""          # the preset file's text, never patched
         self._values = {}        # ini key -> current slider value
         self._touched = set()    # ini keys a slider actually moved
+        self._pending_note = ""  # what to say once the edit has been drawn
         self._rows = {}          # ini key -> (slider, value label)
         self._stale = True       # the preset changed while we were hidden
 
@@ -134,6 +135,42 @@ class TweakPanel(QWidget):
         self._code_error.hide()
         code_lay.addWidget(self._code_error)
 
+        # Two rows: what you can make, then what happens to it. One row put
+        # six controls in 540 pixels and the labels started eating each other.
+        tools = QHBoxLayout()
+        tools.setContentsMargins(0, 0, 0, 0)
+        tools.setSpacing(6)
+        self._mash_bins = QComboBox()
+        for label, bins in (("Both shaders", ("warp", "comp")),
+                            ("Warp shader", ("warp",)),
+                            ("Composite shader", ("comp",)),
+                            ("Motion", ("motion",)),
+                            ("Shapes and waves", ("shapes", "waves")),
+                            ("Everything", ("warp", "comp", "motion",
+                                            "shapes", "waves"))):
+            self._mash_bins.addItem(label, bins)
+        self._mash_bins.setToolTip("What to take from the other preset")
+        tools.addWidget(self._mash_bins, 1)
+        btn_mash = QPushButton("Mash up")
+        btn_mash.setToolTip(
+            "Take that much from another preset at random. Press again for "
+            "another one; Revert puts this preset back.")
+        btn_mash.clicked.connect(self._mash_up)
+        tools.addWidget(btn_mash)
+        btn_pf = QPushButton("+ per-frame")
+        btn_pf.setToolTip(
+            "Add the next free per_frame_N= line, in the right place. "
+            "Type the rest -- q1=bass, and so on.")
+        btn_pf.clicked.connect(self._add_per_frame)
+        tools.addWidget(btn_pf)
+        btn_hue = QPushButton("Shift colours")
+        btn_hue.setToolTip(
+            "Turn every colour in the preset the same way round the hue "
+            "wheel. Press again for another. Revert puts it back.")
+        btn_hue.clicked.connect(self._shift_colours)
+        tools.addWidget(btn_hue)
+        code_lay.addLayout(tools)
+
         code_foot = QHBoxLayout()
         code_foot.setContentsMargins(0, 0, 0, 0)
         code_foot.setSpacing(6)
@@ -146,19 +183,7 @@ class TweakPanel(QWidget):
             "Same as the lock in the right-click menu.")
         self._code_lock.toggled.connect(self._code_lock_toggled)
         code_foot.addWidget(self._code_lock)
-        btn_pf = QPushButton("+ per-frame")
-        btn_pf.setToolTip(
-            "Add the next free per_frame_N= line, in the right place. "
-            "Type the rest -- q1=bass, and so on.")
-        btn_pf.clicked.connect(self._add_per_frame)
-        code_foot.addWidget(btn_pf)
         code_foot.addStretch(1)
-        btn_hue = QPushButton("Shift colours")
-        btn_hue.setToolTip(
-            "Turn every colour in the preset the same way round the hue "
-            "wheel. Press again for another. Revert puts it back.")
-        btn_hue.clicked.connect(self._shift_colours)
-        code_foot.addWidget(btn_hue)
         btn_apply = QPushButton("Apply")
         btn_apply.setToolTip("Play what is in the box now (Ctrl+Enter)")
         btn_apply.clicked.connect(self._apply_code)
@@ -660,7 +685,10 @@ class TweakPanel(QWidget):
             why = self._host.last_preset_error()
         except Exception:
             why = ""
-        self._note(why)
+        # An error wins; otherwise say what the last button actually did,
+        # which would otherwise be wiped by this running 400ms behind it.
+        self._note(why or self._pending_note, bad=bool(why))
+        self._pending_note = ""
 
     def _note(self, text: str, bad: bool = True):
         """One line under the editor. Red when something went wrong."""
@@ -715,6 +743,28 @@ class TweakPanel(QWidget):
         self._code.setTextCursor(cursor)
         self._code.document().setModified(True)
         self._code.setFocus()
+
+    def _mash_up(self):
+        """This preset with part of another one in it, played straight away."""
+        try:
+            name, donor = self._host.donor_preset()
+        except Exception:
+            name, donor = "", ""
+        if not donor:
+            self._note("There is no other preset to take anything from.",
+                       bad=False)
+            return
+        what = self._mash_bins.currentText()
+        base = self._code.toPlainText() or self.current_text()
+        out = mashup_preset(base, donor, self._mash_bins.currentData())
+        if out == base:
+            self._note(f"\u201c{name}\u201d has no {what.lower()} to give.",
+                       bad=False)
+            return
+        self._code.setPlainText(out)
+        self._code.document().setModified(True)
+        self._pending_note = f"{what} from \u201c{name}\u201d."
+        self._apply_code()
 
     def _shift_colours(self):
         """A new colour scheme for the preset on screen, from one keypress.

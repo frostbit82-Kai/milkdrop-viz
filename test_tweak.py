@@ -311,6 +311,139 @@ def patching_real_presets_never_reorders_or_loses_a_line():
         assert len(changed) <= 2, (path, changed)
 
 
+# ── taking a preset apart ────────────────────────────────────────────────────
+
+BASE = """MILKDROP_PRESET_VERSION=201
+PSVERSION=2
+PSVERSION_WARP=2
+PSVERSION_COMP=2
+[preset00]
+fDecay=0.960
+wave_r=1.000
+per_frame_1=q1=bass
+per_pixel_1=zoom=1.01
+wavecode_0_bUseDots=1
+wave_0_per_point1=x=0.5
+shapecode_0_num_inst=1
+shape_0_per_frame1=x=0.5
+warp_1=`shader_body { ret = 0; }
+comp_1=`shader_body { ret = 1; }
+"""
+
+DONOR = """MILKDROP_PRESET_VERSION=201
+PSVERSION=3
+PSVERSION_WARP=3
+PSVERSION_COMP=3
+[preset00]
+fDecay=0.100
+per_frame_1=q1=treb
+warp_1=`shader_body { ret = 9; }
+warp_2=`   // second line of the same shader
+comp_1=`shader_body { ret = 8; }
+"""
+
+
+def a_preset_survives_being_taken_apart_and_put_back():
+    """The property everything else here is built on. A splitter that drops a
+    byte drops somebody else's work."""
+    for text in (BASE, DONOR, COLOURED, "", "no newline at the end"):
+        assert "".join(l for _, l in v.split_preset(text)) == text
+
+
+def real_presets_survive_being_taken_apart_and_put_back():
+    files = _library()
+    if not files:
+        print("      (no preset library configured — skipped)")
+        return
+    for path in files[::max(1, len(files) // 300)][:300]:
+        with open(path, encoding="utf-8", errors="replace") as f:
+            text = f.read()
+        assert "".join(l for _, l in v.split_preset(text)) == text, path
+
+
+def a_colour_is_not_wave_code():
+    """wave_r is the wave's colour and belongs with the scalars. A bin that
+    swept it up would move a preset's colours every time somebody took its
+    waves."""
+    assert v.preset_bin("wave_r=1.000") == ""
+    assert v.preset_bin("wave_0_per_point1=x=0.5") == "waves"
+    assert v.preset_bin("wavecode_0_bUseDots=1") == "waves"
+
+
+def each_kind_of_line_lands_in_its_own_bin():
+    for line, want in (("warp_1=`x", "warp"), ("comp_12=`x", "comp"),
+                       ("per_frame_1=x", "motion"),
+                       ("per_frame_init_1=x", "motion"),
+                       ("per_pixel_3=x", "motion"),
+                       ("shapecode_0_num_inst=1", "shapes"),
+                       ("shape_0_per_frame1=x", "shapes"),
+                       ("PSVERSION_WARP=3", "warp"),
+                       ("fDecay=0.9", ""), ("[preset00]", "")):
+        assert v.preset_bin(line) == want, line
+
+
+def mashing_takes_the_donors_lines_and_drops_the_bases():
+    out = v.mashup_preset(BASE, DONOR, ("warp",))
+    assert "ret = 9" in out and "ret = 0" not in out
+    assert "second line of the same shader" in out, "lost a shader line"
+    assert "ret = 1" in out, "took the composite shader as well"
+
+
+def mashing_leaves_every_other_line_exactly_as_it_was():
+    out = v.mashup_preset(BASE, DONOR, ("warp",)).splitlines()
+    for line in ("fDecay=0.960", "wave_r=1.000", "per_frame_1=q1=bass",
+                 "comp_1=`shader_body { ret = 1; }"):
+        assert line in out, line
+    assert "fDecay=0.100" not in out, "dragged the donor's scalars in"
+
+
+def the_shader_version_travels_with_the_shader():
+    """A version 3 warp shader in a preset that declares version 2 will not
+    compile -- a mash-up that looks broken rather than one that is."""
+    out = v.mashup_preset(BASE, DONOR, ("warp",))
+    assert v.preset_scalar(out, "PSVERSION_WARP") == 3
+    assert v.preset_scalar(out, "PSVERSION") == 3, out
+    assert "PSVERSION=3.0" not in out, "wrote it as a float"
+
+
+def a_bin_the_base_does_not_have_still_lands():
+    thin = "[preset00]\nfDecay=0.5\n"
+    out = v.mashup_preset(thin, DONOR, ("warp",))
+    assert "ret = 9" in out
+    assert out.startswith(thin), "disturbed what was already there"
+
+
+def taking_nothing_changes_nothing():
+    assert v.mashup_preset(BASE, DONOR, ()) == BASE
+
+
+def a_donor_with_nothing_to_give_takes_the_bin_away():
+    """Asking for shapes from a preset that has none empties the bin rather
+    than silently keeping the base's -- which is what "take its shapes" means,
+    and the UI says so when the result comes back unchanged."""
+    out = v.mashup_preset(BASE, DONOR, ("shapes",))
+    assert "shapecode_0_num_inst" not in out
+
+
+def mashing_real_presets_never_loses_the_untouched_lines():
+    files = _library()
+    if not files:
+        print("      (no preset library configured — skipped)")
+        return
+    picks = files[::max(1, len(files) // 60)][:60]
+    for i, path in enumerate(picks):
+        with open(path, encoding="utf-8", errors="replace") as f:
+            base = f.read()
+        with open(picks[(i + 1) % len(picks)], encoding="utf-8",
+                  errors="replace") as f:
+            donor = f.read()
+        out = v.mashup_preset(base, donor, ("warp", "comp"))
+        kept = [l for b, l in v.split_preset(base) if b not in ("warp", "comp")]
+        for line in kept:
+            if line.strip() and not line.lstrip().startswith("PSVERSION"):
+                assert line in out, (path, line[:60])
+
+
 # ── colour shifting ─────────────────────────────────────────────────────────
 
 COLOURED = """MILKDROP_PRESET_VERSION=201

@@ -2288,6 +2288,94 @@ def shift_preset_colours(text: str, turns: float) -> str:
     return text
 
 
+#: The bins a preset comes apart into, in the order MilkDrop's own mash-up
+#: offers them. The label is what the UI says; the pattern is what decides
+#: which bin a line belongs to.
+PRESET_BINS = (
+    ("warp",   "Warp shader",  r"(?:PSVERSION_WARP|warp_\d+)"),
+    ("comp",   "Composite shader", r"(?:PSVERSION_COMP|comp_\d+)"),
+    ("motion", "Motion",
+     r"(?:per_frame_init_\d+|per_frame_\d+|per_pixel_\d+)"),
+    ("waves",  "Waves",  r"(?:wavecode_\d+_\w+|wave_\d+_per_\w+)"),
+    ("shapes", "Shapes", r"(?:shapecode_\d+_\w+|shape_\d+_per_\w+)"),
+)
+
+
+def preset_bin(line: str) -> str:
+    """Which bin this line belongs to, or "" for everything else.
+
+    Deliberately narrow. `wave_r=` is a colour and stays with the scalars;
+    only `wave_0_per_point1=` is wave *code*. A bin that swept up the scalars
+    too would move a preset's colours every time somebody took its waves.
+    """
+    import re
+    for name, _label, pattern in PRESET_BINS:
+        if re.match(rf"[ \t]*{pattern}[ \t]*=", line, re.IGNORECASE):
+            return name
+    return ""
+
+
+def split_preset(text: str) -> list:
+    """[(bin, line), …] for every line, terminators kept.
+
+    `"".join(line for _, line in split_preset(t)) == t` for any t at all. That
+    property is the whole feature: a splitter that drops a byte drops somebody
+    else's work, and everything below is built on top of it.
+    """
+    return [(preset_bin(line), line)
+            for line in text.splitlines(keepends=True)]
+
+
+def mashup_preset(base: str, donor: str, bins) -> str:
+    """`base` with each named bin replaced by `donor`'s.
+
+    Lines are taken verbatim and in the donor's own order, because order
+    inside a bin is meaningful -- warp_1..warp_20 are concatenated in that
+    order to make one shader, and per_frame_N runs in N order. Order *between*
+    bins is not: each line is its own key=value, so a bin the base does not
+    carry at all can go at the end without disturbing anything.
+
+    PSVERSION travels with the shader that needs it. Without that a version 3
+    warp shader lands in a preset that declares version 2 and will not
+    compile, which is a mash-up that looks broken rather than one that is.
+    """
+    import re
+    wanted = {b for b in bins if b}
+    if not wanted:
+        return base
+
+    taken = {}
+    for name, line in split_preset(donor):
+        if name in wanted:
+            taken.setdefault(name, []).append(line)
+
+    out, done = [], set()
+    for name, line in split_preset(base):
+        if name not in wanted:
+            out.append(line)
+            continue
+        if name not in done:
+            done.add(name)
+            out.extend(taken.get(name, []))
+    for name in PRESET_BINS:
+        if name[0] in wanted and name[0] not in done:
+            out.extend(taken.get(name[0], []))
+    text = "".join(out)
+
+    if wanted & {"warp", "comp"}:
+        versions = [v for v in (preset_scalar(text, "PSVERSION"),
+                                preset_scalar(text, "PSVERSION_WARP"),
+                                preset_scalar(text, "PSVERSION_COMP"))
+                    if v is not None]
+        # Written as an integer, not through patch_preset: that spells every
+        # value as a float, and PSVERSION=3.0 is not what any preset says.
+        if versions:
+            text = re.sub(r"(?im)^([ \t]*PSVERSION[ \t]*=)[ \t]*[^\r\n]*",
+                          lambda m: m.group(1) + str(int(max(versions))),
+                          text, count=1)
+    return text
+
+
 def add_per_frame_line(text: str):
     """Insert the next free `per_frame_N=` line. Returns (text, cursor offset).
 
@@ -6507,6 +6595,25 @@ class Renderer:
         """
         return (getattr(self._pm, "last_error", "") if self._pm
                 else "") or _LAST_PM_ERROR
+
+    def donor_preset(self) -> tuple:
+        """Another preset from the ones in play, as (name, text). Qt thread.
+
+        Picked at random rather than chosen from a list: MilkDrop's own
+        mash-up keys pick for you, and choosing from 9,795 entries is a
+        different and much worse feature.
+        """
+        here = self.current_preset_path()
+        files = [p for p, _stem in self._all_preset_files() if p != here]
+        if not files:
+            return ("", "")
+        path = random.choice(files)
+        try:
+            with open(path, encoding="utf-8", errors="replace") as f:
+                return (os.path.splitext(os.path.basename(path))[0], f.read())
+        except Exception as e:
+            print(f"[mashup] could not read {path}: {e}", flush=True)
+            return ("", "")
 
     def preset_text(self) -> str:
         """The current preset's file, or "". Qt thread -- it is a file read."""
