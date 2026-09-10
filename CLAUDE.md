@@ -239,6 +239,27 @@ There is no display in an agent shell and SDL needs one, so:
   is only the fallback — parec leads — so losing it should cost the fallback
   and nothing else, which is now what happens.
 
+  **Linux is the only platform exposed, and it is worth knowing why before
+  anyone goes looking for the same hole on the other two.** sounddevice's own
+  `except OSError` falls back to a PortAudio shipped inside the wheel --
+  `_sounddevice_data/portaudio-binaries/libportaudio64bit.dll` on Windows, the
+  matching `.dylib` on macOS -- and the branch for every other platform is a
+  bare `raise`. The wheel carries a working library on Windows, so the import
+  cannot fail there; on Linux it carries none, and the import is one
+  `find_library` miss away from taking the process down.
+
+  **Proven against the shipped artifact, and it was shipping broken.** The
+  2.0.0 tarball built before the fix was extracted in a stock `ubuntu:24.04`
+  container, which has no libportaudio2: `BomsAIVisualizer --help` died with
+  `OSError: PortAudio library not found` out of `viz_common.py` line 67, before
+  any window, on the download the site offers. The rebuild prints
+  `[audio] sounddevice unavailable (...) -- the PortAudio capture backend is
+  off` and carries on to exit 0. Any Linux package built from a commit before
+  `add5384` is unshippable for that reason alone. The check is one container
+  run and is worth repeating whenever an audio dependency moves -- extract the
+  tarball on a clean image and run `--help`; add `libgl1 libglib2.0-0 libegl1`
+  and `xvfb` to get past the graphics libraries a bare image also lacks.
+
 - **`desktop-file-validate` and GLib disagree about `Exec`, and GLib is the one
   that runs it.** The validator demands `\"` and `\\$` inside a double-quoted
   argument; `GDesktopAppInfo` (GNOME Files, Thunar — anything GLib) refuses to
