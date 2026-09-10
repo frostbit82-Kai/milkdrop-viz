@@ -161,6 +161,7 @@ class MenuHost:
     def list_displays(self):      return list(self._d)
     def is_locked(self):          return False
     def is_borderless(self):      return False
+    def is_on_top(self):          return False
     def is_fullscreen(self):      return False
     def is_recording(self):       return False
     # The menu asks for this on every platform now. It used to be Windows

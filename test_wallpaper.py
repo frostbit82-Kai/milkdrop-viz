@@ -53,7 +53,7 @@ class FakeSDL:
 
     def __init__(self, log=None):
         self.pos = self.size = None
-        self.bordered = None
+        self.bordered = self.on_top = None
         #: Shared with FakeXlib when both are in play, so the order of the
         #: unmap / property change / map dance can be checked across the two.
         self.order = [] if log is None else log
@@ -62,6 +62,7 @@ class FakeSDL:
         self.size = (w, h)
         self.order.append("geom")
     def SDL_SetWindowBordered(self, _w, v):     self.bordered = v
+    def SDL_SetWindowAlwaysOnTop(self, _w, v):  self.on_top = v
     def SDL_HideWindow(self, _w):               self.order.append("hide")
     def SDL_ShowWindow(self, _w):               self.order.append("show")
     def SDL_RaiseWindow(self, _w):              self.order.append("raise")
@@ -105,6 +106,7 @@ def bare(cfg=None, displays=TWO):
     r._pm = None
     r._wallpaper = False
     r._borderless = False
+    r._on_top = False
     r._wp_restore = None
     r._win_rect = (10, 20, 640, 480)
     r._bridge = FakeBridge()
@@ -209,6 +211,29 @@ def windows_needs_no_session_check():
     with as_platform("win32"):
         ok, _why = viz_common.wallpaper_support({})
     assert ok
+
+
+def the_on_top_key_flips_it_and_tells_sdl():
+    r = bare()
+    with faked_sdl(FakeSDL()) as sdl:
+        r._toggle_on_top()
+        assert r.is_on_top() is True
+        assert sdl.on_top == FakeSDL.SDL_TRUE, sdl.on_top
+        r._toggle_on_top()
+        assert r.is_on_top() is False
+        assert sdl.on_top == FakeSDL.SDL_FALSE, sdl.on_top
+
+def parking_as_the_desktop_drops_on_top_first():
+    """A desktop window that is also above everything is a contradiction, and
+    both platforms wipe the state that carries it on the way back out. It is
+    dropped here so the menu never offers to un-set something already gone."""
+    r = bare()
+    r._on_top = True
+    r._native_handle, r._x11_display = 0, None    # parking itself will fail
+    with faked_sdl(FakeSDL()) as sdl, as_platform("linux"), as_env(X11_ENV):
+        r._set_wallpaper_mode(True)
+    assert r.is_on_top() is False, "went to the desktop still claiming to be on top"
+    assert sdl.on_top == FakeSDL.SDL_FALSE, sdl.on_top
 
 
 def a_session_that_cannot_host_it_refuses_with_a_reason():
@@ -617,6 +642,7 @@ class _MenuHost:
     """Only what ContextMenu asks a renderer for."""
     def is_locked(self):      return False
     def is_borderless(self):  return False
+    def is_on_top(self):      return False
     def is_fullscreen(self):  return False
     def is_recording(self):   return False
     def is_wallpaper(self):   return False
@@ -771,7 +797,9 @@ for fn in (the_worker_behind_the_icons_is_chosen,
            windows_11_uses_progmans_own_worker_and_asks_to_be_layered,
            a_desktop_with_neither_gives_nothing,
            the_default_d_key_asks_for_wallpaper_mode,
-           the_wallpaper_action_is_in_the_editor):
+           the_wallpaper_action_is_in_the_editor,
+           the_on_top_key_flips_it_and_tells_sdl,
+           parking_as_the_desktop_drops_on_top_first):
     results.append(check(fn.__name__, fn))
 
 print("all wallpaper checks passed" if all(results) else "FAILURES")

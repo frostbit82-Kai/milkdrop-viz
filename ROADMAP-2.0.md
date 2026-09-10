@@ -141,9 +141,11 @@ If a 1080p source costs real frames, downscale on decode and say so in the UI.
 
 ## C. Window and display
 
-### C1. Always on top
-Genuinely absent. MilkDrop 3's F7. Small, and it pairs with borderless for the
-"park it in a corner" use.
+### C1. Always on top — **done**
+`SDL_SetWindowAlwaysOnTop`, on the `t` key and in the right-click menu, session
+only like borderless is. Parking as the desktop drops it first: X11 rewrites
+`_NET_WM_STATE` wholesale and Windows restores a saved exstyle, so nothing
+carries it back out and a window that still claimed to be on top would be lying.
 
 ### C2. Span multiple monitors
 The display picker chooses *one* display. Spanning is new: size the window to the
@@ -168,7 +170,7 @@ Not features. Things believed to work that nobody has run.
 ## Order
 
 A1, then A2. Those two are the release. A3 and A4 are cheap once the editor is
-there; A5 only if the splitter's round-trip test comes out clean. C1 any time.
+there; A5 only if the splitter's round-trip test comes out clean. C1 done.
 B after A, because it is the one item that can cost frame rate. C2 last, or never.
 
 D can be done from a chair with a microphone and is worth doing before any of it.

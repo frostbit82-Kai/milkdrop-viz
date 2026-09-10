@@ -1061,6 +1061,7 @@ DEFAULT_KEYMAPS = {
     "quit":             "ESCAPE",
     "toggle_mode":      "m",
     "toggle_borderless": "b",
+    "toggle_on_top":    "t",
     "fullscreen_mouse": "DBLCLICK",
     "record":           "F9",
     "toggle_wallpaper": "d",
@@ -3636,6 +3637,7 @@ ACTION_LABELS = {
     "quit":             "Quit",
     "toggle_mode":      "Shuffle the playlist order on / off",
     "toggle_borderless": "Toggle borderless window",
+    "toggle_on_top":    "Keep the window above other windows",
     "fullscreen_mouse": "Toggle fullscreen (mouse)",
     "record":           "Start / stop recording a clip",
     "toggle_wallpaper": "Desktop wallpaper mode on / off",
@@ -3645,6 +3647,7 @@ ACTION_LABELS = {
 ACTION_NOTES = {
     "fullscreen_mouse": "Value must be DBLCLICK",
     "toggle_borderless": "Drops the title bar; the window stays its size",
+    "toggle_on_top":    "Pairs with borderless to park it in a corner",
     "lock":             "SCROLLLOCK uses the Scroll Lock key",
     "rate_down":        "Rating 0 excludes preset from random rotation",
     "record":           "Needs ffmpeg; clips land in the clips folder",
@@ -4328,6 +4331,10 @@ class ContextMenu(QMenu):
         borderless = self._renderer.is_borderless()
         border_text = "☐   Show window border" if borderless else "▣   Borderless window"
         self.addAction(border_text, lambda: self._renderer.request_toggle_borderless())
+
+        on_top = self._renderer.is_on_top()
+        top_text = "\u2934   Stop keeping it on top" if on_top else "\u2934   Always on top"
+        self.addAction(top_text, lambda: self._renderer.request_toggle_on_top())
 
         full = self._renderer.is_fullscreen()
         self.addAction("🗗   Leave fullscreen" if full else "⛶   Fullscreen",
@@ -6009,6 +6016,7 @@ class Renderer:
         self._req_lock_v                 = False
         self._req_context_menu           = False
         self._req_borderless             = False
+        self._req_on_top                 = False
         self._req_settings_updates       = None
         self._req_geometry               = None   # (x, y, w, h) from IPC
         self._req_show_window            = False  # show after Qt adoption
@@ -6031,6 +6039,7 @@ class Renderer:
 
         self._locked              = False
         self._borderless          = False
+        self._on_top              = False
         self._borderless_on_start = False   # set by main.py --borderless flag
         #: Screensaver mode: fullscreen at once, and any real input quits.
         #: Set by main.py before run(), from /s or --screensaver.
@@ -6343,6 +6352,10 @@ class Renderer:
         with self._lock:
             self._req_lock   = True
             self._req_lock_v = not self._locked
+
+    def request_toggle_on_top(self):
+        with self._lock:
+            self._req_on_top = True
 
     def request_toggle_borderless(self):
         with self._lock:
@@ -6977,6 +6990,9 @@ class Renderer:
                 if self._req_borderless:
                     self._req_borderless = False
                     self._toggle_borderless()
+                if self._req_on_top:
+                    self._req_on_top = False
+                    self._toggle_on_top()
                 if self._req_settings_updates is not None:
                     updates = self._req_settings_updates
                     self._req_settings_updates = None
@@ -7155,6 +7171,8 @@ class Renderer:
             self._do_toggle_mode()
         elif km("toggle_borderless", sym, scancode):
             self._toggle_borderless()
+        elif km("toggle_on_top", sym, scancode):
+            self._toggle_on_top()
         elif km("exclude", sym, scancode):
             self.request_exclude()
         elif km("toggle_wallpaper", sym, scancode):
@@ -7551,6 +7569,12 @@ class Renderer:
         if not ok:
             self._bridge.show_toast.emit(why)
             return
+        # ponytail: dropped on the way in, never restored on the way out. Both
+        # platforms wipe what carries it -- X11 rewrites _NET_WM_STATE whole,
+        # Windows puts back a saved exstyle -- so a window that came back still
+        # *claiming* to be on top would be lying. Press the key again.
+        if on and self._on_top:
+            self._toggle_on_top()
         try:
             if sys.platform == "win32":
                 u = _user32()
@@ -8080,6 +8104,19 @@ class Renderer:
 
     def is_borderless(self) -> bool:
         return self._borderless
+
+    def _toggle_on_top(self):
+        self._on_top = not self._on_top
+        sdl2.SDL_SetWindowAlwaysOnTop(
+            self._window,
+            sdl2.SDL_TRUE if self._on_top else sdl2.SDL_FALSE
+        )
+        label = "ON" if self._on_top else "OFF"
+        print(f"[renderer] Always on top: {label}")
+        self._bridge.status_message.emit(f"Always on top: {label}")
+
+    def is_on_top(self) -> bool:
+        return self._on_top
 
     # ── Rating ────────────────────────────────────────────────────────────
 
