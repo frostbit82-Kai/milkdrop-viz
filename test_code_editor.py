@@ -14,6 +14,7 @@ import os, sys
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
+import viz_common
 from viz_common import QApplication
 from preset_browser import TweakPanel
 
@@ -367,6 +368,80 @@ def no_other_preset_at_all_is_reported():
     host.donor = ("", "")
     panel._mash_up()
     assert "no other preset" in panel._code_error.text()
+
+
+class _FakeLogFn:
+    """A ctypes function stand-in: takes restype/argtypes, records the call."""
+    restype = None
+    argtypes = ()
+
+    def __init__(self):
+        self.calls = []
+
+    def __call__(self, *args):
+        self.calls.append(args)
+
+
+class _FakeCore:
+    """Only what _install_projectm_logging touches."""
+
+    def __init__(self):
+        self.projectm_set_log_callback = _FakeLogFn()
+        self.projectm_set_log_level = _FakeLogFn()
+
+
+def _log_callback():
+    """The real _on_log, bound against a stand-in library.
+
+    The shipped function is used rather than a copy of its condition: the
+    whole defect was that the condition did not match what the library
+    actually emits, which a reimplementation would have reproduced faithfully.
+    """
+    viz_common._LOG_CB = None          # it installs once, then refuses
+    assert viz_common._install_projectm_logging(_FakeCore())
+    return viz_common._LOG_CB
+
+
+def a_shader_that_will_not_compile_is_read_off_the_log():
+    """Measured against the shipped 4.2.0 library on Mint, 9 Sep 2026: a comp
+    shader with a bad type logs
+
+        [FinalComposite] Error compiling composite warp shader code
+
+    at level 4 -- WARN, not ERROR. Every compile failure the library has goes
+    out at that level, so a threshold of "ERROR and above" caught none of
+    them and the editor showed no error line for the one failure that editing
+    shader code causes constantly. Which is the whole of A1.
+    """
+    cb = _log_callback()
+    viz_common._LAST_PM_ERROR = ""
+    cb(b"[FinalComposite] Error compiling composite warp shader code - "
+       b"Using fallback shader.", 4, None)
+    assert "Error compiling" in viz_common._LAST_PM_ERROR, \
+        f"a WARN-level compile failure was dropped: " \
+        f"{viz_common._LAST_PM_ERROR!r}"
+
+
+def the_other_compile_failures_are_caught_too():
+    """The library has several spellings and they are not interchangeable."""
+    for line in (b"[PerPixelContext] Could not compile per-pixel code.",
+                 b"[MilkdropShader] Error translating HLSL ",
+                 b"[PerPixelMesh] Error compiling warp shader code."):
+        cb = _log_callback()
+        viz_common._LAST_PM_ERROR = ""
+        cb(line, 4, None)
+        assert viz_common._LAST_PM_ERROR, f"dropped: {line!r}"
+
+
+def the_rest_of_the_warn_channel_is_not_an_error():
+    """A preset pack triggers this constantly and nothing stops being drawn.
+    Surfacing it would put a red line under the editor on every other preset,
+    which is worse than the silence it replaced."""
+    cb = _log_callback()
+    viz_common._LAST_PM_ERROR = ""
+    cb(b'[TextureManager] Failed to find requested texture "grad3"', 4, None)
+    assert viz_common._LAST_PM_ERROR == "", \
+        f"benign warning reported as an error: {viz_common._LAST_PM_ERROR!r}"
 
 
 for name, fn in list(globals().items()):

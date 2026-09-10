@@ -74,6 +74,19 @@ projectM renders on with that stage dropped — which is the error somebody
 editing shader code hits most. Both are now kept, and the log one is read back
 three frames later because it is not written until the preset is drawn.
 
+**What Mint found, 9 Sep 2026:** the log half never reached the editor. Every
+compile failure libprojectM has is logged at **WARN**, not ERROR — measured
+against the shipped 4.2.0 library, where a comp shader with a bad type gives
+`[FinalComposite] Error compiling composite warp shader code` at level 4 — and
+the capture kept only level ≥ 5. So `_LAST_PM_ERROR` stayed empty and the
+editor showed nothing for exactly the failure this item exists to surface. The
+timing was never the problem, and 400 ms was always long enough. Matched on the
+message text now rather than on the level alone, because the rest of WARN is
+noise the editor must not present as a failure — most of it
+`[TextureManager] Failed to find requested texture`, which a preset pack
+triggers constantly and which stops nothing being drawn. `test_code_editor.py`
+covers both directions.
+
 ### A2. Shader and preset code editor — done
 
 A monospace editor beside the existing tweak sliders, on the same panel.
@@ -87,6 +100,11 @@ A monospace editor beside the existing tweak sliders, on the same panel.
 
 Ship the highlighter last — a plain `QPlainTextEdit` that compiles on Ctrl+Enter
 is already the feature.
+
+**Still outstanding:** the highlighter. There is no `QSyntaxHighlighter` in the
+tree and the editor renders one colour throughout. Everything else in A2 works
+on real hardware; this bullet is the only part of section A that has not
+shipped.
 
 ### A3. Colour randomiser — done, as a hue shift
 
@@ -186,3 +204,10 @@ there; A5 only if the splitter's round-trip test comes out clean. C1 done.
 B after A, because it is the one item that can cost frame rate. C2 last, or never.
 
 D's Bluetooth half is done. What is left of it needs a chair and a microphone.
+
+**Mint is done, 9 Sep 2026.** Section A and C1 were exercised on real hardware
+— Mint 21.3, Cinnamon 6.0.5, AMD Pitcairn, the 9,795-preset pack, audio off a
+Bluetooth sink. A1 failed and is fixed (above). A2's editor, A3's hue shift
+(10/10 achromatic triples survive, 6/6 coloured rotate), A4's find-and-replace
+(18 `sin(` to 0, `cos(` 2 to 20) and per-frame insert, A5's mashup (shaders
+merged, compiled clean) and C1 all behave. Windows is next.

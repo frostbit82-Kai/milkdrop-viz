@@ -889,6 +889,22 @@ There is no display in an agent shell and SDL needs one, so:
   log one does not arrive until the preset is *drawn* — `_edit_error_in` waits
   three frames rather than reading back the previous answer.
 
+- **And that log channel is WARN, not ERROR — so a level threshold catches
+  none of it.** Found on Mint, 9 Sep 2026, with the shipped 4.2.0 library: a
+  comp shader with a bad type logs `[FinalComposite] Error compiling composite
+  warp shader code` at level **4**. `_PM_LOG_NAMES` is `{4: warn, 5: error,
+  6: fatal}` and the capture kept `level >= 5`, so `_LAST_PM_ERROR` never
+  filled and the editor showed no error line at all — for the one failure the
+  whole of A1 exists to surface. It reads as a *timing* bug and is not one;
+  400 ms was always long enough. Every compile failure the library has goes
+  out at WARN (`Error compiling`, `Error translating`, `Could not compile` —
+  `strings` the .so for the full set), so `_PM_COMPILE_FAIL` matches the text
+  instead. Do not widen it back to the whole of WARN: most of that level is
+  `[TextureManager] Failed to find requested texture`, which a preset pack
+  triggers constantly and which stops nothing being drawn, and a red line
+  under the editor on every other preset is worse than the silence it
+  replaced.
+
 - **`xdotool key --window <id>` does not reach SDL.** It sends the event with
   XSendEvent, and SDL ignores synthetic key events; the app sits there while the
   test reports success. Activate the window and send the key with plain

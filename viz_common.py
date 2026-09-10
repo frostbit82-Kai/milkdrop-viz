@@ -1399,11 +1399,21 @@ _LOG_CB = None
 _PM_LOG_WARN = 4
 _PM_LOG_NAMES = {4: "warn", 5: "error", 6: "fatal"}
 
-#: The newest ERROR the library logged. A preset that cannot be *parsed* raises
-#: through projectm_set_preset_switch_failed_event_callback, but a preset whose
-#: *shader* will not compile does not: projectM logs it and renders on with the
-#: broken stage dropped. That second kind is the one somebody editing shader
-#: code hits constantly, so the log is the only place it can be read from.
+#: What libprojectM says when an edit will not compile. Measured against the
+#: shipped 4.2.0 library, because the level is not the one you would expect:
+#: every one of these is logged at WARN, not ERROR, so a threshold of
+#: "ERROR and above" captures none of them. Matched on the text instead --
+#: the rest of WARN is noise the editor must not present as a failure, and
+#: most of it is `[TextureManager] Failed to find requested texture`, which a
+#: preset pack triggers constantly and which stops nothing being drawn.
+_PM_COMPILE_FAIL = ("error compiling", "error translating", "could not compile")
+
+#: The newest failure the library logged. A preset that cannot be *parsed*
+#: raises through projectm_set_preset_switch_failed_event_callback, but a
+#: preset whose *shader* will not compile does not: projectM logs it and
+#: renders on with the broken stage dropped. That second kind is the one
+#: somebody editing shader code hits constantly, so the log is the only place
+#: it can be read from.
 _LAST_PM_ERROR = ""
 
 
@@ -1428,7 +1438,8 @@ def _install_projectm_logging(core) -> bool:
         try:
             text = (message or b"").decode("utf-8", "replace").strip()
             if text:
-                if level >= 5:
+                if level >= 5 or any(s in text.lower()
+                                     for s in _PM_COMPILE_FAIL):
                     _LAST_PM_ERROR = text
                 print(f"[projectm:{_PM_LOG_NAMES.get(level, level)}] {text}",
                       flush=True)
