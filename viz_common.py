@@ -63,12 +63,21 @@ def _log(msg: str):
         pass
 
 
+# OSError as well as ImportError: sounddevice is a ctypes binding, so a host
+# with the package and without the PortAudio shared library imports fine and
+# then raises `OSError: PortAudio library not found` at module scope. That is
+# the normal state of a clean Linux box -- the frozen bundle carries
+# libportaudio.so.2, but sounddevice looks for it with
+# `ctypes.util.find_library`, which searches the *system*, never the bundle.
+# Catching only ImportError takes the whole app down over a capture backend
+# that Linux does not even lead with; parec does.
 try:
     import sounddevice as sd
     _SD_AVAILABLE = True
-except ImportError:
+except (ImportError, OSError) as _sd_why:
     _SD_AVAILABLE = False
-    print("[audio] sounddevice not installed — visualization will run silent")
+    print(f"[audio] sounddevice unavailable ({_sd_why}) — "
+          f"the PortAudio capture backend is off")
 
 
 class _AudioBackend:

@@ -32,10 +32,16 @@ if not binaries:
     raise SystemExit(f"No {' / '.join(_pm_globs)} found in {PROJECTM_DIR}")
 
 if sys.platform.startswith("linux"):
-    # sounddevice dlopens PortAudio by soname and finds it via the bundle's own
-    # library path. It is only the fallback capture backend here — parec leads —
-    # but without this the fallback is silently unavailable on a host that never
-    # installed libportaudio2.
+    # sounddevice dlopens PortAudio by soname. Carrying the file does NOT make
+    # it findable: sounddevice resolves the soname with
+    # `ctypes.util.find_library`, which reads the *system* ldconfig cache and
+    # then asks `ld`, and never looks in the bundle. `ld` would honour the
+    # bundle's own LD_LIBRARY_PATH, but only for an unversioned
+    # `libportaudio.so`, and what exists on a host is `libportaudio.so.2`.
+    # So on a box that never installed libportaudio2 the fallback is off --
+    # which is survivable, because parec leads on Linux and viz_common catches
+    # the OSError. Shipping an unversioned copy alongside is what would
+    # actually switch the fallback back on; unverified, so not done here.
     for cand in ("/usr/lib/x86_64-linux-gnu/libportaudio.so.2",
                  "/usr/lib64/libportaudio.so.2"):
         if os.path.exists(cand):

@@ -106,7 +106,7 @@ the only way to see why a frozen build failed.
 `recording` (needs ffmpeg and ffprobe), `clip_audio` (same), `thumbnails`,
 `screensaver`, `wallpaper`, `packs`, `settings_diff`, `shuffle`, `theme`,
 `idle_pause`, `collections`, `backup`, `tweak`, `sprites`, `code_editor`,
-`vsync`. All nineteen must pass before a release.
+`vsync`, `audio_import`. All twenty must pass before a release.
 
 There is no display in an agent shell and SDL needs one, so:
 
@@ -204,6 +204,22 @@ There is no display in an agent shell and SDL needs one, so:
   of them is visible from the source, and all three were on screen the whole time.
 
 ## Traps already paid for
+
+- **`import sounddevice` raises `OSError`, not `ImportError`, when PortAudio is
+  missing — so the usual guard does not catch it and the app will not start.**
+  Found on Mint, 10 Sep 2026. sounddevice is a ctypes binding: the *package*
+  imports fine and then fails at module scope with `OSError: PortAudio library
+  not found`. `except ImportError` around it therefore guards the case that
+  never happens (the package is pinned in `requirements.txt`) and misses the
+  one that does. Reproduce without touching the system: poison
+  `ctypes.util.find_library` for "portaudio" in a subprocess and import
+  `viz_common` — that is what `test_audio_import.py` does. The frozen bundle
+  carrying `libportaudio.so.2` does **not** save it: `find_library` reads the
+  system ldconfig cache and then asks `ld`, and never looks in the bundle, and
+  the only name `ld` would resolve out of the bundle's `LD_LIBRARY_PATH` is an
+  unversioned `libportaudio.so`, which is not shipped. On Linux this backend
+  is only the fallback — parec leads — so losing it should cost the fallback
+  and nothing else, which is now what happens.
 
 - **`desktop-file-validate` and GLib disagree about `Exec`, and GLib is the one
   that runs it.** The validator demands `\"` and `\\$` inside a double-quoted
