@@ -32,8 +32,13 @@ Done, on Windows, verified:
 
 - [x] Toolchain: VS 2022 Build Tools 17.14.39 (MSVC 14.44, Windows SDK 10.0.26100),
       vcpkg, Python 3.14.7 x64
-- [x] **libprojectM 4.1.0 built with `ENABLE_PLAYLIST=ON`** — `projectM-4.dll` and
-      `projectM-4-playlist.dll`, Release, x64, dynamic CRT
+- [x] **libprojectM built with `ENABLE_PLAYLIST=ON`** — `projectM-4.dll` and
+      `projectM-4-playlist.dll`, Release, x64, dynamic CRT. First built at
+      4.1.0; the DLLs under `installer/vendor/windows/` are **4.2.0**, at the
+      commit in `installer/PROJECTM_COMMIT`, and export the three calls the
+      newer work needs (`projectm_load_preset_data`,
+      `projectm_set_preset_switch_failed_event_callback`,
+      `projectm_opengl_burn_texture`). Do not rebuild 4.1.0 over them.
 - [x] Both DLLs load under `ctypes` and all 38 `projectm_*` symbols the app binds
       resolve; the app's own candidate-name lookup finds both
 - [x] `setup_windows.ps1` — the Windows counterpart to `setup.sh`
@@ -455,6 +460,61 @@ To run it: put `C:\dev\projectm-deploy` on PATH and launch with the venv python.
 `C:\Projects\milkdrop-assets\{projectm-presets,textures}` -- 11,223 presets and
 8,408 textures. They are gitignored and never ship; the app is pointed at them
 through Settings.
+
+### Handing over to Windows — 2026-09-09
+
+Linux is finished for 2.0's section A and for C1. Windows now has to match it.
+What follows is the whole of what changed since Windows was last opened, and
+what to look at rather than re-derive.
+
+**Set the checkout up, do not copy one.** `git clone` the repo and run
+`setup_windows.ps1`. A folder copied off a Linux box brings a `.venv` full of
+Linux wheels and a `__pycache__` to match; `config.json`, `ratings.json` and
+`keymaps.json` are gitignored and are that machine's own state, not something
+to inherit.
+
+**What landed, newest first**
+
+| commit | what |
+|---|---|
+| `49c7bd6` | `MilkHighlighter` — the Code tab is syntax-coloured |
+| `0158ca7` | why the compile failure was missed, corrected; `"error loading"` added |
+| `9afa718` | **from Mint** — read the compile failure off WARN as well as ERROR |
+| `6835110` | Bluetooth output verified; half the microphone item |
+| `359f202` | C1 always on top: the `t` key and a menu entry |
+| `7362428` … `20c81a4` | section A: the Preset Studio |
+
+**What to check there, in order.** Everything below already behaves on Linux
+and on Mint's own hardware, so a difference is a Windows difference.
+
+1. **The Code tab at all.** Open a preset, edit it, Ctrl+Enter. Then break a
+   shader on purpose and look for the red line under the box — find
+   `shader_body`, replace with `shader_bodyz`, All, Apply.
+2. **Which log level the failure arrives at.** This is the one thing Mint
+   caught and it cost the trip. The level is picked per stage, not per
+   severity — see the table in `CLAUDE.md` — and the code now matches on both
+   the level and the message text, so it should hold. Confirm rather than
+   assume: the same 4.2.0 library is vendored for both platforms, which is an
+   argument, not a measurement.
+3. **`t`, always on top.** SDL sets `WS_EX_TOPMOST`. Then press `t`, go to
+   wallpaper mode, and come back: it must be off, and the menu must agree.
+   That ordering is deliberate — on-top is dropped *before* the exstyle is
+   saved, so the restore cannot bring `WS_EX_TOPMOST` back with it — but
+   Windows is where the saved exstyle actually gets used, so it is worth the
+   two clicks.
+4. **Wallpaper mode still parents into the right WorkerW.** Unchanged by any
+   of the above, but it is the feature that shares the code path with 3.
+5. **The microphone.** The Linux path opens a real input and delivers samples;
+   nobody has spoken into one, and the Windows and sounddevice backends have
+   not been tried at all. A headset and one sentence closes roadmap D.
+
+**VERSION stays 1.7.0.** It is bumped to 2.0.0 only when asked, and only once
+Windows matches. The Inno `AppId` GUID never changes, 2.0 or not — it is what
+makes the installer an upgrade rather than a second copy.
+
+**`wallpaper-mode.png` still needs re-shooting on Windows** for the store
+listing.
+
 
 ## Notes
 
