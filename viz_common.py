@@ -1486,6 +1486,42 @@ def _install_projectm_logging(core) -> bool:
         return False
 
 
+def texture_load_answer(got):
+    """What the texture callback hands projectM: (id, w, h), or None.
+
+    Its own guard, not projectM's: a texture id with a zero width is logged
+    as a warning and thrown away at the other end, so the answer is either
+    complete or not given at all. Separate from the trampoline because
+    everything above this line can be tested without a GL context.
+    """
+    if not got:
+        return None
+    try:
+        tex, w, h = int(got[0]), int(got[1]), int(got[2])
+    except (TypeError, ValueError, IndexError):
+        return None
+    if tex and w > 0 and h > 0:
+        return (tex, w, h)
+    return None
+
+
+class _TextureLoadData(ctypes.Structure):
+    """projectm_texture_load_data, filled in by the texture-load callback.
+
+    Either raw pixels or an existing GL texture id; the id wins if both are
+    set. projectM wraps an id *without* taking ownership -- TextureManager.cpp
+    passes false for that and says so in a comment -- and caches the wrapper,
+    so the preset samples our texture every frame and a glTexSubImage2D
+    between frames is live inside the preset. The public header's @warning
+    claims the opposite. The code is what runs; the header is stale.
+    """
+    _fields_ = [("data",       ctypes.POINTER(ctypes.c_ubyte)),
+                ("width",      ctypes.c_uint),
+                ("height",     ctypes.c_uint),
+                ("channels",   ctypes.c_uint),
+                ("texture_id", ctypes.c_uint)]
+
+
 class ProjectM4:
 
     def __init__(self, core: ctypes.CDLL, playlist):
@@ -1662,11 +1698,27 @@ class ProjectM4:
         except AttributeError:
             self.can_sprites = False
 
+        # Answers for a texture a preset asks for that libprojectM cannot
+        # load itself. The struct is filled in by the callback: an existing
+        # GL texture id wins over raw pixels, and leaving it alone is how we
+        # say "not ours, look on disk as usual".
+        self._tex_cb = None
+        self._tex_proto = ctypes.CFUNCTYPE(
+            None, ctypes.c_char_p, ctypes.POINTER(_TextureLoadData),
+            ctypes.c_void_p)
+        try:
+            C.projectm_set_texture_load_event_callback.restype = None
+            C.projectm_set_texture_load_event_callback.argtypes = [
+                ctypes.c_void_p, self._tex_proto, ctypes.c_void_p]
+            self.can_live_textures = True
+        except AttributeError:
+            self.can_live_textures = False
+
         # Burn-in: a texture of ours drawn into the *preset's* framebuffer,
-        # so the preset's own warp and decay take hold of it. It is the only
-        # route a moving picture has into a preset at all -- libprojectM
-        # resolves a preset's named textures once, from disk, when the preset
-        # loads, and there is no API that hands a sampler a live texture id.
+        # so the preset's own warp and decay take hold of it. Where a live
+        # texture is sampled by name wherever the preset happens to use it,
+        # this is laid over the whole frame and smeared by the warp -- two
+        # different effects, and both are wanted.
         try:
             C.projectm_opengl_burn_texture.restype  = None
             C.projectm_opengl_burn_texture.argtypes = [
@@ -1959,6 +2011,41 @@ class ProjectM4:
         except Exception as e:
             print(f"[projectm_wrapper] burn_texture failed: {e}", flush=True)
 
+    def set_texture_load_callback(self, answer) -> bool:
+        """Answer for textures libprojectM cannot load itself. Render thread.
+
+        `answer(name)` returns (texture_id, width, height) to hand projectM a
+        GL texture of ours, or None to leave the name to projectM's own disk
+        scan. Called once per texture name, when a preset or a sprite first
+        asks for it -- projectM caches what comes back, so this is not a
+        per-frame cost, and the frames that follow go into the texture.
+
+        Only one callback per instance, and passing NULL removes it.
+        """
+        if not self._pm or not getattr(self, "can_live_textures", False):
+            return False
+
+        def trampoline(name, out, _user):
+            # Nothing may escape into C: a Python exception crossing a ctypes
+            # callback prints a traceback and then returns whatever happens
+            # to be in the register, which here would be a texture id.
+            try:
+                got = texture_load_answer(
+                    answer((name or b"").decode("utf-8", "replace")))
+                if got:
+                    out[0].texture_id, out[0].width, out[0].height = got
+                    out[0].channels = 4
+            except Exception as e:
+                print(f"[projectm_wrapper] texture callback failed: {e}",
+                      flush=True)
+
+        # Held on self because ctypes does not: a CFUNCTYPE object that goes
+        # out of scope is freed, and C then calls into the hole it left.
+        self._tex_cb = self._tex_proto(trampoline)
+        self._core.projectm_set_texture_load_event_callback(
+            self._pm, self._tex_cb, None)
+        return True
+
     def set_sprites(self, definitions) -> int:
         """Replace every sprite with this list of definitions. Render thread.
 
@@ -2187,7 +2274,33 @@ _SAMPLER_PREFIXES = ("fw_", "fc_", "pw_", "pc_")
 
 #: Extensions libprojectM's texture scanner accepts, lower-case. The lookup
 #: itself is by filename *stem*, so a .png override replaces a stock .jpg.
+#: This is libprojectM's own list, copied from TextureManager.hpp, and it is
+#: short: no .gif, no .webp, nothing animated. See LIVE_IMAGE_EXTENSIONS.
 TEXTURE_EXTENSIONS = (".jpg", ".jpeg", ".png", ".dds", ".tga", ".bmp", ".dib")
+
+#: Pictures Qt reads that libprojectM does not. A preset or sprite naming one
+#: of these is answered by our own texture callback instead of by its scanner
+#: -- and the animated ones keep animating while the preset samples them.
+LIVE_IMAGE_EXTENSIONS = (".gif", ".webp", ".apng", ".tif", ".tiff", ".svg",
+                         ".svgz", ".xpm", ".xbm", ".pbm", ".pgm", ".ppm",
+                         ".ico", ".icns", ".jfif", ".wbmp")
+
+#: Video containers, read through ffmpeg. Same route into a preset as an
+#: animated picture: one frame at a time into a texture projectM samples.
+VIDEO_EXTENSIONS = (".mp4", ".webm", ".mkv", ".mov", ".avi", ".m4v",
+                    ".mpg", ".mpeg", ".wmv")
+
+#: Everything accepted as a texture override or a sprite picture. Wider than
+#: what libprojectM reads, because the callback covers the difference.
+PICTURE_EXTENSIONS = (TEXTURE_EXTENSIONS + LIVE_IMAGE_EXTENSIONS
+                      + VIDEO_EXTENSIONS)
+
+
+def _picture_formats_line() -> str:
+    """What to say when a file is not a picture. Named rather than listed:
+    thirty-two extensions in a toast is a wall, not an answer."""
+    return ("Use a picture (png, jpg, gif, webp, tif\u2026) or a video "
+            "(mp4, webm, mkv\u2026).")
 
 _CODE_KEYS = ("per_frame_", "per_pixel_", "per_frame_init_")
 
@@ -2563,7 +2676,7 @@ def texture_override_dir() -> str:
 def texture_override_path(name: str) -> str:
     """The override in place for this texture name, or "" if there is none."""
     d = texture_override_dir()
-    for ext in TEXTURE_EXTENSIONS:
+    for ext in PICTURE_EXTENSIONS:
         p = os.path.join(d, name + ext)
         if os.path.isfile(p):
             return p
@@ -2580,10 +2693,9 @@ def set_texture_override(name: str, image_path: str) -> str:
     """
     import shutil
     ext = os.path.splitext(image_path)[1].lower()
-    if ext not in TEXTURE_EXTENSIONS:
-        return (f"{ext or 'That file'} is not a texture format projectM "
-                f"reads. Use one of: "
-                + ", ".join(e.lstrip(".") for e in TEXTURE_EXTENSIONS))
+    if ext not in PICTURE_EXTENSIONS:
+        return (f"{ext or 'That file'} is not a picture this can use. "
+                + _picture_formats_line())
     try:
         os.makedirs(texture_override_dir(), exist_ok=True)
         clear_texture_override(name)
@@ -2597,7 +2709,7 @@ def set_texture_override(name: str, image_path: str) -> str:
 def clear_texture_override(name: str) -> bool:
     """Remove the override for one texture. True if there was one."""
     gone = False
-    for ext in TEXTURE_EXTENSIONS:
+    for ext in PICTURE_EXTENSIONS:
         p = os.path.join(texture_override_dir(), name + ext)
         try:
             os.remove(p)
@@ -2612,7 +2724,8 @@ def texture_overrides() -> list:
     try:
         return sorted({os.path.splitext(f)[0]
                        for f in os.listdir(texture_override_dir())
-                       if os.path.splitext(f)[1].lower() in TEXTURE_EXTENSIONS})
+                       if os.path.splitext(f)[1].lower()
+                       in PICTURE_EXTENSIONS})
     except OSError:
         return []
 
@@ -2810,7 +2923,7 @@ def sprite_images() -> list:
     out = []
     try:
         for f in sorted(os.listdir(sprite_dir())):
-            if os.path.splitext(f)[1].lower() in TEXTURE_EXTENSIONS:
+            if os.path.splitext(f)[1].lower() in PICTURE_EXTENSIONS:
                 out.append((os.path.splitext(f)[0],
                             os.path.join(sprite_dir(), f)))
     except OSError:
@@ -2829,10 +2942,9 @@ def add_sprite_image(image_path: str) -> tuple:
     import re
     import shutil
     ext = os.path.splitext(image_path)[1].lower()
-    if ext not in TEXTURE_EXTENSIONS:
-        return ("", f"{ext or 'That file'} is not a picture format projectM "
-                    f"reads. Use one of: "
-                    + ", ".join(e.lstrip(".") for e in TEXTURE_EXTENSIONS))
+    if ext not in PICTURE_EXTENSIONS:
+        return ("", f"{ext or 'That file'} is not a picture this can use. "
+                    + _picture_formats_line())
     base = re.sub(r"[^a-z0-9]+", "_",
                   os.path.splitext(os.path.basename(image_path))[0].lower())
     base = base.strip("_") or "picture"
@@ -2853,7 +2965,7 @@ def add_sprite_image(image_path: str) -> tuple:
 def remove_sprite_image(stem: str) -> bool:
     """Delete the picture behind a sprite. True if there was one."""
     gone = False
-    for ext in TEXTURE_EXTENSIONS:
+    for ext in PICTURE_EXTENSIONS:
         try:
             os.remove(os.path.join(sprite_dir(), stem + ext))
             gone = True
@@ -6367,12 +6479,11 @@ def thumb_writer() -> "_ThumbWriter":
 #
 # A picture of ours drawn into the *preset's* framebuffer every frame, so the
 # preset's own warp, decay and echo take hold of it. Not a sprite -- a sprite
-# sits on top, finished -- and not a texture the preset can name either:
-# libprojectM resolves a preset's textures once, from disk, when the preset
-# loads, its texture scanner does not accept .gif at all, and no API hands a
-# sampler a live texture id. Burn-in is the only way a moving picture gets
-# into a preset, which is why it comes out smeared rather than crisp. That is
-# the effect, not a shortcoming of it.
+# sits on top, finished -- and not a live texture either: that one is sampled
+# by name, wherever the preset happens to use it, and comes out crisp. This
+# one is laid over the whole frame and smeared by the warp. Two different
+# effects; this is the one that does not need the preset's cooperation,
+# because it does not care what the preset asks for.
 
 #: Longest side of the burn-in texture. It is drawn into a framebuffer the
 #: size of the window at most, so anything bigger costs upload bandwidth every
@@ -6382,9 +6493,7 @@ BURN_MAX_SIDE = 512
 #: What Qt reads itself, a frame at a time. Everything else goes to ffmpeg.
 BURN_IMAGE_EXTENSIONS = (".gif", ".webp", ".apng", ".png", ".jpg", ".jpeg",
                          ".bmp")
-BURN_VIDEO_EXTENSIONS = (".mp4", ".webm", ".mkv", ".mov", ".avi", ".m4v",
-                         ".mpg", ".mpeg", ".wmv")
-BURN_EXTENSIONS = BURN_IMAGE_EXTENSIONS + BURN_VIDEO_EXTENSIONS
+BURN_EXTENSIONS = BURN_IMAGE_EXTENSIONS + VIDEO_EXTENSIONS
 
 
 def burn_fit(src_w, src_h, win_w, win_h, size, x, y):
@@ -6657,21 +6766,163 @@ class _VideoFrames(threading.Thread):
                 pass
 
 
-def burn_source(path: str):
+def frame_source(path: str, image_extensions=BURN_IMAGE_EXTENSIONS):
     """Something with .next(now) and .stop() for `path`, or None.
 
     The extension decides, not the content: Qt would happily read the first
     frame of some video containers and then report no animation at all, which
     looks like a still picture rather than like a file we cannot play.
+
+    `image_extensions` differs between the two callers: burn-in takes what a
+    user picks in a dialog, a live texture takes only what libprojectM cannot
+    read for itself, so a .png stays projectM's own business.
     """
     if not path or not os.path.isfile(path):
         return None
     ext = os.path.splitext(path)[1].lower()
-    if ext in BURN_IMAGE_EXTENSIONS:
+    if ext in image_extensions:
         return _ImageFrames(path)
-    if ext in BURN_VIDEO_EXTENSIONS:
+    if ext in VIDEO_EXTENSIONS:
         return _VideoFrames(path)
     return None
+
+
+# ─── live textures ─────────────────────────────────────────────────────────
+#
+# A texture a preset or a sprite names, answered by us instead of by
+# libprojectM's own disk scan. Two things fall out of that.
+#
+# Formats: its scanner reads seven extensions and none of them animate. A
+# .gif in a texture pack is invisible to it -- the Cream of the Crop pack has
+# three -- and so is every .webp, .tif and .svg. Qt reads all of those, so
+# the callback hands them over and nothing else has to change.
+#
+# Movement: the callback may return an *existing* GL texture id, and projectM
+# wraps it without taking ownership (TextureManager.cpp passes false and says
+# so). It caches the wrapper, so the preset samples our texture every frame
+# and a glTexSubImage2D between frames is live inside the preset -- a GIF
+# playing where the preset expected a still picture, warped and lit by
+# whatever that preset does to it. Sprites come free: libprojectM resolves a
+# sprite's img= through the same TextureManager.
+#
+# Scoping said none of this was possible. That was wrong, and the route was
+# there all along: projectm_set_texture_load_event_callback, 4.2.0, exported
+# by both shipped binaries.
+
+#: Most live textures at once. They are never given back while projectM is
+#: running -- it is holding the ids -- so this is the ceiling on what one
+#: session can accumulate: eight 512x512 RGBA textures is 8 MB.
+LIVE_MAX_TEXTURES = 8
+
+
+def live_texture_file(name: str, paths) -> str:
+    """The file that answers for texture `name`, or "".
+
+    Only files libprojectM cannot read itself: anything on its own list is
+    left to it, same picture, one less moving part. First match wins in the
+    order the paths are given, which is the order its scanner uses too, so a
+    texture override still stands in front of the pack.
+
+    The name is reduced to a basename first. A preset asking for
+    "../../../.ssh/id_rsa" gets a stem, not a path out of the directories the
+    user pointed at.
+    """
+    want = os.path.splitext(os.path.basename(name or ""))[0].lower()
+    if not want:
+        return ""
+    for d in paths:
+        try:
+            entries = sorted(os.listdir(d))
+        except OSError:
+            continue
+        for f in entries:
+            stem, ext = os.path.splitext(f)
+            if (stem.lower() == want
+                    and ext.lower() in LIVE_IMAGE_EXTENSIONS + VIDEO_EXTENSIONS):
+                full = os.path.join(d, f)
+                if os.path.isfile(full):
+                    return full
+    return ""
+
+
+def gl_upload_rgba(tex: int, size, w: int, h: int, buf: bytes):
+    """Put an RGBA frame in `tex`, making it if there is none. (tex, (w, h)).
+
+    glTexSubImage2D while the size holds, because reallocating the whole
+    texture every frame is what makes a moving picture cost more than the
+    preset it is being drawn into. Render thread: it is the only one that may
+    touch the context.
+    """
+    if tex and tuple(size) == (w, h):
+        glBindTexture(GL_TEXTURE_2D, tex)
+        glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, w, h,
+                        GL_RGBA, GL_UNSIGNED_BYTE, buf)
+    else:
+        if tex:
+            try:
+                glDeleteTextures(1, [tex])
+            except Exception:
+                pass
+        tex = int(glGenTextures(1))
+        glBindTexture(GL_TEXTURE_2D, tex)
+        for pname, value in ((GL_TEXTURE_MIN_FILTER, GL_LINEAR),
+                             (GL_TEXTURE_MAG_FILTER, GL_LINEAR),
+                             (GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE),
+                             (GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE)):
+            glTexParameteri(GL_TEXTURE_2D, pname, value)
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, w, h, 0,
+                     GL_RGBA, GL_UNSIGNED_BYTE, buf)
+    glBindTexture(GL_TEXTURE_2D, 0)
+    return tex, (w, h)
+
+
+class _LiveTexture:
+    """One texture of ours that projectM is sampling.
+
+    The size is pinned at the first frame and every later frame is scaled to
+    it. projectM recorded the width and height when it wrapped the id and
+    never asks again, so a source whose frames are not all one size -- which
+    a GIF is allowed to be -- would otherwise be uploaded into a texture of
+    the wrong shape.
+
+    Not flipped, unlike the burn-in: libprojectM loads its own textures with
+    stb_image and never sets stbi_set_flip_vertically_on_load, so top row
+    first is what every stock texture already is and what presets expect.
+    """
+
+    def __init__(self, name: str, path: str, src, tex: int, w: int, h: int):
+        self.name, self.path, self.src = name, path, src
+        self.tex, self.w, self.h = tex, w, h
+
+    def refresh(self, now: float) -> bool:
+        """Upload the next frame if the decoder has one. Render thread.
+
+        False when there is nothing to do, which for a still picture is every
+        frame after the first: _ImageFrames holds a file with no animation
+        delay for ever rather than decoding the same pixels sixty times a
+        second.
+        """
+        if self.src is None:
+            return False
+        img = self.src.next(now)
+        if img is None:
+            return False
+        if img.width() != self.w or img.height() != self.h:
+            img = img.scaled(self.w, self.h,
+                             Qt.AspectRatioMode.IgnoreAspectRatio,
+                             Qt.TransformationMode.SmoothTransformation)
+        img = img.convertToFormat(QImage.Format.Format_RGBA8888)
+        gl_upload_rgba(self.tex, (self.w, self.h), self.w, self.h,
+                       _image_bytes(img))
+        return True
+
+    def stop(self):
+        """Stop decoding. The GL texture is deliberately left alone: projectM
+        is still holding the id, and deleting it under a live preset is a
+        sampler reading a texture that is not there any more."""
+        if self.src is not None:
+            self.src.stop()
+            self.src = None
 
 
 # ─── idle pause ───────────────────────────────────────────────────────────────
@@ -7062,6 +7313,13 @@ class Renderer:
         self._burn_image = None     # the last frame the decoder handed over
         self._burn_want  = None     # canvas size and placement it was drawn at
 
+        #: Textures answered for by us, by the lower-case name the preset
+        #: asked for, and the names already looked for and not found. The
+        #: second one is what keeps a preset full of stock texture names from
+        #: listing every texture directory on every preset load.
+        self._live_tex     = {}
+        self._live_missing = set()
+
         #: Set by the key or the browser's button. Taken on the render thread
         #: at the one point in the loop where the back buffer holds this
         #: frame, which is where _maybe_thumbnail already runs.
@@ -7238,6 +7496,11 @@ class Renderer:
             pass
 
         self._apply_texture_paths()
+        # After the paths, before any preset: the callback is what answers
+        # for a .gif or a .webp, which projectM's own scanner cannot see at
+        # all, and a preset asks for its textures the moment it loads.
+        if self._cfg.get("live_textures", True):
+            self._pm.set_texture_load_callback(self._on_texture_wanted)
         # Overlays outlive a restart. Requested rather than applied straight
         # away: this runs before the first frame, and the sprite's picture is
         # resolved through the texture manager, which wants the search paths
@@ -7280,15 +7543,27 @@ class Renderer:
     def _apply_texture_paths(self):
         """Point projectM at the texture directories.
 
-        Texture-sampling presets render solid white without these. The
-        configured directory leads and the rest are guesses kept for installs
-        that never set one -- nothing is bundled. Called again when Settings
-        changes a directory, so neither field needs a restart.
+        Texture-sampling presets render solid white without these. Called
+        again when Settings changes a directory, so neither field needs a
+        restart -- and the not-found list is dropped with it, or a picture
+        added in the new directory would never be looked for.
         """
+        self._live_missing.clear()
         if not self._pm or not hasattr(self._pm, "set_texture_search_paths"):
             return
+        tex_paths = self._texture_paths()
+        if tex_paths:
+            self._pm.set_texture_search_paths(tex_paths)
+
+    def _texture_paths(self) -> list:
+        """Where a texture is looked for, in order.
+
+        The configured directory leads and the rest are guesses kept for
+        installs that never set one -- nothing is bundled. Shared with the
+        texture callback so both look in the same places in the same order.
+        """
         preset_dir = self._cfg.get("preset_dir", "")
-        tex_paths = [p for p in (
+        return [p for p in (
             # First, and that is the whole mechanism behind swapping a
             # texture for your own picture: libprojectM scans its search
             # paths in order and the first file whose stem matches wins, so
@@ -7310,8 +7585,6 @@ class Renderer:
             # answer for a texture a downloaded preset asked for.
             bundled_dir("assets", "textures"),
         ) if p and os.path.isdir(p)]
-        if tex_paths:
-            self._pm.set_texture_search_paths(tex_paths)
 
     def _create_projectm(self) -> ProjectM4:
         """Factory hook — override to pass a different config_dir."""
@@ -7883,6 +8156,12 @@ class Renderer:
         if not self._pm:
             return
         self._apply_texture_paths()
+        # Live textures deliberately survive this. A preset that is on screen
+        # still holds a shared_ptr to the wrapper around our texture id, so
+        # giving the id back here is a sampler reading a texture that is not
+        # there any more. The cost is that replacing a .gif that is already
+        # playing needs a restart; replacing a stock texture with one does
+        # not, because that name has never been answered for yet.
         self._pm.reset_textures()
         text = self.preset_text()
         if text:
@@ -8199,6 +8478,7 @@ class Renderer:
             # Before the preset draws, not after: the warp reads the buffer it
             # is about to draw over, so burning first is what puts the picture
             # through this frame's warp rather than the next one's.
+            self._live_this_frame()
             self._burn_this_frame()
             self._pm.render_frame()
             # Before the swap, always: glReadPixels reads the back buffer, and
@@ -8241,6 +8521,7 @@ class Renderer:
         # ffmpeg is a child process, and leaving it running leaves a decoder
         # writing into a pipe nobody will ever read again.
         self._do_set_burn("")
+        self._stop_live_textures()
         self._audio.stop()
         if self._pm:
             self._pm.destroy()
@@ -9226,7 +9507,7 @@ class Renderer:
             self._bridge.show_toast.emit(
                 "This build of projectM cannot burn a picture into a preset.")
             return
-        src = burn_source(path)
+        src = frame_source(path)
         if src is None:
             self._bridge.show_toast.emit(
                 f"Nothing here can play {os.path.basename(path)}")
@@ -9250,29 +9531,9 @@ class Renderer:
         self._burn_tex, self._burn_size = 0, (0, 0)
 
     def _upload_burn(self, w: int, h: int, buf: bytes):
-        """Put one RGBA frame in the burn-in texture. Render thread.
-
-        glTexSubImage2D while the size holds, because reallocating the whole
-        texture every frame is what makes a video burn-in cost more than the
-        preset it is being drawn into.
-        """
-        if self._burn_tex and self._burn_size == (w, h):
-            glBindTexture(GL_TEXTURE_2D, self._burn_tex)
-            glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, w, h,
-                            GL_RGBA, GL_UNSIGNED_BYTE, buf)
-        else:
-            self._drop_burn_texture()
-            self._burn_tex = int(glGenTextures(1))
-            glBindTexture(GL_TEXTURE_2D, self._burn_tex)
-            for pname, value in ((GL_TEXTURE_MIN_FILTER, GL_LINEAR),
-                                 (GL_TEXTURE_MAG_FILTER, GL_LINEAR),
-                                 (GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE),
-                                 (GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE)):
-                glTexParameteri(GL_TEXTURE_2D, pname, value)
-            glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, w, h, 0,
-                         GL_RGBA, GL_UNSIGNED_BYTE, buf)
-            self._burn_size = (w, h)
-        glBindTexture(GL_TEXTURE_2D, 0)
+        """Put one RGBA frame in the burn-in texture. Render thread."""
+        self._burn_tex, self._burn_size = gl_upload_rgba(
+            self._burn_tex, self._burn_size, w, h, buf)
 
     def _burn_this_frame(self):
         """Draw the burnt-in picture into the preset. Render thread.
@@ -9322,6 +9583,116 @@ class Renderer:
             print(f"[burn] stopped: {why}", flush=True)
             self._do_set_burn("")
             self._bridge.show_toast.emit(f"Burn-in stopped: {why}")
+
+    # ── Live textures ─────────────────────────────────────────────────────
+
+    def _on_texture_wanted(self, name: str):
+        """Answer for one texture, or None to leave it to projectM.
+
+        Called on the render thread from inside projectM, once per name --
+        it caches what comes back -- so the cost here is a directory listing
+        and a decode at preset-load time, not per frame.
+
+        Returning None is not a failure: projectM falls back to its own disk
+        scan, which is the right answer for every name it can read itself.
+        It does not cache that fallback either, so a name declined now is
+        retried by the next preset that asks for it.
+        """
+        key = os.path.splitext(os.path.basename(name or ""))[0].lower()
+        live = self._live_tex.get(key)
+        if live is not None:
+            return (live.tex, live.w, live.h)
+        if not key or key in self._live_missing:
+            return None
+        if len(self._live_tex) >= LIVE_MAX_TEXTURES:
+            # Not given back while projectM holds the ids, so the ceiling is
+            # a ceiling. Said once per name rather than once per frame.
+            self._live_missing.add(key)
+            print(f"[texture] {key}: already holding {LIVE_MAX_TEXTURES}",
+                  flush=True)
+            return None
+        try:
+            live = self._open_live_texture(key)
+        except Exception as why:
+            print(f"[texture] {key}: {why}", flush=True)
+            live = None
+        if live is None:
+            self._live_missing.add(key)
+            return None
+        self._live_tex[key] = live
+        print(f"[texture] {key} {live.w}x{live.h} from "
+              f"{os.path.basename(live.path)}", flush=True)
+        return (live.tex, live.w, live.h)
+
+    def _open_live_texture(self, key: str):
+        """Decode `key`'s file and put its first frame in a GL texture.
+
+        Synchronous, including the ffmpeg probe a video needs. That probe is
+        a fifth of a second on the render thread, once, for a file somebody
+        deliberately put in a texture directory -- and the alternative, an
+        answer that arrives two frames later, is a preset that loaded with a
+        placeholder where its texture should be.
+        """
+        path = live_texture_file(key, self._texture_paths())
+        if not path:
+            return None
+        src = frame_source(path, LIVE_IMAGE_EXTENSIONS)
+        if src is None:
+            return None
+        why = getattr(src, "error", "")
+        if why:
+            src.stop()
+            print(f"[texture] {key}: {why}", flush=True)
+            return None
+        img = src.next(_time.monotonic())
+        if img is not None:
+            w, h = img.width(), img.height()
+            buf = _image_bytes(img.convertToFormat(
+                QImage.Format.Format_RGBA8888))
+        else:
+            # A video: the decoder thread knows the size before it has a
+            # frame, so the texture is made empty now and filled in a frame
+            # or two. Black rather than nothing -- projectM is about to
+            # sample it either way.
+            w, h = int(getattr(src, "width", 0)), int(getattr(src, "height", 0))
+            buf = bytes(max(0, w * h * 4))
+        if w <= 0 or h <= 0:
+            src.stop()
+            return None
+        tex, _ = gl_upload_rgba(0, (0, 0), w, h, buf)
+        return _LiveTexture(key, path, src, tex, w, h)
+
+    def _live_this_frame(self):
+        """Hand every live texture its next frame. Render thread.
+
+        Before the preset draws, like the burn-in, so what the preset samples
+        this frame is this frame's picture. A still costs a dictionary lookup
+        and a comparison; nothing is uploaded until a decoder has something.
+        """
+        if not self._live_tex:
+            return
+        now = _time.monotonic()
+        for key, live in list(self._live_tex.items()):
+            try:
+                live.refresh(now)
+            except Exception as why:
+                # Stop that one, keep the others, and say so once: a message
+                # every frame is worse than none.
+                print(f"[texture] {key} stopped: {why}", flush=True)
+                live.stop()
+
+    def _stop_live_textures(self):
+        """Stop every decoder. Render thread, at shutdown.
+
+        The GL textures are not deleted here: projectM is holding those ids
+        and is destroyed a moment later, which takes the context with it.
+        What must not be left behind is a video's ffmpeg, writing into a pipe
+        nobody will read again.
+        """
+        for live in self._live_tex.values():
+            live.stop()
+        self._live_tex.clear()
+        self._live_missing.clear()
 
     # ── Thumbnails ────────────────────────────────────────────────────────
 

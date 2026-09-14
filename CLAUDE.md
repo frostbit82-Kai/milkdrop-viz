@@ -113,8 +113,24 @@ the only way to see why a frozen build failed.
 `recording` (needs ffmpeg and ffprobe), `clip_audio` (same), `thumbnails`,
 `screensaver`, `wallpaper`, `packs`, `settings_diff`, `shuffle`, `theme`,
 `idle_pause`, `collections`, `backup`, `tweak`, `sprites`, `code_editor`,
-`vsync`, `audio_import`, `lock`, `menu`. All twenty-two must pass before a
-release.
+`vsync`, `audio_import`, `lock`, `menu`, `live_textures`. All twenty-three
+must pass before a release.
+
+**Reviewing by mutation.** Break the shipped code one way at a time, run every
+suite, and a green suite is a gap in the tests rather than a pass. Script it,
+restore in a `finally`, and print with `flush` -- a redirected python buffers,
+and a trailing `| tail` swallows the lot until the pipe closes. Two things
+that make the results lies:
+
+- **A killed rig leaves its mutation in the file**, and then every mutation
+  after it reads as caught because the suite was already failing. `finally`
+  does not run on SIGTERM. Handle the signal *and* check the baseline is green
+  before the first mutation -- both are in `scratchpad/mutate.py`. This
+  happened on 14 Sep 2026 and voided fourteen results before the rig's own
+  "0 matches" line gave it away.
+- **A mutation that yields a `SyntaxError`** fails every suite and proves
+  nothing. So does one whose original text does not appear exactly once:
+  report that as SKIPPED rather than silently doing nothing.
 
 There is no display in an agent shell and SDL needs one, so:
 
@@ -401,7 +417,22 @@ There is no display in an agent shell and SDL needs one, so:
   `glTexSubImage2D` is live inside the preset. It also sidesteps the
   hard-coded extension list in `TextureManager.hpp` entirely, since the
   filesystem is never consulted for a name the callback answers. Exported by
-  both shipped binaries; no patch and no pin move. Untried as of 14 Sep 2026.
+  both shipped binaries; no patch and no pin move. **Built and seen on screen
+  14 Sep 2026**: a `.gif` sampled by a preset's own composite shader, a `.gif`
+  as a sprite, and an `.mp4` as a sprite, each caught twice seconds apart
+  showing different frames. Sprites come free -- `MilkdropSprite.cpp` resolves
+  `img=` through the same `TextureManager::GetTexture`.
+
+- **The public header for that callback is wrong about ownership.**
+  `callbacks.h` carries an `@warning` saying projectM takes ownership of a
+  supplied texture id and will `glDeleteTextures` it. `TextureManager.cpp`
+  passes `false` for that argument and comments "App-provided textures are not
+  owned by projectM", and `Texture::~Texture` only deletes when `m_owned`. The
+  code is what runs. Ours are therefore never given back while projectM is
+  alive, which is also why there is a ceiling (`LIVE_MAX_TEXTURES`) instead of
+  an eviction policy: a preset on screen still holds a `shared_ptr` to the
+  wrapper around our id, so deleting one is a sampler reading a texture that
+  is not there.
 
 - **projectM's sprite blend modes do not do what their MilkDrop names say.**
   Mode 0 ("alpha") ignores the texture's alpha channel entirely and draws the

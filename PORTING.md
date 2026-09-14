@@ -1291,14 +1291,15 @@ and `projectm_sprite_create` all export from `installer/vendor/linux/
 libprojectM-4.so.4` and from `installer/vendor/windows/projectM-4.dll`, so
 neither needs libprojectM rebuilt or the pin moved.
 
-**What is not possible, measured rather than assumed:** an animated texture
-*inside* a preset. libprojectM's texture extension list is hard-coded in
-`TextureManager.hpp` and has no `.gif` at all, textures are resolved once when
-a preset loads, and there is no API to hand a live texture id to a sampler the
-preset names. Burn-in is the way in, and it puts the picture into the preset's
-feedback buffer, where the warp and decay chew on it — a distinctive look, not
-a crisp sprite. A static GIF is a separate, much smaller job: decode the first
-frame on import and write it as PNG, which needs no libprojectM change.
+**What was written here as impossible was wrong, and is now shipped.** The
+claim was: an animated texture *inside* a preset cannot be done, because
+libprojectM's extension list is hard-coded in `TextureManager.hpp` with no
+`.gif` in it, textures resolve once when a preset loads, and no API hands a
+live texture id to a sampler the preset names. The first two are true. The
+third is not — `projectm_set_texture_load_event_callback` does exactly that.
+See *Live textures* at the end of this file. Burn-in is still a separate
+feature and still worth having: it does not need the preset's cooperation,
+because it does not care what the preset asks for.
 
 
 ### Burning a picture into the preset — 2026-09-14
@@ -1364,5 +1365,82 @@ makes the extension list moot, because the filesystem is never consulted for
 a name the callback answers -- so `.gif`, `.webp`, `.tif`, `.svg` and
 anything else Qt reads come along for free, with no patch to libprojectM.
 
-Not built, not tried. Written down so the next session does not re-derive the
-impossibility.
+
+### Live textures — built 2026-09-14
+
+**What it is.** Any picture Qt reads and libprojectM does not
+(`LIVE_IMAGE_EXTENSIONS`), plus video through ffmpeg, answered for by name
+when a preset or a sprite asks for it. The animated ones keep animating while
+the preset samples them.
+
+**Sprites came free.** `MilkdropSprite.cpp` resolves `img=` through the same
+`TextureManager::GetTexture`, so a GIF or an MP4 dropped in as a sprite
+animates with no sprite-side code at all. That was not the plan; it was found
+by reading how a sprite loads its picture, and then shot.
+
+**Seen on screen, not inferred.** Three rig runs, each grabbed twice a few
+seconds apart so the two frames prove movement rather than one frame proving
+a decode:
+
+| what | file | evidence |
+|---|---|---|
+| texture a preset samples | `livetest.gif` 480x480 | two different GIF frames, matching `ffmpeg`'s own frame 0 |
+| sprite | `spr_rigtest.gif` 500x500 | two different frames, upright, square |
+| sprite | `spr_vidtest.mp4` 640x360 | counter reads a different second, rainbow bar scrolled |
+
+**Two rig traps, both costing a run each.** `soft_cut_duration` was **10.0**
+against a `preset_duration` of 3, so every preset switch started a ten-second
+blend that never finished and the screen was a permanent cross-fade — the new
+preset appeared to not load at all. And `soft_cut_duration = 0.0` is worse
+than a small value: nothing switched. Use **1.0**. Second trap: the welcome
+preset is loaded before the library and stays until the first auto-advance,
+so a grab taken too early shows the logo and reads as "the preset failed".
+
+**Not flipped, unlike burn-in.** `TextureManager.cpp` never calls
+`stbi_set_flip_vertically_on_load`, so every stock texture is top-row-first
+and ours must be too. Burn-in needs the flip because it goes through
+`projectm_opengl_burn_texture`, which is a different path.
+
+**The header lies about ownership.** `callbacks.h` has an `@warning` saying
+projectM takes ownership of a supplied texture id and deletes it.
+`TextureManager.cpp` passes `false` and says the opposite in a comment;
+`Texture::~Texture` honours the flag. So our textures are never given back
+while projectM is alive — hence `LIVE_MAX_TEXTURES = 8` as a ceiling rather
+than an eviction policy, and hence `_LiveTexture.stop()` deliberately leaving
+the GL texture alone. A preset on screen still holds a `shared_ptr` to the
+wrapper; deleting the id under it is a sampler reading a texture that is not
+there.
+
+**The size is pinned at the first frame.** projectM recorded width and height
+when it wrapped the id and never asks again, so later frames are scaled to
+that size rather than uploaded as they arrive. A GIF is allowed to change
+frame size mid-animation, and `glTexSubImage2D` with the wrong one is a
+corrupt texture, not an error.
+
+**Only what projectM cannot read is claimed.** A `.png` still goes to its own
+scanner: claiming it would hand a working texture to a second decoder that
+also caps the long side at 512, for no gain. The decision is
+`live_texture_file`, which is a pure function and is tested as one.
+
+**A texture name is reduced to a basename** before anything looks at the
+disk. Preset files are downloaded by the thousand; a name like
+`../../../.ssh/id_rsa` must not walk out of the directories the user pointed
+at.
+
+**A video costs one synchronous ffmpeg probe** on the render thread, when the
+name is first asked for. That is a fifth of a second, once, for a file
+somebody deliberately put in a texture directory — and the alternative, an
+answer that arrives two frames later, is a preset that loaded with a
+placeholder where its texture should be.
+
+**Replacing a live texture needs a restart.** `_do_reset_textures` leaves
+them alone on purpose, for the ownership reason above. Replacing a stock
+texture *with* a GIF does not need one, because that name has never been
+answered for yet.
+
+**What it does not do: fit the screen.** A preset samples the texture with
+whatever UVs its shader writes, so a 16:9 video used as a full-screen texture
+stretches exactly like any stock MilkDrop texture. Sprites *are* fitted —
+projectM corrects aspect itself and the Size slider drives `sx`/`sy` — and so
+is burn-in, which recomputes its rectangle from the live drawable size every
+frame. Asked and answered 14 Sep 2026.

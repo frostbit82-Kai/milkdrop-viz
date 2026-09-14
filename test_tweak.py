@@ -228,7 +228,7 @@ def the_override_directory_leads_the_search_path():
     """libprojectM scans its paths in order and the first stem match wins, so
     this order is the entire swap mechanism."""
     import inspect
-    body = inspect.getsource(v.Renderer._apply_texture_paths)
+    body = inspect.getsource(v.Renderer._texture_paths)
     assert body.index("texture_override_dir()") < body.index('"texture_dir"')
 
 

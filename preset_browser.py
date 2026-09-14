@@ -26,8 +26,14 @@ from viz_common import (
     QPlainTextEdit, QShortcut, QKeySequence, QFontDatabase,
     shift_preset_colours, add_per_frame_line, mashup_preset, QTextCursor,
     MilkHighlighter, number_span_at, splice, format_like, slider_range,
-    number_label, BURN_EXTENSIONS, BURN_IMAGE_EXTENSIONS,
+    number_label, BURN_EXTENSIONS, BURN_IMAGE_EXTENSIONS, PICTURE_EXTENSIONS,
 )
+
+#: The file dialog filter for anything that can stand in as a picture. Wider
+#: than libprojectM's own list because the texture callback answers for the
+#: rest -- see LIVE_IMAGE_EXTENSIONS.
+PICTURE_FILTER = ("Pictures and video ("
+                  + " ".join("*" + e for e in PICTURE_EXTENSIONS) + ")")
 
 logger = logging.getLogger(__name__)
 
@@ -517,7 +523,7 @@ class TweakPanel(QWidget):
     def _replace(self, name):
         path, _ = QFileDialog.getOpenFileName(
             self, f"Use a picture as “{name}”", os.path.expanduser("~"),
-            "Images (*.jpg *.jpeg *.png *.tga *.bmp *.dds *.dib)")
+            PICTURE_FILTER)
         if not path:
             return
         why = self._host.swap_texture(name, path)
@@ -794,7 +800,7 @@ class TweakPanel(QWidget):
     def _add_sprite(self):
         path, _ = QFileDialog.getOpenFileName(
             self, "Lay a picture over the visuals", os.path.expanduser("~"),
-            "Images (*.jpg *.jpeg *.png *.tga *.bmp *.dds *.dib)")
+            PICTURE_FILTER)
         if not path:
             return
         why = self._host.add_sprite(path)

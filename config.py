@@ -111,6 +111,11 @@ DEFAULT_CONFIG = {
     # Whether the browser list draws those pictures. Off fits about twice as
     # many presets on screen.
     "browser_thumbnails":   True,
+    # Answer for textures libprojectM cannot read itself -- .gif, .webp,
+    # .tif, video -- and keep the animated ones moving while a preset samples
+    # them. Off falls back to its own scanner, which is the 2.1.2 behaviour.
+    # Read once, when projectM is created, so it needs a restart.
+    "live_textures":        True,
 }
 
 

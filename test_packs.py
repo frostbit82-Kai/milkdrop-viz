@@ -215,7 +215,7 @@ def the_bundled_texture_directory_is_last_in_the_search_path():
     """Same rule the sprite directory follows: our own files must never
     answer for a texture a downloaded preset asked for."""
     import inspect
-    body = inspect.getsource(v.Renderer._apply_texture_paths)
+    body = inspect.getsource(v.Renderer._texture_paths)
     assert 'bundled_dir("assets", "textures")' in body, body
     assert body.index("sprite_dir()") < body.index('bundled_dir("assets"')
 

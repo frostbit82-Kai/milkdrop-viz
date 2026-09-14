@@ -69,7 +69,7 @@ def the_sprite_directory_comes_last_in_the_search_path():
     the search path so a swap wins; this one has to trail it so a sprite
     cannot win. Nothing else in the file can catch the order being flipped."""
     import inspect
-    body = inspect.getsource(v.Renderer._apply_texture_paths)
+    body = inspect.getsource(v.Renderer._texture_paths)
     assert "sprite_dir()" in body, "sprites are not in the search path at all"
     assert body.index("texture_override_dir()") < body.index("sprite_dir()"), \
         "the sprite directory must not come before the override directory"
@@ -388,14 +388,14 @@ def the_extension_decides_which_decoder_runs():
     rather than like a file we cannot play."""
     gif = os.path.join(_TMP, "two.gif")
     open(gif, "wb").write(TINY_GIF)
-    src = v.burn_source(gif)
+    src = v.frame_source(gif)
     assert type(src).__name__ == "_ImageFrames", type(src).__name__
     src.stop()
-    assert v.burn_source(os.path.join(_TMP, "nope.gif")) is None
-    assert v.burn_source("") is None
+    assert v.frame_source(os.path.join(_TMP, "nope.gif")) is None
+    assert v.frame_source("") is None
     odd = os.path.join(_TMP, "thing.txt")
     open(odd, "w").write("not a picture")
-    assert v.burn_source(odd) is None, "tried to decode a text file"
+    assert v.frame_source(odd) is None, "tried to decode a text file"
 
 
 def an_animated_picture_is_read_a_frame_at_a_time_on_its_own_clock():
@@ -404,7 +404,7 @@ def an_animated_picture_is_read_a_frame_at_a_time_on_its_own_clock():
     this runs on the render thread, sixty times a second."""
     gif = os.path.join(_TMP, "clock.gif")
     open(gif, "wb").write(TINY_GIF)
-    src = v.burn_source(gif)
+    src = v.frame_source(gif)
     first = src.next(0.0)
     assert first is not None and first.width() == 4, first
     assert src.next(0.0) is None, "handed over a frame before it was due"
