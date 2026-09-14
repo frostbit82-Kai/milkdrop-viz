@@ -20,6 +20,8 @@ import time
 import logging
 import threading
 import subprocess
+import re
+import ast
 from collections import deque
 import numpy as np
 
@@ -5856,6 +5858,108 @@ def x11_client_stack(lib, dpy):
         lib.XFree(data)
 
 
+#: The schema Nemo publishes its escape hatch under, and the key on it.
+#: Absent on every desktop that is not Cinnamon/Nemo, which is the check.
+_NEMO_SCHEMA, _NEMO_KEY = "org.nemo.desktop", "ignored-desktop-handlers"
+
+
+def x11_wm_class(lib, dpy, win) -> str:
+    """The window's WM_CLASS *instance* name, or "".
+
+    WM_CLASS is two NUL-separated strings, instance then class. The instance
+    is the half wanted here: Nemo's ignore list ships `conky` and
+    `csd-background`, both instance names -- the classes are `Conky` and
+    `Csd-background`.
+    """
+    actual_type, actual_format = ctypes.c_ulong(), ctypes.c_int()
+    nitems, bytes_after = ctypes.c_ulong(), ctypes.c_ulong()
+    data = ctypes.POINTER(ctypes.c_ubyte)()
+    prop = lib.XInternAtom(dpy, b"WM_CLASS", False)
+    if lib.XGetWindowProperty(
+            dpy, win, prop, 0, 256, False, 0,
+            ctypes.byref(actual_type), ctypes.byref(actual_format),
+            ctypes.byref(nitems), ctypes.byref(bytes_after),
+            ctypes.byref(data)) != 0 or not data:
+        return ""
+    try:
+        raw = bytes(bytearray(data[i] for i in range(nitems.value)))
+        return raw.split(b"\0")[0].decode("utf-8", "replace")
+    finally:
+        lib.XFree(data)
+
+
+def nemo_allow_desktop_window(wm_class: str, run=None) -> str:
+    """Stop Nemo abandoning the desktop icons because of our window.
+
+    Nemo looks for other `_NET_WM_WINDOW_TYPE_DESKTOP` windows **when it
+    starts**, and if it finds one it skips managing the desktop altogether --
+    "Desktop already managed by another application, skipping desktop setup."
+    Measured on Cinnamon 6.0.5, 14 Sep 2026: with the visualiser already in
+    wallpaper mode, `nemo-desktop` exits without drawing a single icon.
+
+    That is why this reads as the visuals *covering* the icons while the
+    desklets still show over the top: the desklets are drawn by the Cinnamon
+    shell and never went away, and the icons were never drawn at all. Nothing
+    is stacked wrongly, so nothing measuring the stack can see it -- which is
+    why `_hold_wallpaper_bottom`, which is right about everything it checks,
+    does not help here.
+
+    The order decides whether it bites. Turning wallpaper mode on while Nemo is
+    already up is fine; Nemo only checks at startup. It is the sessions where
+    Nemo starts second that lose the icons -- a login with
+    autostart-as-wallpaper, a Cinnamon restart, Nemo restarting for any reason.
+
+    `ignored-desktop-handlers` is the escape hatch Nemo names in that warning.
+    conky and csd-background ship on it and a MilkDrop wallpaper has the same
+    claim, so this puts the app on it once and leaves it there -- removing it
+    again on the way out would just lose the icons on the next restart.
+
+    Returns a sentence for the log when it changed something and "" otherwise,
+    including on every desktop that is not Nemo, where the schema is absent.
+    `run` is a seam for the tests; it defaults to subprocess.run.
+    """
+    # No stray quoting worries and no way to inject into the gsettings
+    # argument: anything that is not a plain WM_CLASS is simply not handled.
+    if not re.fullmatch(r"[A-Za-z0-9_.+-]{1,64}", wm_class or ""):
+        return ""
+    run = subprocess.run if run is None else run
+
+    def gs(*args):
+        return run(["gsettings", *args], capture_output=True, text=True,
+                   timeout=10)
+
+    try:
+        got = gs("get", _NEMO_SCHEMA, _NEMO_KEY)
+    except (OSError, subprocess.SubprocessError):
+        return ""                      # no gsettings at all
+    if got.returncode != 0:
+        return ""                      # not a Nemo desktop
+    try:
+        # GVariant prints a string array as a Python list literal does --
+        # except when it is empty, which prints as `@as []`: the type has to
+        # be spelled out because `[]` alone would be ambiguous. Somebody who
+        # has cleared this key is exactly the person who needs it written.
+        text = got.stdout.strip()
+        if text.startswith("@"):
+            text = text.partition(" ")[2]
+        current = ast.literal_eval(text)
+        if not isinstance(current, (list, tuple)):
+            return ""
+        current = [str(x) for x in current]
+    except (ValueError, SyntaxError):
+        return ""
+    if wm_class in current:
+        return ""
+    try:
+        set_ = gs("set", _NEMO_SCHEMA, _NEMO_KEY, repr(current + [wm_class]))
+    except (OSError, subprocess.SubprocessError):
+        return ""
+    if set_.returncode != 0:
+        return ""
+    return (f"told Nemo to keep drawing desktop icons over {wm_class} "
+            f"({_NEMO_SCHEMA} {_NEMO_KEY})")
+
+
 def x11_restack_below(lib, dpy, win, sibling):
     """Ask the window manager to put `win` directly below `sibling`.
 
@@ -8067,6 +8171,29 @@ class Renderer:
             x11_set_atoms(lib, dpy, win, _X11_TYPE, [_X11_DESKTOP])
             x11_set_atoms(lib, dpy, win, _X11_STATE, list(_X11_STATES))
             self._wallpaper = True
+            # Being the desktop is what makes Nemo refuse to draw the icons
+            # next time it starts, so this goes here rather than at launch:
+            # nowhere else knows the window is about to claim the desktop.
+            # Its own try: this is a convenience for the *next* session, and
+            # a desktop setting that will not be written is not a reason to
+            # refuse to be the wallpaper in this one.
+            try:
+                did = nemo_allow_desktop_window(x11_wm_class(lib, dpy, win))
+            except Exception as e:                       # noqa: BLE001
+                did = ""
+                print(f"[wallpaper] could not check Nemo's ignore list: {e}",
+                      flush=True)
+            if did:
+                # Said once in the life of the install, because the setting
+                # persists. Deliberately not "your icons were switched off":
+                # the common case is turning wallpaper mode on while Nemo is
+                # already up and the icons are fine, and this is insurance
+                # against the *next* restart. It only has to be true in both.
+                print(f"[wallpaper] {did}", flush=True)
+                self._bridge.show_toast.emit(
+                    "Told Cinnamon to keep drawing your desktop icons over "
+                    "the visualiser. If they are missing now, they are back "
+                    "at the next login.")
             self._fit_to_wallpaper()
         else:
             x11_set_atoms(lib, dpy, win, _X11_TYPE, [_X11_NORMAL])

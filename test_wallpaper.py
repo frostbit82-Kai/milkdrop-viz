@@ -376,6 +376,13 @@ def _x11_run(on, displays=TWO, cfg=None):
     real_x11, real_tree = viz_common._libx11, viz_common._x11_query_tree
     real_origin = viz_common.x11_window_origin
     real_stack = viz_common.x11_client_stack
+    real_class = viz_common.x11_wm_class
+    real_nemo = viz_common.nemo_allow_desktop_window
+    # The fake Xlib has no property reader and gsettings is not this
+    # test's business; record what the wallpaper path asked for instead.
+    viz_common.x11_wm_class = lambda _l, _dpy, _w: "BomsAIVisualizer"
+    viz_common.nemo_allow_desktop_window = (
+        lambda c, run=None: log.append(("nemo_ignore", c)) or "")
     viz_common.x11_client_stack = lambda l, _dpy: list(l.clients)
     viz_common._libx11 = lambda: lib
     # XQueryTree's out-parameters are not worth faking; the tree it reports is.
@@ -393,6 +400,8 @@ def _x11_run(on, displays=TWO, cfg=None):
         viz_common._x11_query_tree = real_tree
         viz_common.x11_window_origin = real_origin
         viz_common.x11_client_stack = real_stack
+        viz_common.x11_wm_class = real_class
+        viz_common.nemo_allow_desktop_window = real_nemo
     return r, lib, fake
 
 
@@ -879,6 +888,138 @@ def the_wallpaper_action_is_in_the_editor():
     assert "toggle_wallpaper" in viz_common.ACTION_NOTES
 
 
+# ── Nemo gives up the desktop when another window claims it ──────────────────
+
+class FakeGSettings:
+    """`gsettings` as a Nemo session answers it.
+
+    `value` None means the schema is not there at all, which is every desktop
+    that is not Cinnamon and is the only signal this has to go on.
+    """
+
+    def __init__(self, value=None, set_rc=0):
+        self.value = value
+        self.set_rc = set_rc
+        self.calls = []
+
+    def __call__(self, argv, **kw):
+        self.calls.append(list(argv))
+        assert argv[0] == "gsettings", argv
+
+        class R:
+            pass
+        r = R()
+        if argv[1] == "get":
+            r.returncode = 0 if self.value is not None else 1
+            # An empty array prints with its type spelled out, because `[]`
+            # on its own does not say what is in it.
+            r.stdout = "" if self.value is None else (
+                "@as []\n" if not self.value else repr(self.value) + "\n")
+        else:
+            r.returncode = self.set_rc
+            r.stdout = ""
+            if self.set_rc == 0:
+                import ast as _ast
+                self.value = _ast.literal_eval(argv[4])
+        return r
+
+    def sets(self):
+        return [c for c in self.calls if c[1] == "set"]
+
+
+STOCK = ["conky", "csd-background"]
+
+
+def nemo_is_told_to_keep_the_icons():
+    """The one that matters. Without this Nemo finds a desktop-type window at
+    startup, prints "Desktop already managed by another application", and draws
+    no icons at all -- which looks exactly like the visuals covering them."""
+    gs = FakeGSettings(list(STOCK))
+    said = viz_common.nemo_allow_desktop_window("BomsAIVisualizer", run=gs)
+    assert said, "nothing was reported and nothing was written"
+    assert gs.value == STOCK + ["BomsAIVisualizer"], gs.value
+
+
+def the_entries_already_there_are_not_trampled():
+    """conky and csd-background are on that list because somebody else needs
+    them. Writing the key is a read-modify-write, not a set."""
+    gs = FakeGSettings(list(STOCK))
+    viz_common.nemo_allow_desktop_window("BomsAIVisualizer", run=gs)
+    for stock in STOCK:
+        assert stock in gs.value, gs.value
+
+
+def being_on_the_list_already_writes_nothing():
+    """This runs on every entry into wallpaper mode, so the steady state has
+    to be a single read."""
+    gs = FakeGSettings(STOCK + ["BomsAIVisualizer"])
+    assert viz_common.nemo_allow_desktop_window("BomsAIVisualizer", run=gs) == ""
+    assert gs.sets() == [], gs.sets()
+
+
+def a_desktop_that_is_not_nemo_is_left_alone():
+    """No schema, no Nemo. Nothing else publishes this key, and writing to a
+    schema that is not installed is an error, not a no-op."""
+    gs = FakeGSettings(None)
+    assert viz_common.nemo_allow_desktop_window("BomsAIVisualizer", run=gs) == ""
+    assert gs.sets() == [], gs.sets()
+
+
+def a_machine_with_no_gsettings_at_all_says_nothing():
+    def explode(argv, **kw):
+        raise FileNotFoundError("gsettings")
+    assert viz_common.nemo_allow_desktop_window("BomsAIVisualizer",
+                                                run=explode) == ""
+
+
+def a_wm_class_that_is_not_a_wm_class_is_refused():
+    """The value is pasted into a gsettings argument. Nothing that is not a
+    plain WM_CLASS gets that far -- and a window with no WM_CLASS at all reads
+    back as the empty string, which must not append an empty entry."""
+    for junk in ("", "'; rm -rf /", "two words", "a" * 80, None):
+        gs = FakeGSettings(list(STOCK))
+        assert viz_common.nemo_allow_desktop_window(junk, run=gs) == "", junk
+        assert gs.calls == [], (junk, gs.calls)
+
+
+def a_refused_write_is_not_reported_as_done():
+    gs = FakeGSettings(list(STOCK), set_rc=1)
+    assert viz_common.nemo_allow_desktop_window("BomsAIVisualizer", run=gs) == ""
+
+
+def the_instance_name_is_what_nemo_matches():
+    """WM_CLASS is instance then class, and the stock entries are instance
+    names -- conky's class is `Conky`. Reading the class half would put a name
+    on the list that Nemo never compares against."""
+    import viz_common as v
+    src = v.x11_wm_class.__doc__ or ""
+    assert "instance" in src.lower(), src
+
+
+
+def a_list_somebody_has_emptied_is_still_written_to():
+    """`gsettings get` prints an empty array as `@as []`, not as `[]` -- the
+    type has to be spelled out where there are no members to infer it from.
+    Parsing that as a plain literal fails, and failing quietly here would skip
+    the fix for the one person who had cleared the key."""
+    gs = FakeGSettings([])
+    assert viz_common.nemo_allow_desktop_window("BomsAIVisualizer", run=gs)
+    assert gs.value == ["BomsAIVisualizer"], gs.value
+
+
+
+def becoming_the_desktop_asks_nemo_to_keep_the_icons():
+    """The wiring, not the logic -- the logic is checked directly above. What
+    this pins is that the ask happens on the way *in* and not on the way out:
+    taking the app back off that list when wallpaper mode ends would lose the
+    icons again on the next restart, for a window that is no longer there."""
+    _r, lib_on, _f = _x11_run(True)
+    assert ("nemo_ignore", "BomsAIVisualizer") in lib_on.order, lib_on.order
+    _r2, lib_off, _f2 = _x11_run(False)
+    assert not [e for e in lib_off.order if e[0] == "nemo_ignore"], lib_off.order
+
+
+
 for fn in (the_worker_behind_the_icons_is_chosen,
            a_desktop_with_no_defview_gives_nothing,
            a_defview_with_no_sibling_gives_nothing,
@@ -926,7 +1067,17 @@ for fn in (the_worker_behind_the_icons_is_chosen,
            the_default_d_key_asks_for_wallpaper_mode,
            the_wallpaper_action_is_in_the_editor,
            the_on_top_key_flips_it_and_tells_sdl,
-           parking_as_the_desktop_drops_on_top_first):
+           parking_as_the_desktop_drops_on_top_first,
+           nemo_is_told_to_keep_the_icons,
+           the_entries_already_there_are_not_trampled,
+           being_on_the_list_already_writes_nothing,
+           a_desktop_that_is_not_nemo_is_left_alone,
+           a_machine_with_no_gsettings_at_all_says_nothing,
+           a_wm_class_that_is_not_a_wm_class_is_refused,
+           a_refused_write_is_not_reported_as_done,
+           the_instance_name_is_what_nemo_matches,
+           a_list_somebody_has_emptied_is_still_written_to,
+           becoming_the_desktop_asks_nemo_to_keep_the_icons):
     results.append(check(fn.__name__, fn))
 
 print("all wallpaper checks passed" if all(results) else "FAILURES")

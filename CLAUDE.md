@@ -213,6 +213,32 @@ There is no display in an agent shell and SDL needs one, so:
 
 ## Traps already paid for
 
+- **Nemo gives up the desktop icons entirely when another window claims to be
+  the desktop — and nothing about the stacking is wrong when it does.**
+  Measured on Cinnamon 6.0.5, 14 Sep 2026. `nemo-desktop` checks for other
+  `_NET_WM_WINDOW_TYPE_DESKTOP` windows **at startup**, and if it finds one it
+  prints *"Desktop already managed by another application, skipping desktop
+  setup"* and exits without drawing a single icon. So wallpaper mode reads as
+  the visuals *covering* the icons while the desklets still show over the top:
+  the desklets are drawn by the Cinnamon shell and never went away, and the
+  icons were never drawn at all. `_NET_CLIENT_LIST_STACKING` says the
+  visualiser is at index 0, below nemo-desktop, the whole time — so
+  `x11_lower_to_bottom` and `_hold_wallpaper_bottom`, which are right about
+  everything they measure, cannot see this and do not help. **Check whether
+  `nemo-desktop` is running before believing a stacking bug.**
+
+  The order is what decides it. Turning wallpaper mode on while Nemo is
+  already up is fine, because Nemo only looks once. It is the sessions where
+  Nemo starts *second* that lose the icons — a login with
+  autostart-as-wallpaper, a Cinnamon restart, Nemo restarting for any reason.
+  Nemo names the escape hatch in that same warning:
+  `org.nemo.desktop ignored-desktop-handlers`, which ships holding `conky` and
+  `csd-background`. `nemo_allow_desktop_window` puts the app on it on the way
+  into wallpaper mode and leaves it there — taking it back off on the way out
+  would lose the icons again at the next restart. **The list matches the
+  WM_CLASS *instance*, not the class**: the stock entries are `conky` and
+  `csd-background`, whose classes are `Conky` and `Csd-background`.
+
 - **The first run opens a modal photosensitivity warning, and a piped run then
   prints absolutely nothing.** 2026-09-13. `App._warn_photosensitivity` is a
   `QMessageBox.warning` gated on `cfg["seizure_warning_ack"]`, and it runs

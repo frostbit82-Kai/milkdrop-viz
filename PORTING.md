@@ -1013,6 +1013,57 @@ still sitting in `installer/dist/` beside the new one; Linux keeps one package
 in that directory and Windows should too, but deleting the thing the site may
 be linking is not a call to make from here.
 
+### Mint, 2026-09-14 — why the icons were gone
+
+`_hold_wallpaper_bottom` works. It was checked on the Cinnamon session it was
+written for and could not be tested on: the visualiser went to index 0 of
+`_NET_CLIENT_LIST_STACKING`, below `nemo-desktop`, and **stayed** there through
+a workspace switch, a window mapping and unmapping over it, and Show Desktop —
+75 seconds of watching the property, no drift. Entering wallpaper mode from the
+`d` key put it there in 2.2 s. Nothing in this part was wrong.
+
+The report was real anyway, and it is not a stacking bug at all.
+`nemo-desktop` looks for other `_NET_WM_WINDOW_TYPE_DESKTOP` windows **when it
+starts**, and gives up completely if it finds one:
+
+    ** (nemo-desktop:9809): WARNING **: Desktop already managed by another
+    application, skipping desktop setup.
+    To change this, modify org.nemo.desktop 'ignored-desktop-handlers'.
+
+It then exits. No icons are drawn, so the visuals look like they have covered
+them — while the desklets, which the Cinnamon shell draws and which never went
+anywhere, still sit over the top. That is exactly the shape of the report:
+*covers icons, but remains below widgets*. Every property involved reads
+correct throughout, which is why nothing that measures the stack could catch
+it.
+
+Only the sessions where Nemo starts **second** lose the icons: a login with
+autostart-as-wallpaper, a Cinnamon restart, Nemo restarting for any reason.
+Turning wallpaper mode on by hand while Nemo is already up has always worked,
+which is why it kept passing.
+
+`nemo_allow_desktop_window` adds the app to the list Nemo names, once, on the
+way into wallpaper mode — and leaves it there, because taking it off again at
+the end would lose the icons at the next restart. The list matches the WM_CLASS
+*instance*; `x11_wm_class` reads that off the live window rather than
+hard-coding it, since a source run is not called `BomsAIVisualizer`. Verified
+against the running app: `x11_wm_class` returned `BomsAIVisualizer`,
+`nemo-desktop` and `com.anthropic.claude` for the three managed windows, the
+write was idempotent and left `conky` and `csd-background` alone, and with it
+in place `nemo-desktop` started cleanly underneath a running wallpaper-mode
+visualiser and drew the icons over it.
+
+Written on the way *in* and not at launch, because nowhere else knows the
+window is about to claim the desktop, and a machine that never uses wallpaper
+mode should not have its desktop settings touched. It is wrapped in its own
+try: a convenience for the next session is not a reason to refuse to be the
+wallpaper in this one.
+
+**A session that has already lost its icons does not get them back until Nemo
+restarts** — the setting is read at Nemo's startup. The toast says so. Logging
+out and back in is the fix; so is `nemo-desktop &` from a terminal.
+
+
 ## Notes
 
 - `SDL_GetWindowWMInfo` is used once, for the embedded-in-BomsAI-Studio case. The
