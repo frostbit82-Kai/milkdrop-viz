@@ -92,6 +92,9 @@ class StubRenderer(v.Renderer):
     playlist. Nothing else of the renderer is built."""
     def __init__(self, locked=True):
         self._pm = FakePM()
+        # Two visuals: the second is what auto-advance also steps forward.
+        self._pms = [self._pm, None]
+        self._focus = 0
         self._bridge = FakeBridge()
         self._locked = locked
         self._rated = False

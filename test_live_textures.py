@@ -394,13 +394,17 @@ def a_gif_can_stand_in_for_a_texture_and_be_taken_back_out():
 # ── wiring, read off the shipped source ───────────────────────────────────
 
 def the_callback_is_registered_once_the_search_paths_are_in_place():
-    whole = inspect.getsource(v.Renderer)
-    assert "set_texture_load_callback(self._on_texture_wanted)" in whole, \
+    # That one method, not the whole class: the second visual registers the
+    # callback too, and checking the class source let a mutation that
+    # unguarded this one go straight past -- the string was still there,
+    # three thousand lines away, so the check could not fail.
+    body = inspect.getsource(v.Renderer._init_projectm)
+    assert "set_texture_load_callback(self._on_texture_wanted)" in body, \
         "nothing registers the texture callback"
-    i = whole.index("set_texture_load_callback(self._on_texture_wanted)")
-    j = whole.index("self._apply_texture_paths()")
+    i = body.index("set_texture_load_callback(self._on_texture_wanted)")
+    j = body.index("self._apply_texture_paths()")
     assert j < i, "registered before projectM knows where to look"
-    assert 'self._cfg.get("live_textures", True)' in whole, \
+    assert 'self._cfg.get("live_textures", True)' in body, \
         "no way to turn it off"
 
 
@@ -419,7 +423,7 @@ def frames_go_in_before_the_preset_draws():
     body = inspect.getsource(v.Renderer.run)
     assert "self._live_this_frame()" in body, "nothing feeds the textures"
     assert body.index("self._live_this_frame()") < \
-        body.index("self._pm.render_frame()"), "fed after the preset drew"
+        body.index("self._render_visuals()"), "fed after the preset drew"
     assert "self._stop_live_textures()" in body, "decoders outlive the loop"
 
 

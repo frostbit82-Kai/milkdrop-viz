@@ -1078,6 +1078,8 @@ DEFAULT_KEYMAPS = {
     "toggle_wallpaper": "d",
     "exclude":          "x",
     "snapshot":         "c",
+    "toggle_dual":      "2",
+    "swap_focus":       "TAB",
 }
 
 
@@ -1567,6 +1569,17 @@ class ProjectM4:
         # THE KEY FIX: render is projectm_opengl_render_frame, not projectm_render_frame
         C.projectm_opengl_render_frame.restype  = None
         C.projectm_opengl_render_frame.argtypes = [ctypes.c_void_p]
+
+        # Render into a framebuffer of ours rather than the window. What
+        # makes two visuals at once possible: each instance draws into its
+        # own colour texture and one shader pass mixes them.
+        try:
+            C.projectm_opengl_render_frame_fbo.restype  = None
+            C.projectm_opengl_render_frame_fbo.argtypes = [ctypes.c_void_p,
+                                                            ctypes.c_uint32]
+            self.can_render_fbo = True
+        except AttributeError:
+            self.can_render_fbo = False
 
         C.projectm_set_window_size.restype  = None
         C.projectm_set_window_size.argtypes = [ctypes.c_void_p,
@@ -2082,6 +2095,14 @@ class ProjectM4:
 
     def render_frame(self):
         self._core.projectm_opengl_render_frame(self._pm)
+
+    def render_frame_fbo(self, fbo: int):
+        """Draw this frame into `fbo` instead of the window. Render thread.
+
+        projectM binds it itself and leaves it bound, so whatever draws next
+        has to bind what it wants.
+        """
+        self._core.projectm_opengl_render_frame_fbo(self._pm, int(fbo))
 
     def add_pcm_float(self, samples, count: int, channels: int = 2):
         arr = (ctypes.c_float * len(samples))(*samples)
@@ -3073,6 +3094,8 @@ class Bridge(QObject):
     no_presets         = pyqtSignal(str)        # nothing loaded; arg is the directory tried
     wallpaper_changed  = pyqtSignal(bool)       # window is/is not the desktop
     thumbnail_ready    = pyqtSignal(str)        # a preset's picture was written
+    dual_changed       = pyqtSignal(bool)       # a second visual is/is not on
+    focus_changed      = pyqtSignal(int)        # which visual the controls drive
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -3807,6 +3830,29 @@ class SettingsDialog(QDialog):
             self._quality.setCurrentIndex(idx)
         layout.addRow("Quality:", self._quality)
 
+        # The second visual. Its own quality because the pair costs about
+        # twice one of them to draw, and low is the setting you want on the
+        # one that is blended underneath rather than looked at.
+        self._dual_quality = QComboBox()
+        for q in ["low", "medium", "high", "ultra"]:
+            self._dual_quality.addItem(q.capitalize(), q)
+        idx = self._dual_quality.findData(cfg.get("dual_quality", "low"))
+        if idx >= 0:
+            self._dual_quality.setCurrentIndex(idx)
+        self._dual_quality.setToolTip(
+            "Applies next time the second visual is switched on.")
+        layout.addRow("Second visual quality:", self._dual_quality)
+
+        self._dual_opacity = QDoubleSpinBox()
+        self._dual_opacity.setRange(0.0, 1.0)
+        self._dual_opacity.setSingleStep(0.05)
+        self._dual_opacity.setDecimals(2)
+        self._dual_opacity.setValue(cfg.get("dual_opacity", 0.5))
+        self._dual_opacity.setToolTip(
+            "How hard the second visual shows through the first. Takes "
+            "effect as you change it.")
+        layout.addRow("Second visual strength:", self._dual_opacity)
+
         # Theme. Dark is the default and was the only option: the
         # visualiser is a black window, and a light dialog beside it is a
         # flashbang. "Follow system" is for desktops that are not.
@@ -3974,6 +4020,8 @@ class SettingsDialog(QDialog):
             "preset_random_extra":  self._rnd.value(),
             "fps":                  self._fps.value(),
             "quality":              quality,
+            "dual_quality":         self._dual_quality.currentData() or "low",
+            "dual_opacity":         round(self._dual_opacity.value(), 2),
             "theme":                self._theme.currentData() or "dark",
             "mesh_x":               mx,
             "mesh_y":               my,
@@ -4060,6 +4108,8 @@ ACTION_LABELS = {
     "toggle_wallpaper": "Desktop wallpaper mode on / off",
     "exclude":          "Exclude this visual (rate it 0★) and move on",
     "snapshot":         "Snapshot this visual for the browser",
+    "toggle_dual":      "Show a second visual over the first",
+    "swap_focus":       "Adjust the other visual",
 }
 
 ACTION_NOTES = {
@@ -4716,6 +4766,7 @@ MENU_ENTRIES = (
     ("reset_ratings", "Reset all ratings\u2026",        ""),
     ("collections",   "Collections",                  ""),
     ("lock",          "Lock / unlock visual",         "lock"),
+    ("dual",          "Second visual",                "toggle_dual"),
     ("borderless",    "Borderless window",            "toggle_borderless"),
     ("on_top",        "Always on top",                "toggle_on_top"),
     ("fullscreen",    "Fullscreen",                   "fullscreen"),
@@ -4878,6 +4929,8 @@ class ContextMenu(QMenu):
         if on("lock"):
             lock_text = "\U0001f512  Unlock visual" if locked else "\U0001f513  Lock visual"
             self.addAction(lock_text, lambda: self._renderer.request_toggle_lock())
+        if on("dual"):
+            self._build_dual_menu()
         self.addSeparator()
 
         if on("borderless"):
@@ -4944,6 +4997,27 @@ class ContextMenu(QMenu):
                 previous_was_a_rule = True
         while self.actions() and self.actions()[-1].isSeparator():
             self.removeAction(self.actions()[-1])
+
+    def _build_dual_menu(self):
+        """The second visual, and which of the two the controls drive.
+
+        The focus line is the one that needs saying out loud: everything else
+        on this menu, every key and the whole preset browser act on one of the
+        two visuals, and without a line naming which, the other one looks
+        broken rather than unselected.
+        """
+        if not self._renderer.can_dual():
+            return
+        if not self._renderer.dual_on():
+            self.addAction("\u29c9   Add a second visual",
+                           lambda: self._renderer.request_dual(True))
+            return
+        self.addAction("\u29c9   One visual again",
+                       lambda: self._renderer.request_dual(False))
+        which = self._renderer.focus()
+        self.addAction("\u21c4   Adjust the first visual" if which
+                       else "\u21c4   Adjust the second visual",
+                       lambda: self._renderer.request_focus(1 - which))
 
     def _build_wallpaper_entry(self):
         """Live where the session can host it, disabled with a reason where it
@@ -6925,6 +6999,219 @@ class _LiveTexture:
             self.src = None
 
 
+# ─── dual preset ───────────────────────────────────────────────────────────
+#
+# Two projectM instances in one GL context, each drawing into a colour
+# texture of its own, mixed by one shader pass. Blended over each other
+# rather than side by side, which is what was asked for and is also the only
+# one of the two that needs a shader at all.
+#
+# glBlitFramebuffer would be the obvious way to get a framebuffer onto the
+# screen and it cannot do this: it ignores blending entirely. Hence a program
+# of our own -- the one piece of hand-written OpenGL in the application.
+
+#: 0 is the primary alone; 1 is the secondary at full strength.
+DUAL_OPACITY_DEFAULT = 0.5
+
+_BLEND_VERT = """#version 330 core
+out vec2 uv;
+void main()
+{
+    // One oversized triangle, not a quad: three vertices, no buffer and no
+    // vertex attributes to set up. IDs 0,1,2 give (0,0) (2,0) (0,2).
+    vec2 p = vec2(float((gl_VertexID << 1) & 2), float(gl_VertexID & 2));
+    uv = p;
+    gl_Position = vec4(p * 2.0 - 1.0, 0.0, 1.0);
+}
+"""
+
+_BLEND_FRAG = """#version 330 core
+in vec2 uv;
+out vec4 colour;
+uniform sampler2D visual_a;
+uniform sampler2D visual_b;
+uniform float strength;
+void main()
+{
+    vec3 a = texture(visual_a, uv).rgb;
+    vec3 b = texture(visual_b, uv).rgb * strength;
+    // Screen rather than add. Two bright presets added together clip to
+    // white and both shapes disappear; screen keeps each one readable and
+    // cannot blow past 1 however bright they get.
+    colour = vec4(1.0 - (1.0 - a) * (1.0 - b), 1.0);
+}
+"""
+
+
+def _compile_shader(kind, source: str) -> int:
+    """One shader, compiled, or 0 with the reason printed.
+
+    A driver that refuses this is a driver that cannot run projectM either,
+    so the failure is reported and dual mode declines rather than the
+    application ending.
+    """
+    shader = glCreateShader(kind)
+    glShaderSource(shader, source)
+    glCompileShader(shader)
+    if not glGetShaderiv(shader, GL_COMPILE_STATUS):
+        why = glGetShaderInfoLog(shader)
+        if isinstance(why, bytes):
+            why = why.decode("utf-8", "replace")
+        print(f"[dual] shader: {why.strip()}", flush=True)
+        glDeleteShader(shader)
+        return 0
+    return shader
+
+
+class _Blender:
+    """Two offscreen targets and the one draw call that mixes them.
+
+    Everything here belongs to the render thread: it is the only one with the
+    GL context. Built the first time it is used and rebuilt whenever the
+    window changes size, because a framebuffer's colour texture is a fixed
+    size and a stale one would show the old window letterboxed into the new.
+    """
+
+    def __init__(self):
+        self.size = (0, 0)
+        self.error = ""
+        self._fbo = [0, 0]
+        self._tex = [0, 0]
+        self._depth = [0, 0]
+        self._program = 0
+        self._vao = 0
+        self._uniform = {}
+
+    def ready(self, w: int, h: int) -> bool:
+        """True when both targets exist at this size, building them if not."""
+        if self.error or w <= 0 or h <= 0:
+            return False
+        if self._program and self.size == (w, h):
+            return True
+        try:
+            if not self._program:
+                self._build_program()
+            self._build_targets(w, h)
+            self.size = (w, h)
+            return True
+        except Exception as why:
+            # Said once, and dual mode goes back off rather than the loop
+            # trying again sixty times a second.
+            self.error = str(why)
+            print(f"[dual] {why}", flush=True)
+            self.drop()
+            return False
+
+    def _build_program(self):
+        vert = _compile_shader(GL_VERTEX_SHADER, _BLEND_VERT)
+        frag = _compile_shader(GL_FRAGMENT_SHADER, _BLEND_FRAG)
+        if not vert or not frag:
+            raise RuntimeError("the blend shader would not compile")
+        program = glCreateProgram()
+        glAttachShader(program, vert)
+        glAttachShader(program, frag)
+        glLinkProgram(program)
+        glDeleteShader(vert)
+        glDeleteShader(frag)
+        if not glGetProgramiv(program, GL_LINK_STATUS):
+            why = glGetProgramInfoLog(program)
+            if isinstance(why, bytes):
+                why = why.decode("utf-8", "replace")
+            glDeleteProgram(program)
+            raise RuntimeError(f"the blend shader would not link: {why.strip()}")
+        self._program = int(program)
+        self._uniform = {n: glGetUniformLocation(self._program, n)
+                         for n in ("visual_a", "visual_b", "strength")}
+        # A core profile refuses to draw without one bound, even for a
+        # triangle that reads no vertex attributes at all.
+        self._vao = int(glGenVertexArrays(1))
+
+    def _build_targets(self, w: int, h: int):
+        self._drop_targets()
+        for i in (0, 1):
+            tex = int(glGenTextures(1))
+            glBindTexture(GL_TEXTURE_2D, tex)
+            glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, w, h, 0,
+                         GL_RGBA, GL_UNSIGNED_BYTE, None)
+            for pname, value in ((GL_TEXTURE_MIN_FILTER, GL_LINEAR),
+                                 (GL_TEXTURE_MAG_FILTER, GL_LINEAR),
+                                 (GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE),
+                                 (GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE)):
+                glTexParameteri(GL_TEXTURE_2D, pname, value)
+            glBindTexture(GL_TEXTURE_2D, 0)
+            fbo = int(glGenFramebuffers(1))
+            glBindFramebuffer(GL_FRAMEBUFFER, fbo)
+            glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0,
+                                   GL_TEXTURE_2D, tex, 0)
+            # projectM asks SDL for a depth buffer, so give each target one
+            # rather than find out which preset needs it.
+            depth = int(glGenRenderbuffers(1))
+            glBindRenderbuffer(GL_RENDERBUFFER, depth)
+            glRenderbufferStorage(GL_RENDERBUFFER, GL_DEPTH_COMPONENT24, w, h)
+            glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT,
+                                      GL_RENDERBUFFER, depth)
+            done = glCheckFramebufferStatus(GL_FRAMEBUFFER)
+            glBindFramebuffer(GL_FRAMEBUFFER, 0)
+            self._fbo[i], self._tex[i], self._depth[i] = fbo, tex, depth
+            if done != GL_FRAMEBUFFER_COMPLETE:
+                raise RuntimeError(f"framebuffer {i} is not complete ({done})")
+
+    def target(self, i: int) -> int:
+        """The framebuffer the i-th visual draws into."""
+        return self._fbo[i]
+
+    def draw(self, w: int, h: int, strength: float):
+        """Mix the two targets onto the window. Render thread.
+
+        projectM leaves its own program, its own framebuffer and whatever
+        blend state it used behind it, so all of that is set here rather than
+        assumed -- the symptom of assuming is a black window on one machine
+        and a correct one on the next.
+        """
+        glBindFramebuffer(GL_FRAMEBUFFER, 0)
+        glViewport(0, 0, w, h)
+        glDisable(GL_BLEND)
+        glDisable(GL_DEPTH_TEST)
+        glDisable(GL_SCISSOR_TEST)
+        glUseProgram(self._program)
+        glActiveTexture(GL_TEXTURE0)
+        glBindTexture(GL_TEXTURE_2D, self._tex[0])
+        glActiveTexture(GL_TEXTURE1)
+        glBindTexture(GL_TEXTURE_2D, self._tex[1])
+        glUniform1i(self._uniform["visual_a"], 0)
+        glUniform1i(self._uniform["visual_b"], 1)
+        glUniform1f(self._uniform["strength"],
+                    max(0.0, min(1.0, float(strength))))
+        glBindVertexArray(self._vao)
+        glDrawArrays(GL_TRIANGLES, 0, 3)
+        glBindVertexArray(0)
+        glUseProgram(0)
+        glActiveTexture(GL_TEXTURE0)
+
+    def _drop_targets(self):
+        for i in (0, 1):
+            if self._fbo[i]:
+                glDeleteFramebuffers(1, [self._fbo[i]])
+            if self._tex[i]:
+                glDeleteTextures(1, [self._tex[i]])
+            if self._depth[i]:
+                glDeleteRenderbuffers(1, [self._depth[i]])
+            self._fbo[i] = self._tex[i] = self._depth[i] = 0
+        self.size = (0, 0)
+
+    def drop(self):
+        """Give everything back. Render thread, before the context goes."""
+        try:
+            self._drop_targets()
+            if self._vao:
+                glDeleteVertexArrays(1, [self._vao])
+            if self._program:
+                glDeleteProgram(self._program)
+        except Exception:
+            pass
+        self._vao = self._program = 0
+
+
 # ─── idle pause ───────────────────────────────────────────────────────────────
 
 #: SHQueryUserNotificationState answers. Only two of them mean "somebody is
@@ -7136,6 +7423,28 @@ from OpenGL.GL import (glViewport, glClear, GL_COLOR_BUFFER_BIT,
                        GL_TEXTURE_2D, GL_RGBA, GL_LINEAR, GL_CLAMP_TO_EDGE,
                        GL_TEXTURE_MIN_FILTER, GL_TEXTURE_MAG_FILTER,
                        GL_TEXTURE_WRAP_S, GL_TEXTURE_WRAP_T)
+# Dual-preset mode only. Kept in a block of its own because it is the one
+# place this application does its own OpenGL beyond uploading a texture:
+# two framebuffers, a shader, and a triangle.
+from OpenGL.GL import (glGenFramebuffers, glBindFramebuffer,
+                       glFramebufferTexture2D, glDeleteFramebuffers,
+                       glCheckFramebufferStatus, GL_FRAMEBUFFER,
+                       GL_COLOR_ATTACHMENT0, GL_FRAMEBUFFER_COMPLETE,
+                       glGenRenderbuffers, glBindRenderbuffer,
+                       glRenderbufferStorage, glFramebufferRenderbuffer,
+                       glDeleteRenderbuffers, GL_RENDERBUFFER,
+                       GL_DEPTH_COMPONENT24, GL_DEPTH_ATTACHMENT,
+                       glCreateShader, glShaderSource, glCompileShader,
+                       glGetShaderiv, GL_COMPILE_STATUS, glGetShaderInfoLog,
+                       glCreateProgram, glAttachShader, glLinkProgram,
+                       glGetProgramiv, GL_LINK_STATUS, glGetProgramInfoLog,
+                       glDeleteShader, glDeleteProgram, glUseProgram,
+                       glGetUniformLocation, glUniform1i, glUniform1f,
+                       GL_VERTEX_SHADER, GL_FRAGMENT_SHADER,
+                       glGenVertexArrays, glBindVertexArray,
+                       glDeleteVertexArrays, glDrawArrays, GL_TRIANGLES,
+                       glActiveTexture, GL_TEXTURE0, GL_TEXTURE1,
+                       glDisable, GL_BLEND, GL_DEPTH_TEST, GL_SCISSOR_TEST)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -7320,6 +7629,17 @@ class Renderer:
         self._live_tex     = {}
         self._live_missing = set()
 
+        #: Both visuals, primary first, and which one the controls drive.
+        #: `self._pm` is whichever has focus -- a plain attribute rather than
+        #: a property, so all hundred-odd call sites, the browser, the menu,
+        #: the keys and the tweak panel keep working untouched and drive
+        #: whichever visual is being adjusted.
+        self._pms   = [None, None]
+        self._focus = 0
+        self._blend = None          # a _Blender while two are on screen
+        self._req_dual  = None      # True or False, from the Qt thread
+        self._req_focus = None      # 0 or 1, ditto
+
         #: Set by the key or the browser's button. Taken on the render thread
         #: at the one point in the loop where the back buffer holds this
         #: frame, which is where _maybe_thumbnail already runs.
@@ -7480,6 +7800,7 @@ class Renderer:
             print(f"[renderer] projectm.create() failed: {e}")
             return False
 
+        self._pms[0] = self._pm
         self._apply_pm_settings(self._cfg)
 
         preset_dir = self._cfg.get("preset_dir", "")
@@ -7515,6 +7836,11 @@ class Renderer:
         # feature being broken rather than as one missing line.
         if self.burn_in()["path"]:
             self._req_burn = self.burn_in()["path"]
+        # Same again for the second visual: it is a setting, so it has to
+        # come back by itself. Queued rather than built here, because
+        # building it wants the preset directory loaded first.
+        if self._cfg.get("dual_enabled"):
+            self._req_dual = True
 
         # Before the library loads, so the first frame drawn is ours. projectM
         # draws its own "M" idle preset for as long as nothing else is
@@ -7586,24 +7912,38 @@ class Renderer:
             bundled_dir("assets", "textures"),
         ) if p and os.path.isdir(p)]
 
+    def _drawable_size(self):
+        """The window in pixels, which on a scaled display is not its size.
+
+        SDL reports both and they differ by the scale factor; everything
+        drawn with GL wants this one.
+        """
+        if not self._window:
+            return (0, 0)
+        w, h = ctypes.c_int(), ctypes.c_int()
+        sdl2.SDL_GL_GetDrawableSize(self._window,
+                                    ctypes.byref(w), ctypes.byref(h))
+        return (int(w.value), int(h.value))
+
     def _create_projectm(self) -> ProjectM4:
         """Factory hook — override to pass a different config_dir."""
         return load_projectm()
 
-    def _apply_pm_settings(self, cfg: dict):
+    def _apply_pm_settings(self, cfg: dict, pm=None):
+        pm = pm or self._pm
         quality = cfg.get("quality", "high")
         mx, my  = QUALITY_MESH.get(quality, (64, 48))
-        self._pm.set_mesh_size(
+        pm.set_mesh_size(
             cfg.get("mesh_x", mx),
             cfg.get("mesh_y", my)
         )
-        self._pm.set_beat_sensitivity(cfg.get("beat_sensitivity", 1.0))
-        self._pm.set_hard_cut_enabled(cfg.get("hard_cuts_enabled", True))
-        self._pm.set_hard_cut_sensitivity(cfg.get("hard_cut_sensitivity", 1.0))
-        self._pm.set_soft_cut_duration(cfg.get("soft_cut_duration", 3.0))
+        pm.set_beat_sensitivity(cfg.get("beat_sensitivity", 1.0))
+        pm.set_hard_cut_enabled(cfg.get("hard_cuts_enabled", True))
+        pm.set_hard_cut_sensitivity(cfg.get("hard_cut_sensitivity", 1.0))
+        pm.set_soft_cut_duration(cfg.get("soft_cut_duration", 3.0))
         _fps = cfg.get("fps", 60)
-        self._pm.set_fps(_fps if _fps and _fps > 0 else 120)
-        self._pm.set_preset_start_clean(bool(cfg.get("preset_start_clean")))
+        pm.set_fps(_fps if _fps and _fps > 0 else 120)
+        pm.set_preset_start_clean(bool(cfg.get("preset_start_clean")))
 
     # ── Public thread-safe requests ───────────────────────────────────────
 
@@ -8294,7 +8634,9 @@ class Renderer:
                         nw = event.window.data1
                         nh = event.window.data2
                         glViewport(0, 0, nw, nh)
-                        self._pm.set_window_size(nw, nh)
+                        for pm in self._pms:
+                            if pm is not None:
+                                pm.set_window_size(nw, nh)
                     # Any window event may have moved or resized us: this one
                     # branch covers moves, fullscreen, restore and maximise
                     # without a case for each.
@@ -8350,7 +8692,17 @@ class Renderer:
                     # The merged config, not the diff: _apply_pm_settings reads
                     # every projectM setting with a default, so handing it a
                     # partial dict would quietly reset whatever is missing.
-                    self._apply_pm_settings(self._cfg)
+                    # Named instances rather than self._pm: with two visuals
+                    # up, self._pm is whichever is being adjusted, and the
+                    # second one has a quality of its own.
+                    self._apply_pm_settings(self._cfg, self._pms[0])
+                    if self._pms[1] is not None:
+                        second = dict(self._cfg)
+                        second["quality"] = self._cfg.get("dual_quality",
+                                                          "low")
+                        second.pop("mesh_x", None)
+                        second.pop("mesh_y", None)
+                        self._apply_pm_settings(second, self._pms[1])
                     if "fps" in updates:
                         self._set_swap_interval(updates.get("fps", 60))
                     if "audio_device" in updates:
@@ -8375,8 +8727,9 @@ class Renderer:
                     sdl2.SDL_SetWindowSize(self._window, gw, gh)
                     self._track_window()
                     glViewport(0, 0, gw, gh)
-                    if self._pm:
-                        self._pm.set_window_size(gw, gh)
+                    for pm in self._pms:
+                        if pm is not None:
+                            pm.set_window_size(gw, gh)
                 if self._req_sort is not None:
                     by = self._req_sort
                     self._req_sort = None
@@ -8412,6 +8765,14 @@ class Renderer:
                     path = self._req_burn
                     self._req_burn = None
                     self._do_set_burn(path)
+                if self._req_dual is not None:
+                    on = self._req_dual
+                    self._req_dual = None
+                    self._do_set_dual(on)
+                if self._req_focus is not None:
+                    which = self._req_focus
+                    self._req_focus = None
+                    self._do_set_focus(which)
                 if self._req_preset_data is not None:
                     text = self._req_preset_data
                     self._req_preset_data = None
@@ -8455,6 +8816,17 @@ class Renderer:
                 elapsed = _time.monotonic() - self._preset_start
                 if elapsed >= self._preset_duration:
                     self._do_next(hard=False)
+                    # The one that is not being adjusted moves as well, on
+                    # its own playlist position, so the two are never showing
+                    # the same preset for long. Everything a person does --
+                    # next, previous, the browser, the editor -- still goes
+                    # to the focused one alone.
+                    other = self._pms[1 - self._focus]
+                    if other is not None:
+                        try:
+                            other.next_preset(hard_cut=False)
+                        except Exception as why:
+                            print(f"[dual] next failed: {why}", flush=True)
 
             # ── Cursor auto-hide (fullscreen only, 3s idle) ───────────────
             flags = sdl2.SDL_GetWindowFlags(self._window) if self._window else 0
@@ -8471,7 +8843,11 @@ class Renderer:
             chunk = self._audio.get_chunk()
             if chunk is not None:
                 flat = chunk.flatten().tolist()
-                self._pm.add_pcm_float(flat, len(flat) // 2, 2)
+                # Both visuals, not the focused one: a second visual that
+                # does not hear the music is a still picture.
+                for pm in self._pms:
+                    if pm is not None:
+                        pm.add_pcm_float(flat, len(flat) // 2, 2)
 
             # ── Render ────────────────────────────────────────────────────
             t0 = _time.monotonic()
@@ -8479,8 +8855,7 @@ class Renderer:
             # is about to draw over, so burning first is what puts the picture
             # through this frame's warp rather than the next one's.
             self._live_this_frame()
-            self._burn_this_frame()
-            self._pm.render_frame()
+            self._render_visuals()
             # Before the swap, always: glReadPixels reads the back buffer, and
             # after SDL_GL_SwapWindow that is last frame's content, not this
             # one's.
@@ -8523,8 +8898,14 @@ class Renderer:
         self._do_set_burn("")
         self._stop_live_textures()
         self._audio.stop()
-        if self._pm:
-            self._pm.destroy()
+        if self._blend is not None:
+            self._blend.drop()
+            self._blend = None
+        for i, pm in enumerate(self._pms):
+            if pm is not None:
+                pm.destroy()
+            self._pms[i] = None
+        self._pm = None
         if self._context:
             sdl2.SDL_GL_DeleteContext(self._context)
         if self._window:
@@ -8571,6 +8952,14 @@ class Renderer:
             self._rate_current(+1)
         elif km("rate_down", sym, scancode):
             self._rate_current(-1)
+        elif km("toggle_dual", sym, scancode):
+            self._do_set_dual(not self.dual_on())
+        elif km("swap_focus", sym, scancode):
+            if self.dual_on():
+                self._do_set_focus(1 - self._focus)
+                self._bridge.show_toast.emit(
+                    "Adjusting the second visual" if self._focus
+                    else "Adjusting the first visual")
         elif km("snapshot", sym, scancode):
             self._want_snapshot = True
 
@@ -9535,7 +9924,7 @@ class Renderer:
         self._burn_tex, self._burn_size = gl_upload_rgba(
             self._burn_tex, self._burn_size, w, h, buf)
 
-    def _burn_this_frame(self):
+    def _burn_this_frame(self, pm=None):
         """Draw the burnt-in picture into the preset. Render thread.
 
         The canvas is rebuilt only when the decoder has a new frame or the
@@ -9545,13 +9934,11 @@ class Renderer:
         picture away again immediately, so drawing it once in four would show
         it flickering rather than sitting there.
         """
-        if self._burn_src is None or not self._pm:
+        pm = pm or self._pm
+        if self._burn_src is None or not pm:
             return
         try:
-            w, h = ctypes.c_int(), ctypes.c_int()
-            sdl2.SDL_GL_GetDrawableSize(self._window,
-                                        ctypes.byref(w), ctypes.byref(h))
-            dw, dh = int(w.value), int(h.value)
+            dw, dh = self._drawable_size()
             if dw <= 0 or dh <= 0:
                 return
             fresh = self._burn_src.next(_time.monotonic())
@@ -9576,13 +9963,179 @@ class Renderer:
             if self._burn_tex:
                 # (0, 0, whole window) is the only call this API gets right --
                 # see burn_canvas.
-                self._pm.burn_texture(self._burn_tex, 0, 0, dw, dh)
+                pm.burn_texture(self._burn_tex, 0, 0, dw, dh)
         except Exception as why:
             # One bad frame must not take the render thread down, and a
             # message every frame is worse than none: stop, and say so once.
             print(f"[burn] stopped: {why}", flush=True)
             self._do_set_burn("")
             self._bridge.show_toast.emit(f"Burn-in stopped: {why}")
+
+    # ── Two visuals at once ───────────────────────────────────────────────
+
+    def dual_on(self) -> bool:
+        """Is a second visual on screen? Either thread."""
+        return self._pms[1] is not None
+
+    def focus(self) -> int:
+        """Which visual the controls are driving. 0 is the primary."""
+        return self._focus
+
+    def can_dual(self) -> bool:
+        """False on a libprojectM that cannot render into a framebuffer."""
+        return bool(self._pm and getattr(self._pm, "can_render_fbo", False))
+
+    def request_dual(self, on: bool):
+        """Turn the second visual on or off. Qt thread."""
+        with self._lock:
+            self._req_dual = bool(on)
+
+    def request_focus(self, which: int):
+        """Point the controls at the primary (0) or the secondary (1)."""
+        with self._lock:
+            self._req_focus = 1 if which else 0
+
+    def _render_visuals(self):
+        """Draw this frame. Render thread.
+
+        One visual is the ordinary path and costs nothing new. Two means each
+        draws into a colour texture of its own and a shader pass mixes them,
+        which is the only way to blend two framebuffers -- glBlitFramebuffer
+        ignores blending.
+        """
+        second = self._pms[1]
+        dw, dh = self._drawable_size()
+        if (second is not None and self._blend is not None
+                and self._blend.ready(dw, dh)):
+            # The burn-in goes into whichever visual is being adjusted,
+            # matching every other control.
+            for i, pm in enumerate(self._pms):
+                if i == self._focus:
+                    self._burn_this_frame(pm)
+                # render_frame_fbo, not render_frame: the plain one targets
+                # framebuffer 0 whatever is bound when it is called, so both
+                # visuals went to the window and the blend then painted two
+                # empty textures over the top. A black window, no GL error,
+                # and nothing in the log.
+                pm.render_frame_fbo(self._blend.target(i))
+            self._blend.draw(dw, dh,
+                             self._cfg.get("dual_opacity",
+                                           DUAL_OPACITY_DEFAULT))
+            return
+        if second is not None:
+            # The blender gave up -- it says why once. Fall back to one
+            # visual rather than a black window.
+            self._do_set_dual(False)
+        self._burn_this_frame()
+        self._pm.render_frame()
+
+    def _do_set_dual(self, on: bool):
+        """Bring the second visual up or take it down. Render thread."""
+        if bool(on) == self.dual_on():
+            return
+        if on:
+            self._start_dual()
+        else:
+            self._stop_dual()
+        self._cfg["dual_enabled"] = self.dual_on()
+        self._bridge.dual_changed.emit(self.dual_on())
+
+    def _start_dual(self):
+        """A second projectM in the same GL context. Render thread.
+
+        Its own instance, its own playlist position and its own quality, so
+        the two are independent in everything except the window they share.
+        """
+        if not self.can_dual():
+            self._bridge.show_toast.emit(
+                "This build of projectM cannot show two visuals at once.")
+            return
+        dw, dh = self._drawable_size()
+        fps = self._cfg.get("fps", 60)
+        second = None
+        try:
+            second = self._create_projectm()
+            second.create(max(1, dw), max(1, dh),
+                          fps if fps and fps > 0 else 120)
+            # Low by default and separately settable: the second visual is
+            # the one you are not looking at, and the pair costs about twice
+            # a single one to draw.
+            cfg = dict(self._cfg)
+            cfg["quality"] = self._cfg.get("dual_quality", "low")
+            cfg.pop("mesh_x", None)
+            cfg.pop("mesh_y", None)
+            self._apply_pm_settings(cfg, second)
+            paths = self._texture_paths()
+            if paths:
+                second.set_texture_search_paths(paths)
+            if self._cfg.get("live_textures", True):
+                second.set_texture_load_callback(self._on_texture_wanted)
+            preset_dir = self._cfg.get("preset_dir", "")
+            if os.path.isdir(preset_dir):
+                count = second.load_preset_dir(preset_dir)
+                # Somewhere else in the library, or both visuals open on the
+                # same preset and the whole thing reads as not having worked.
+                # Half the library away rather than a random jump, so it is
+                # never the same preset and never a coin toss.
+                if count > 1:
+                    here = 0
+                    try:
+                        here = int(self._pm.playlist_position())
+                    except Exception:
+                        pass
+                    second.set_playlist_position((here + count // 2) % count,
+                                                 hard_cut=True)
+        except Exception as why:
+            print(f"[dual] could not start: {why}", flush=True)
+            self._bridge.show_toast.emit(f"Two visuals failed: {why}")
+            # A half-built instance still holds a projectM and everything it
+            # loaded. Failing to start is not a reason to keep it.
+            if second is not None:
+                try:
+                    second.destroy()
+                except Exception:
+                    pass
+            return
+        self._pms[1] = second
+        if self._blend is None:
+            self._blend = _Blender()
+        self._blend.error = ""
+        print("[dual] on", flush=True)
+
+    def _stop_dual(self):
+        """Take the second visual down. Render thread."""
+        second, self._pms[1] = self._pms[1], None
+        # Back to the primary first: leaving the controls pointed at a
+        # visual that is being destroyed is a use-after-free with extra
+        # steps.
+        self._do_set_focus(0)
+        if second is not None:
+            try:
+                second.destroy()
+            except Exception as why:
+                print(f"[dual] destroy failed: {why}", flush=True)
+        if self._blend is not None:
+            self._blend.drop()
+            self._blend = None
+        glBindFramebuffer(GL_FRAMEBUFFER, 0)
+        print("[dual] off", flush=True)
+
+    def _do_set_focus(self, which: int):
+        """Point every control at one visual or the other. Render thread.
+
+        `self._pm` *is* the focus: the browser, the menu, the keys, the tweak
+        panel and a hundred other call sites read it without knowing there
+        are two.
+        """
+        which = 1 if which else 0
+        if self._pms[which] is None:
+            which = 0
+        self._focus = which
+        self._pm = self._pms[which]
+        self._cfg["dual_focus"] = which
+        self._preset_start = _time.monotonic()
+        self._bridge.focus_changed.emit(which)
+        self._emit_current_preset()
 
     # ── Live textures ─────────────────────────────────────────────────────
 
@@ -9704,6 +10257,10 @@ class Renderer:
     def _maybe_thumbnail(self):
         """Cache a picture of the current preset, once, after it has settled.
 
+        Never while two visuals are on screen: the window is the two of them
+        mixed, and filing that under one preset's name puts a picture in the
+        browser that the preset cannot produce on its own.
+
         Deliberately passive: there is no batch pass over the library. Ten
         thousand presets rendered for a second each is two hours of nobody's
         time, and the thumbnails that matter are the ones for presets the
@@ -9715,6 +10272,12 @@ class Renderer:
         """
         forced = self._want_snapshot
         self._want_snapshot = False
+        if self.dual_on():
+            if forced:
+                self._bridge.show_toast.emit(
+                    "Not with two visuals on screen \u2014 the picture would "
+                    "be both of them.")
+            return
         if not forced:
             if self._thumb_done or not self._cfg.get("auto_thumbnails", True):
                 return

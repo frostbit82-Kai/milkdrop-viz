@@ -116,6 +116,14 @@ DEFAULT_CONFIG = {
     # them. Off falls back to its own scanner, which is the 2.1.2 behaviour.
     # Read once, when projectM is created, so it needs a restart.
     "live_textures":        True,
+    # Two visuals at once, the second blended over the first. `dual_opacity`
+    # is how hard it shows through, `dual_quality` is its own quality setting
+    # -- low by default, because the pair costs about twice one of them --
+    # and `dual_focus` is which of the two every control is driving.
+    "dual_enabled":         False,
+    "dual_opacity":         0.5,
+    "dual_quality":         "low",
+    "dual_focus":           0,
 }
 
 

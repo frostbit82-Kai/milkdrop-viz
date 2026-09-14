@@ -113,8 +113,8 @@ the only way to see why a frozen build failed.
 `recording` (needs ffmpeg and ffprobe), `clip_audio` (same), `thumbnails`,
 `screensaver`, `wallpaper`, `packs`, `settings_diff`, `shuffle`, `theme`,
 `idle_pause`, `collections`, `backup`, `tweak`, `sprites`, `code_editor`,
-`vsync`, `audio_import`, `lock`, `menu`, `live_textures`. All twenty-three
-must pass before a release.
+`vsync`, `audio_import`, `lock`, `menu`, `live_textures`, `dual`. All
+twenty-four must pass before a release.
 
 **Reviewing by mutation.** Break the shipped code one way at a time, run every
 suite, and a green suite is a gap in the tests rather than a pass. Script it,
@@ -422,6 +422,22 @@ There is no display in an agent shell and SDL needs one, so:
   as a sprite, and an `.mp4` as a sprite, each caught twice seconds apart
   showing different frames. Sprites come free -- `MilkdropSprite.cpp` resolves
   `img=` through the same `TextureManager::GetTexture`.
+
+- **`projectm_opengl_render_frame` ignores whatever framebuffer is bound.**
+  It is `RenderFrame(0)`: the final copy goes to framebuffer 0 however the
+  caller left the binding. Dual-preset mode bound its own framebuffer and
+  called it, so both visuals drew straight to the window and the blend pass
+  then painted two empty textures over the top -- a black window, no GL
+  error, and nothing in the log. `projectm_opengl_render_frame_fbo(handle,
+  fbo)` is the one that takes a target. Found by reading our own call, not
+  the driver.
+
+- **glBlitFramebuffer cannot blend.** It ignores blending entirely, which is
+  why two visuals over each other needs a shader of its own -- the only
+  hand-written OpenGL in the application (`_Blender`). It is also one draw
+  call rather than two, and leaves no blend state switched on behind it.
+  projectM leaves its own program, framebuffer and blend state bound, so the
+  blend pass sets all of that rather than assuming it.
 
 - **The public header for that callback is wrong about ownership.**
   `callbacks.h` carries an `@warning` saying projectM takes ownership of a

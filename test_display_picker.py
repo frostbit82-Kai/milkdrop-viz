@@ -167,6 +167,9 @@ class MenuHost:
     # The menu asks for this on every platform now. It used to be Windows
     # only, and a stub without it built fine on Linux and crashed there.
     def is_wallpaper(self):       return False
+    def can_dual(self):       return True
+    def dual_on(self):        return False
+    def focus(self):          return 0
     def _save_config(self, cfg):  self.saved = dict(cfg)
 
 

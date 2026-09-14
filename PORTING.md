@@ -1444,3 +1444,55 @@ stretches exactly like any stock MilkDrop texture. Sprites *are* fitted —
 projectM corrects aspect itself and the Size slider drives `sx`/`sy` — and so
 is burn-in, which recomputes its rectangle from the live drawable size every
 frame. Asked and answered 14 Sep 2026.
+
+
+### Two visuals at once — built 2026-09-14
+
+**What it is.** A second projectM instance in the same GL context, blended
+over the first. Off by default. The key is `2`, `TAB` swaps which of the two
+every control is driving, and the right-click menu carries both.
+
+**How it draws.** Each instance renders into a colour texture of its own with
+`projectm_opengl_render_frame_fbo`, then one shader pass samples both and
+screens them: `1 - (1 - a) * (1 - b * strength)`. Screen rather than add,
+because two bright presets added together clip to white and both shapes
+disappear. `glBlitFramebuffer` cannot do this at all — it ignores blending —
+which is why there is a shader here and nowhere else in the application.
+
+**The bug that cost a run.** `projectm_opengl_render_frame` is
+`RenderFrame(0)`: it targets framebuffer 0 whatever is bound when it is
+called. Binding our framebuffer and calling it drew both visuals to the
+window and the blend then painted two empty textures over the top. A black
+window, no GL error, nothing in the log. `render_frame_fbo` is the one that
+takes a target. `test_dual.py` now fails if the plain one comes back.
+
+**`self._pm` is the focus.** Not a property and not a lookup — a plain
+attribute pointed at whichever instance is being adjusted. That is what let a
+hundred-odd call sites, the browser, the menu, the keys, the tweak panel and
+the ratings all keep working untouched. Switching focus is two lines.
+
+**What reaches both anyway:** the audio (a visual that cannot hear the music
+is a still picture), the window size, and the auto-advance clock. Everything a
+person does — next, previous, lock, the browser, the editor — goes to the
+focused one alone.
+
+**What is deliberately refused:** a thumbnail. The window is the two of them
+mixed, and filing that under one preset's name puts a picture in the browser
+that the preset cannot produce on its own. Asking for one while two are up
+gets a toast saying so.
+
+**Cost.** Roughly twice a single visual, which is why the second one has its
+own quality setting and defaults to low. Both settings are in the Settings
+dialog under the first visual's quality.
+
+**Seen on screen in the rig, 800x600, four solid-colour presets:**
+
+| what | evidence |
+|---|---|
+| two visuals blended | logo preset over a green preset; centre pixel matches the screen formula |
+| the strength control | at 0.0 the corners are pure black and the logo is untouched; at 0.5 the field is green |
+| the key toggles it | one `xdotool key 2` = one `[dual] on`/`off` line, and the instance is created and destroyed repeatedly without a crash |
+| focus routes the controls | `RIGHT` changed only the green channel (the first visual); after `TAB`, `RIGHT` changed only the blue (the second) |
+
+Measuring the blend by pixel rather than by eye is what made the last row
+provable: solid-colour presets turn "which one moved?" into arithmetic.

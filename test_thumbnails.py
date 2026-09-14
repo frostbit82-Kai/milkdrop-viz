@@ -113,6 +113,7 @@ def bare_renderer():
     thread, and none of that is what these checks are about."""
     r = object.__new__(Renderer)
     r._pm = FakePM()
+    r._pms = [r._pm, None]
     r._cfg = {}
     r._bridge = FakeBridge()
     r._thumb_done = False
