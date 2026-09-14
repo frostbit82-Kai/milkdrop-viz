@@ -5719,6 +5719,8 @@ def _libx11():
     lib.XChangeProperty.argtypes = [ptr, ulong, ulong, ulong, i, i, ptr, i]
     lib.XDeleteProperty.argtypes = [ptr, ulong, ulong]
     lib.XLowerWindow.argtypes = [ptr, ulong]
+    lib.XMoveResizeWindow.argtypes = [ptr, ulong, i, i,
+                                      ctypes.c_uint, ctypes.c_uint]
     lib.XSync.argtypes = [ptr, i]
     lib.XDefaultRootWindow.restype = ulong
     lib.XDefaultRootWindow.argtypes = [ptr]
@@ -5783,8 +5785,8 @@ def x11_toplevel_of(lib, dpy, win):
     return cur
 
 
-def x11_window_origin(lib, dpy, win):
-    """(x, y) of a window in its parent's coordinates, or None."""
+def x11_window_rect(lib, dpy, win):
+    """(x, y, w, h) of a window in its parent's coordinates, or None."""
     root = ctypes.c_ulong()
     x, y = ctypes.c_int(), ctypes.c_int()
     w, h = ctypes.c_uint(), ctypes.c_uint()
@@ -5793,7 +5795,13 @@ def x11_window_origin(lib, dpy, win):
                             ctypes.byref(y), ctypes.byref(w), ctypes.byref(h),
                             ctypes.byref(bw), ctypes.byref(depth)):
         return None
-    return x.value, y.value
+    return x.value, y.value, w.value, h.value
+
+
+def x11_window_origin(lib, dpy, win):
+    """(x, y) of a window in its parent's coordinates, or None."""
+    rect = x11_window_rect(lib, dpy, win)
+    return None if rect is None else rect[:2]
 
 
 def x11_align_frame(lib, dpy, win, want, move):
@@ -6570,6 +6578,10 @@ class Renderer:
         #: When the wallpaper window last checked it was still the bottom one.
         #: See _hold_wallpaper_bottom -- getting there once is not enough.
         self._wp_hold_at = 0.0
+        #: Consecutive geometry corrections; see _hold_wallpaper_box.
+        self._wp_fixes = 0
+        #: Said once, not every two seconds for the life of the app.
+        self._wp_box_moaned = False
         self._thumb_done = True    # one attempt per preset; see _maybe_thumbnail
         #: Idle pause. _last_sound is when audio was last above SILENCE_PEAK,
         #: _idle whether the loop is currently not drawing, and _idle_since
@@ -7549,6 +7561,18 @@ class Renderer:
                     self._req_preset_data = None
                     self._do_load_preset_data(text)
 
+            # ── Wallpaper: stay at the bottom, and stay the right size ────
+            # Above the idle pause, not below it. A wallpaper spends most of
+            # its life parked -- the pause is on silence, and a desktop is
+            # usually quiet -- and below the `continue` it stops defending
+            # itself for exactly as long as nobody is playing anything. The
+            # window manager does not pause with it: measured, a window shoved
+            # off the bottom edge while parked stayed there until sound came
+            # back. One property read every two seconds is cheap enough to do
+            # in a loop that is otherwise asleep.
+            if self._wallpaper and sys.platform != "win32":
+                self._hold_wallpaper_bottom()
+
             # ── Idle pause ────────────────────────────────────────────────
             # Above auto-advance, not below it: a paused wallpaper that still
             # rotates is worse than one that does not pause at all -- it comes
@@ -7575,10 +7599,6 @@ class Renderer:
                 elapsed = _time.monotonic() - self._preset_start
                 if elapsed >= self._preset_duration:
                     self._do_next(hard=False)
-
-            # ── Wallpaper: stay at the bottom ─────────────────────────────
-            if self._wallpaper and sys.platform != "win32":
-                self._hold_wallpaper_bottom()
 
             # ── Cursor auto-hide (fullscreen only, 3s idle) ───────────────
             flags = sdl2.SDL_GetWindowFlags(self._window) if self._window else 0
@@ -8295,6 +8315,18 @@ class Renderer:
         try:
             lib = _libx11()
             dpy, win = self._x11_display, self._native_handle
+            # Before the stacking check, because that one returns early in
+            # the common case -- the window is usually already at the bottom.
+            # Its own try: the stacking hold backs off for a minute when it
+            # throws, and a window that cannot be measured is not a reason to
+            # stop keeping it under the icons for the next sixty seconds.
+            try:
+                self._hold_wallpaper_box(lib, dpy, win)
+            except Exception as e:                       # noqa: BLE001
+                if not self._wp_box_moaned:
+                    self._wp_box_moaned = True
+                    print(f"[wallpaper] could not hold the geometry: {e}",
+                          flush=True)
             stack = x11_client_stack(lib, dpy)
             if not stack or stack[0] == win or win not in stack:
                 # Bottom already, or a window manager that publishes no client
@@ -8309,6 +8341,54 @@ class Renderer:
             # for as long as the app is up.
             self._wp_hold_at = now + 60.0
             print(f"[wallpaper] could not hold the bottom: {e}", flush=True)
+
+    #: How many times running the geometry may be put back before the window
+    #: manager is taken to have meant it. Without a stop, a window manager that
+    #: insists on its own placement gets fought every two seconds for the life
+    #: of the app, and the window flickers between the two answers.
+    WP_FIX_LIMIT = 5
+
+    def _hold_wallpaper_box(self, lib, dpy, win):
+        """Keep the window *filling* the desktop, the same way the stacking is
+        kept: by measuring rather than by remembering.
+
+        x11_align_frame corrects for the frame once, while the window manager
+        is still deciding whether a desktop window gets one at all. Measured on
+        Muffin: it read a 32px frame that was gone a moment later, corrected by
+        it, and left the window at y=-32 for the rest of the session. The strip
+        of real wallpaper that leaves along the bottom is exactly the height of
+        the panel covering it, so nobody sees it until the panel is hidden.
+
+        Re-measuring also picks up the work area changing later -- a panel
+        hidden, shown, or set to auto-hide -- which the one-shot fit could not.
+        """
+        box = self._wallpaper_box()
+        if box is None:
+            return
+        rect = x11_window_rect(lib, dpy, win)
+        origin = x11_window_origin(lib, dpy, x11_toplevel_of(lib, dpy, win))
+        if rect is None or origin is None:
+            return
+        if origin == (box[0], box[1]) and rect[2:] == (box[2], box[3]):
+            self._wp_fixes = 0          # settled; spend the budget again later
+            return
+        if self._wp_fixes >= self.WP_FIX_LIMIT:
+            return
+        self._wp_fixes += 1
+        # Through X rather than SDL, which is the whole reason this is needed:
+        # SDL drops a request that matches its own cached position and size,
+        # and they match -- SDL asked for this box once and believes it got it.
+        # The window manager moved the window afterwards and SDL never heard.
+        # Measured: SDL_SetWindowPosition(0, 0) on a window sitting at y=-32
+        # put nothing on the wire at all.
+        lib.XMoveResizeWindow(dpy, x11_toplevel_of(lib, dpy, win),
+                              box[0], box[1], box[2], box[3])
+        lib.XSync(dpy, False)
+        if rect[2:] != (box[2], box[3]):
+            # Only a size change needs the rest of it: the GL viewport and
+            # projectM's idea of the window. A move does not.
+            self._fit_to_wallpaper(box)
+        self._track_window()
 
     def _wallpaper_box(self):
         """Where the visualiser goes on the desktop: (x, y, w, h), or None.

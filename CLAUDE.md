@@ -213,6 +213,29 @@ There is no display in an agent shell and SDL needs one, so:
 
 ## Traps already paid for
 
+- **SDL drops a position or size request that matches what it already
+  believes, so a window the *window manager* moved cannot be put back through
+  SDL.** `SDL_SetWindowPosition` compares against its own cached rectangle
+  first. After `_fit_to_wallpaper` asks for (0, 0) SDL records (0, 0), and
+  when the window manager then places the window at y=-32 SDL is never told —
+  so the obvious correction, asking SDL for (0, 0) again, puts **nothing on
+  the wire**. Measured 14 Sep 2026 on Muffin: the window sat at y=-32 through
+  thirteen seconds of two-second correction attempts without moving.
+  `_hold_wallpaper_box` goes straight to `XMoveResizeWindow` instead, and only
+  falls back to `_fit_to_wallpaper` when the *size* changed and the GL viewport
+  and projectM need telling too. The general rule: SDL is the right way to ask
+  for a change, and the wrong way to undo somebody else's.
+
+- **Everything below the idle-pause `continue` in the render loop stops for as
+  long as the desktop is quiet, which for a wallpaper is nearly always.** The
+  pause is on twenty seconds of silence, not on input, so a wallpaper spends
+  most of its life parked — and until 14 Sep 2026 both wallpaper holds sat
+  under that `continue`. Measured: a window shoved off the bottom edge while
+  parked stayed there indefinitely, and a lower that lost the race at map time
+  left the visuals over the desktop icons until somebody played something.
+  Anything that has to keep holding while the visuals are still belongs
+  **above** the idle check, not below it.
+
 - **A system program run from inside the frozen bundle loads the bundle's
   libraries, and for `gsettings` that is silent corruption rather than a
   crash.** PyInstaller points `LD_LIBRARY_PATH` at `_internal`, so

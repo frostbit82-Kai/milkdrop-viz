@@ -1076,6 +1076,54 @@ restarts** — the setting is read at Nemo's startup. The toast says so. Logging
 out and back in is the fix; so is `nemo-desktop &` from a terminal.
 
 
+### Mint, 2026-09-14 — the strip along the bottom, and why the first run covered the icons
+
+Reported: with the Cinnamon panel hidden, a band of the real desktop wallpaper
+showed under the visualiser. Measured with `xwininfo`: the window was the right
+**size** (1920x1080) and in the wrong **place** — `Absolute upper-left Y: -32`.
+A 32px strip at the bottom, which is exactly the panel that had been covering
+it. So this was never about the panel; hiding it only removed the lid.
+
+`x11_align_frame` corrects for the window manager's frame once, on the way into
+wallpaper mode, while Muffin is still deciding whether a desktop window gets a
+frame at all. It read a 32px frame, corrected by it, and the frame was gone a
+moment later. Nothing re-measured afterwards, so the one bad reading stood for
+the rest of the session.
+
+Two things had to change. `_hold_wallpaper_box` re-measures geometry on the
+same two-second timer that already re-measures the stacking, and it moves the
+window with `XMoveResizeWindow` rather than through SDL — SDL drops a request
+matching its own cache, and it does match, which is why the first attempt at
+this fix changed nothing at all. Both traps are written up in CLAUDE.md.
+
+The second change is the one that also answers the icons question. Both holds
+used to sit *below* the idle-pause `continue` in the render loop, and the idle
+pause is on twenty seconds of silence — so on a quiet desktop the wallpaper
+stopped defending its position and its stacking within half a minute of being
+switched on. If `x11_lower_to_bottom` loses the race at map time, the two-second
+timer that would have fixed it is asleep before it gets a chance, and the visuals
+stay over the desktop icons until somebody plays something. That is almost
+certainly the "first run covered the icons, second run was fine" report: not a
+fluke, nothing that needed registering, just a race whose safety net had gone to
+sleep. The holds now run above the idle check.
+
+Verified on this box: shoved to (0, -40) at 1920x1040 **while parked**, back to
+(0, 0) at 1920x1080 within five seconds; stack unchanged underneath
+`nemo-desktop`. Twenty of the twenty-two suites pass here — `test_theme` and
+`test_thumbnails` fail identically at a clean `6e7006c` under a stock-latest
+PyQt6, so they need the pinned Qt to mean anything on Mint.
+
+Wayland, for Ubuntu 26.04: nothing needed. `wallpaper_support()` has accepted
+Wayland since 13 Sep as long as `DISPLAY` is set, `SDL_VIDEODRIVER=x11` is
+forced on Linux so the window is an XWayland surface either way, and
+`nemo_allow_desktop_window` returns "" without writing anything on a box with no
+`org.nemo.desktop` schema (checked: a non-zero `gsettings get` is the
+no-op path). One tarball serves both desktops. What is **not** verified from
+here is whether GNOME's desktop-icons extension has its own version of Nemo's
+"another application is already managing the desktop" refusal — that needs
+someone on the 26.04 box to turn wallpaper mode on and say whether the icons
+survive.
+
 ## Notes
 
 - `SDL_GetWindowWMInfo` is used once, for the embedded-in-BomsAI-Studio case. The

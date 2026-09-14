@@ -109,6 +109,8 @@ def bare(cfg=None, displays=TWO):
     r._on_top = False
     r._wp_restore = None
     r._wp_hold_at = 0.0
+    r._wp_fixes = 0
+    r._wp_box_moaned = False
     r._win_rect = (10, 20, 640, 480)
     r._bridge = FakeBridge()
     r._refresh_displays = lambda: None      # SDL is faked out from under it
@@ -570,6 +572,125 @@ def a_desktop_that_keeps_the_icons_below_says_so():
     assert r._wallpaper is True, "gave up on the mode over the stacking alone"
     assert any("behind it" in " ".join(map(str, t)) for t in r._bridge.toasts), \
         r._bridge.toasts
+
+# --- staying the right size -----------------------------------------------
+FULL = (0, 0, 1920, 1080)
+
+
+def _box(rect, fixes=0):
+    """Run the real _hold_wallpaper_box against a window at `rect`.
+
+    Returns (renderer, moves, fits) -- what it decided to put back.
+    """
+    r = bare({"fullscreen_display": 0}, TWO)
+    r._wallpaper = True
+    r._wp_fixes = fixes
+    r._native_handle, r._x11_display = APP_WIN, 1
+    moves, fits = [], []
+    r._fit_to_wallpaper = lambda box=None: fits.append(box)
+    lib = type("L", (), {
+        "XMoveResizeWindow": staticmethod(
+            lambda _d, w, x, y, ww, hh: moves.append((w, x, y, ww, hh))),
+        "XSync": staticmethod(lambda _d, _f: None)})()
+    real_rect = viz_common.x11_window_rect
+    real_origin = viz_common.x11_window_origin
+    real_top = viz_common.x11_toplevel_of
+    viz_common.x11_window_rect = lambda _l, _d, _w: rect
+    viz_common.x11_window_origin = lambda _l, _d, _w: rect[:2]
+    viz_common.x11_toplevel_of = lambda _l, _d, w: w
+    try:
+        r._hold_wallpaper_box(lib, 1, APP_WIN)
+    finally:
+        viz_common.x11_window_rect = real_rect
+        viz_common.x11_window_origin = real_origin
+        viz_common.x11_toplevel_of = real_top
+    return r, moves, fits
+
+
+def a_wallpaper_shoved_off_the_bottom_edge_is_put_back():
+    """The bug this was written for. x11_align_frame corrects for the window
+    manager's frame once, while the window manager is still deciding whether a
+    desktop window gets one -- measured on Muffin, it read a 32px frame that
+    was gone a moment later and left the window at y=-32 for the rest of the
+    session. Nobody sees the strip of real wallpaper that leaves along the
+    bottom until the panel covering it is hidden, which is how it was found."""
+    r, moves, _f = _box((0, -32, 1920, 1080))
+    assert moves == [(APP_WIN, 0, 0, 1920, 1080)], f"never put back: {moves}"
+
+
+def the_window_is_moved_through_x_and_not_through_sdl():
+    """Pins the second half of the fix. SDL drops a request that matches its
+    own cached position, and it does match: SDL asked for this box once and
+    believes it got it -- the window manager moved the window afterwards and
+    SDL never heard. Measured: SDL_SetWindowPosition(0, 0) on a window sitting
+    at y=-32 put nothing on the wire at all, and the strip stayed."""
+    r, moves, fits = _box((0, -32, 1920, 1080))
+    assert moves, "nothing went to the X server"
+    assert fits == [], f"went back through SDL, which will ignore it: {fits}"
+
+
+def a_wallpaper_the_right_size_is_left_alone():
+    """Nothing on the wire when the answer is already right -- the same bargain
+    the stacking hold makes, because this runs every two seconds too."""
+    r, moves, fits = _box(FULL)
+    assert moves == [] and fits == [], (moves, fits)
+
+
+def a_wallpaper_the_panel_shrank_is_grown_back():
+    """A panel hidden, shown, or set to auto-hide moves the work area, and a
+    window manager that clamped the window to the old one never revisits it.
+    The one-shot fit could not see this; re-measuring can. A size change needs
+    the GL viewport and projectM told as well, which a move does not."""
+    r, moves, fits = _box((0, 0, 1920, 1040))
+    assert moves == [(APP_WIN, 0, 0, 1920, 1080)], moves
+    assert fits == [FULL], f"resized the window and not the viewport: {fits}"
+
+
+def a_window_manager_that_insists_is_not_fought_forever():
+    """A window manager entitled to place a desktop window its own way will
+    undo every correction. Without a stop, that is a fight every two seconds
+    for the life of the app, and the window flickers between the two answers."""
+    r, moves, _f = _box((0, -32, 1920, 1080),
+                        fixes=viz_common.Renderer.WP_FIX_LIMIT)
+    assert moves == [], "kept pushing after the limit"
+
+
+def getting_it_right_again_buys_back_the_budget():
+    """The limit is on a *losing streak*, not on the life of the process: a
+    panel toggled twenty times is twenty corrections that each stuck."""
+    r, _m, _f = _box(FULL, fixes=viz_common.Renderer.WP_FIX_LIMIT)
+    assert r._wp_fixes == 0, r._wp_fixes
+
+
+def the_geometry_cannot_stop_the_stacking_hold():
+    """They share a timer but not a fate. The stacking hold backs off for a
+    minute when it throws, and a window that cannot be measured is not a
+    reason to stop keeping it under the icons for the next sixty seconds."""
+    r = bare({"fullscreen_display": 0}, TWO)
+    r._wallpaper = True
+    r._native_handle, r._x11_display = APP_WIN, 1
+    lib = FakeXlib()
+    lib.clients = [ICONS, APP_WIN]
+    lib.stack = [ICONS, APP_WIN]
+    real_x11, real_tree = viz_common._libx11, viz_common._x11_query_tree
+    real_stack, real_time = viz_common.x11_client_stack, viz_common._time
+    viz_common._libx11 = lambda: lib
+    viz_common._x11_query_tree = lambda l, _dpy, w: l.tree(w)
+    viz_common.x11_client_stack = lambda l, _dpy: list(l.clients)
+    viz_common._time = type("C", (), {"monotonic": staticmethod(lambda: 1000.0)})
+    def boom(*_a, **_k):
+        raise RuntimeError("no geometry for you")
+    r._hold_wallpaper_box = boom
+    try:
+        r._hold_wallpaper_bottom()
+    finally:
+        viz_common._libx11 = real_x11
+        viz_common._x11_query_tree = real_tree
+        viz_common.x11_client_stack = real_stack
+        viz_common._time = real_time
+    assert lib.restacks, "a broken geometry read stopped the stacking hold"
+    assert r._wp_hold_at == 1000.0, f"backed off anyway: {r._wp_hold_at}"
+
 
 # --- staying at the bottom ------------------------------------------------
 def _hold(clients, wallpaper=True, hold_at=0.0, now=1000.0):
@@ -1122,7 +1243,14 @@ for fn in (the_worker_behind_the_icons_is_chosen,
            a_list_somebody_has_emptied_is_still_written_to,
            gsettings_is_run_outside_the_bundles_library_path,
            an_unfrozen_run_keeps_the_environment_it_was_given,
-           becoming_the_desktop_asks_nemo_to_keep_the_icons):
+           becoming_the_desktop_asks_nemo_to_keep_the_icons,
+           a_wallpaper_shoved_off_the_bottom_edge_is_put_back,
+           the_window_is_moved_through_x_and_not_through_sdl,
+           a_wallpaper_the_right_size_is_left_alone,
+           a_wallpaper_the_panel_shrank_is_grown_back,
+           a_window_manager_that_insists_is_not_fought_forever,
+           getting_it_right_again_buys_back_the_budget,
+           the_geometry_cannot_stop_the_stacking_hold):
     results.append(check(fn.__name__, fn))
 
 print("all wallpaper checks passed" if all(results) else "FAILURES")
