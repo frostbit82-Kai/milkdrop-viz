@@ -13,12 +13,17 @@ does not help, because `sounddevice` resolves the soname through
 Linux the backend is the *fallback* anyway; parec leads. Losing it should cost
 the fallback and nothing else.
 
+Linux is also the only platform that can fail this way, so the middle check
+asks `_wheel_portaudio()` rather than assuming: sounddevice's wheel carries a
+PortAudio on Windows and macOS and none on Linux, and where it carries one the
+poison below costs nothing and the right answer is that the backend is there.
+
 Checked in a subprocess with `find_library` poisoned, because viz_common is
 already imported by the time a test could ask, and because the failure is at
 import time -- there is nothing to call.
 Run: QT_QPA_PLATFORM=offscreen python test_audio_import.py
 """
-import os, sys, subprocess
+import glob, importlib.util, os, sys, subprocess
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -49,6 +54,27 @@ print("SD_AVAILABLE", viz_common._SD_AVAILABLE)
 """
 
 
+def _wheel_portaudio():
+    """The PortAudio that `sounddevice`'s own wheel carries, if any.
+
+    sounddevice's module-level fallback is `except OSError:` around a load of
+    this copy, and the wheel ships one on Windows and macOS and none on Linux
+    -- which is the entire reason a Linux import can fail here and a Windows
+    one cannot. Ask the installed package rather than `sys.platform`: it is the
+    condition that actually decides, and if a future wheel drops the file this
+    starts testing the real path on that platform too.
+
+    `find_spec` rather than `import`, because importing is the thing that
+    raises on the box this whole suite is about.
+    """
+    spec = importlib.util.find_spec("sounddevice")
+    if not spec or not spec.origin:
+        return []
+    return sorted(glob.glob(os.path.join(
+        os.path.dirname(spec.origin), "_sounddevice_data",
+        "portaudio-binaries", "*portaudio*")))
+
+
 def _run(src):
     env = dict(os.environ, QT_QPA_PLATFORM="offscreen")
     return subprocess.run([sys.executable, "-c", src], capture_output=True,
@@ -63,6 +89,19 @@ def a_machine_without_portaudio_can_still_start_the_app():
 
 def and_it_says_so_rather_than_pretending_the_backend_is_there():
     r = _run(_WITHOUT_PORTAUDIO)
+    bundled = _wheel_portaudio()
+    if bundled:
+        # Windows (and macOS): poisoning `find_library` costs nothing, because
+        # sounddevice catches its own OSError and loads the copy in its wheel
+        # -- measured, the import comes up bound to
+        # `_sounddevice_data/portaudio-binaries/libportaudio64bit.dll`. So the
+        # backend really is there and saying otherwise would be the lie. This
+        # asserts that rather than skipping: the day a wheel stops shipping the
+        # file, this platform inherits the hole Linux had and the test says so.
+        assert "SD_AVAILABLE True" in r.stdout, (
+            f"the wheel carries {os.path.basename(bundled[0])}, so the import "
+            f"should have found it:\n{r.stdout[-400:]}")
+        return
     assert "SD_AVAILABLE False" in r.stdout, r.stdout[-400:]
     assert "sounddevice unavailable" in r.stdout, r.stdout[-400:]
 

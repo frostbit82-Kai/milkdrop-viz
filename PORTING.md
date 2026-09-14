@@ -793,6 +793,10 @@ would actually switch the fallback back on.
 
 ### The Windows installer needs rebuilding — 2026-09-10
 
+**Done, 2026-09-13** — rebuilt at 2.1.0, which supersedes everything
+measured below. Left in place because how the stale package was *read*
+is the reusable part.
+
 **`BomsAIVisualizer-2.0.0-win64-setup.exe` on the NTFS drive is stale, and no
 longer only cosmetically.** It was built at 03:52, six commits before the tree
 it now sits in. Checked against the artifact rather than assumed, by scanning
@@ -931,8 +935,83 @@ Verified against the artifact, not the tree:
 Not done here: the app was not driven through its IPC from the package. The
 features were confirmed on the running app at `460fbc9` when they were written,
 and what a package can add to that is whether it carries the same code, which
-is the scan above. The Windows installer is still the 10 Sep 2.0.0 build.
+is the scan above. ~~The Windows installer is still the 10 Sep 2.0.0
+build.~~ **Rebuilt at 2.1.0 the same day — see the next section.**
 
+### Windows caught up with 2.1.0 — 2026-09-13
+
+The Windows clone was already at `6dd8bb7`; nothing to merge. Everything
+below is verification of the Linux work on this platform, plus one test fix.
+
+**Twenty-two suites, twenty-one green on the first run.** `test_audio_import`
+failed its middle check, and it was the test that was wrong, not the app. The
+suite poisons `ctypes.util.find_library` for "portaudio" and requires
+`_SD_AVAILABLE` to come back False — which is the Linux story. On Windows
+sounddevice catches its own `OSError` and loads the PortAudio in its own wheel:
+measured, the import comes up bound to
+`_sounddevice_data/portaudio-binaries/libportaudio64bit.dll`, so the backend
+genuinely is there and reporting otherwise would be the lie. The check now asks
+`_wheel_portaudio()` — does the *installed package* carry one — rather than
+`sys.platform`, and asserts True where it does. That keeps it a real check on
+both platforms: the day a wheel stops shipping the file, Windows inherits the
+hole Linux had and the suite says so. Twenty-two green after.
+
+**The PowerShell EULA guard is now proven, which Linux could not do.** With
+`VERSION` temporarily at 9.9.9, `build_windows.ps1` exits 1 with
+`installer\licenses\EULA.txt does not say "Applies to version 9.9.9"` before it
+touches the build directory; at 2.1.0 it passes. Both halves of that guard have
+now been run.
+
+**The three changes were driven on the running app, not only tested.**
+
+- *Cycling while locked.* Scroll Lock, then three `Next` walked 107 → 108 → 109
+  and `Previous` came back to 108, with the log reading
+  `Preset locked (the timer, not the controls)`. Same behaviour Linux measured.
+- *Customize menu.* The dialog comes up themed, two columns, twenty-three rows
+  with each entry's key beside it. Clearing Fullscreen display, Record clip,
+  Desktop wallpaper and Audio source wrote
+  `"menu_hidden": ["display", "record", "wallpaper", "audio"]` to config.json in
+  menu order, and the reopened menu was exactly those four rows shorter with
+  the two separators that had bounded the record/wallpaper group collapsed to
+  one — no double rule, no leading or trailing rule. "Show everything" put them
+  all back and emptied the list.
+- *Wallpaper mode* needs no Windows work: `_hold_wallpaper_bottom` is gated
+  `sys.platform != "win32"` and the new tray gate on the menu entry is always
+  true here. Not re-driven — the Windows wallpaper path is unchanged in this
+  range.
+
+**The scroll bar handle, measured rather than eyeballed.** This is the defect
+Mint reported and the one the stale 2.0.0 installer was shipping. In the
+browser over the real library the vertical handle is **27 px** of grey 102 on a
+trough of grey 26 — the `min-height: 28px` floor holding, against the 1 px it
+was, and 3.03:1 contrast against its own trough.
+
+**`BomsAIVisualizer-2.1.0-win64-setup.exe`** — built 23:45 from a clean tree at
+`6dd8bb7`, 78.3 MB, sha256
+`710b0a4a1f66ab0e1be25fa83119c4088377ca60c5ed406c8059f54cc675a4de`.
+
+Verified against the artifact:
+
+- Both `VERSION` files say 2.1.0, and the licence says
+  "Applies to version 2.1.0 · terms of 8 September 2026".
+- Seven licence files, both projectM DLLs and SDL2, no `glew32.dll`, the `.scr`
+  screensaver present.
+- The bundled ffmpeg reports `--disable-libx264` with no `--enable-gpl` and
+  lists no x264 encoder.
+- **The new code is in the executable**, by the same PYZ-blob scan the Linux
+  package got: `MENU_ENTRIES`, `menu_hidden`, `_tidy_separators`,
+  `MenuCustomiseDialog`, `_hold_wallpaper_bottom`, `WP_HOLD_EVERY`,
+  `min-height: 28px` and the new lock log line are all present. The same scan
+  over the 2.0.0 executable beside it finds **none of the eight**, which is
+  what makes the first result mean anything.
+
+Not done: the Inno installer itself. Running it trips UAC and there is no
+non-interactive elevation on this box, so a fresh install, the shortcuts and
+the screensaver registration are unverified — the payload is not, via the
+portable tree above. The stale `BomsAIVisualizer-2.0.0-win64-setup.exe` is
+still sitting in `installer/dist/` beside the new one; Linux keeps one package
+in that directory and Windows should too, but deleting the thing the site may
+be linking is not a call to make from here.
 
 ## Notes
 
