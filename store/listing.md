@@ -213,6 +213,19 @@ written last, so it is written once — but it must not go to submission this
 way, because the headline feature of the version being submitted is currently
 invisible in the listing.
 
+Three more things landed on 2026-09-13 that the copy has never mentioned, and
+two of them answer questions a buyer would actually ask:
+
+- **Locking a visual keeps it, without taking the controls away.** The timer
+  stops; next, previous and random still work. The 1.x bullet just says "preset
+  locking when one is too good to lose".
+- **Desktop wallpaper mode now works on Wayland**, through XWayland — measured
+  on GNOME. The listing has never said which Linux sessions can host it, and
+  the Store build is Windows, so this is a line for the *site*, not for here.
+- **The right-click menu can be trimmed.** Every entry can be switched off from
+  Customize, which is worth a clause somewhere near the keyboard-shortcut
+  bullet.
+
 ## Screenshots to capture  (Microsoft Store wants 1366×768 or larger, up to 10)
 
 **Read every browser screenshot before it goes in.** Preset names come from

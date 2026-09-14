@@ -91,6 +91,10 @@ DEFAULT_CONFIG = {
     # one before. projectM's default is to inherit, which reads as a smoother
     # hand-over; on a dark preset following a bright one it reads as a smear.
     "preset_start_clean":   False,
+    # Right-click entries switched off in the Customize dialog, by the keys in
+    # viz_common.MENU_ENTRIES. Hidden rather than shown, so an entry added in a
+    # later version arrives visible instead of missing on an old config.
+    "menu_hidden":          [],
     # Pictures laid over the render: [{image, motion, size, alpha, blend}].
     # `image` is a file stem under user_data_dir()/sprites.
     "sprites":              [],

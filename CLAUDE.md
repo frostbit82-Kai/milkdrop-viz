@@ -106,7 +106,8 @@ the only way to see why a frozen build failed.
 `recording` (needs ffmpeg and ffprobe), `clip_audio` (same), `thumbnails`,
 `screensaver`, `wallpaper`, `packs`, `settings_diff`, `shuffle`, `theme`,
 `idle_pause`, `collections`, `backup`, `tweak`, `sprites`, `code_editor`,
-`vsync`, `audio_import`. All twenty must pass before a release.
+`vsync`, `audio_import`, `lock`, `menu`. All twenty-two must pass before a
+release.
 
 There is no display in an agent shell and SDL needs one, so:
 
@@ -204,6 +205,32 @@ There is no display in an agent shell and SDL needs one, so:
   of them is visible from the source, and all three were on screen the whole time.
 
 ## Traps already paid for
+
+- **The first run opens a modal photosensitivity warning, and a piped run then
+  prints absolutely nothing.** 2026-09-13. `App._warn_photosensitivity` is a
+  `QMessageBox.warning` gated on `cfg["seizure_warning_ack"]`, and it runs
+  before the render thread starts -- so the app sits there with fifteen live
+  threads, an X connection, no SDL window and an empty log, which reads exactly
+  like a hang somewhere deep in projectM. It is not. `faulthandler` settled it
+  in one shot: wrap `main.py` in a script that calls
+  `faulthandler.dump_traceback_later(18, exit=True)` and `exec`s it, and the
+  dump names the line. (`py-spy` cannot help -- attaching to a process that is
+  not its own child needs ptrace permission this box does not give.) To drive
+  the app from a shell, set `seizure_warning_ack` in `config.json` first, and
+  **take it back out afterwards**: it is a safety acknowledgement, and ticking
+  it on someone's behalf is not ours to do.
+
+- **A preset lock is a hold on the clock, not on the controls.** 2026-09-13,
+  and this is the second time the obvious reading has been written into the
+  code. Next, previous, random and a jump from the browser all still move while
+  a preset is locked; the *only* thing lock stops is the auto-advance timer in
+  `Renderer.run`. libprojectM agrees and needs no help: measured against 4.1.0
+  with `projectm_set_preset_locked(true)`, `projectm_playlist_play_next`,
+  `play_previous` and `set_position` each moved the playlist, and ten rendered
+  frames later the new preset was still the one on screen -- so nothing has to
+  be unlocked around an explicit jump. `test_lock.py` holds both directions,
+  and pulls the auto-advance `if` out of `Renderer.run` with `ast` so that
+  losing the guard fails the test rather than a copy of it.
 
 - **A stylesheet-drawn scroll bar handle has no minimum size, and on ten
   thousand presets it comes out one pixel tall.** Reported from Mint on
@@ -771,17 +798,54 @@ There is no display in an agent shell and SDL needs one, so:
      `x11_align_frame` measures where the frame actually landed and corrects by
      the difference.
 
+  5. **Getting to the bottom once is not enough.** 2026-09-13, reported from
+     Mint: wallpaper mode switched on, no toast, and the visuals over the Nemo
+     icons anyway. The toggle could not have known -- it measured the stack and
+     was right at the time. A window manager restacks on its own schedule (a
+     workspace switch, the icon manager restarting, another desktop-layer
+     window mapping) and a compositing one paints from a stack of its own, so
+     the lower at map time is an invariant that quietly stops holding.
+     `_hold_wallpaper_bottom` re-runs the same measurement from the render loop
+     every `WP_HOLD_EVERY` (2 s): one `XGetWindowProperty` off the root per
+     pass, and nothing on the wire at all unless the answer is wrong. A window
+     manager that publishes no client stack is left alone -- there is nothing to
+     measure against, and lowering on a hunch every two seconds is how a window
+     ends up fighting whatever is above it. A failure backs off 60 s rather
+     than repeating for the life of the process.
+
   **ctypes signatures are spelled out in `_libx11` because both defaults are
   wrong.** A returned `Atom` through the default `c_int` restype loses its top
   half on 64-bit; a `Window` passed as a bare Python int goes out as `c_int`
   and addresses some other window. `_NET_WM_STATE` is format 32, which in Xlib
   means *an array of `long`* -- `c_ulong`, not `c_uint32`.
 
-  **Wayland cannot host this at all**, XWayland included: an X client under a
-  Wayland compositor is an ordinary toplevel and the protocol has nothing
-  corresponding to a below-the-desktop layer. `wallpaper_support()` is the one
-  gate for the menu entry, the key, the toast and the settings checkbox, and it
-  names Xorg in the refusal because that is the only thing the user can do.
+  **Wayland does host this, through XWayland -- the old blanket refusal was
+  wrong.** 2026-09-13. The claim used to be that an X client under a Wayland
+  compositor is an ordinary toplevel with no below-the-desktop layer to ask
+  for. Measured on Ubuntu GNOME / mutter under Wayland and it is not true: a
+  desktop-type XWayland window went straight to index 0 of
+  `_NET_CLIENT_LIST_STACKING` and stayed there across other windows being
+  mapped and unmapped over it, and the real app entered with `--wallpaper` and
+  held index 0 for the whole run. Mutter classifies X11 clients by window type
+  like any other window manager, and its desktop layer sits above the shell's
+  own background actor -- which is exactly where a wallpaper goes. Refusing
+  every Wayland session turned the feature off on the most common Linux desktop
+  there is, on the author's own machine.
+
+  `wallpaper_support()` is still the one gate for the menu entry, the key, the
+  toast and the settings checkbox, but the only thing it refuses on Linux now
+  is **no `DISPLAY` at all** -- no Xorg and no XWayland means there is no
+  window to set a type on. A compositor with no desktop layer is deliberately
+  *not* guessed at: `x11_lower_to_bottom` measures where the window actually
+  landed and toasts when it did not go under, which does not go stale the way a
+  list of compositor names would.
+
+  **The menu entry has a second gate: a system tray.** A desktop window gets no
+  keyboard and no mouse -- whatever draws the icons takes both -- so the tray
+  icon is the only way back out. `QSystemTrayIcon.isSystemTrayAvailable()` is
+  false on a GNOME session with no AppIndicator extension, and offering the
+  mode there is a one-way trip ending in `kill`. Windows always has one.
+
   Verified 2026-09-09 against a real X server under Xvfb: properties land with
   type ATOM and format 32, the app enters with `--wallpaper` at full screen
   geometry, and `d` round-trips it back to `_NET_WM_WINDOW_TYPE_NORMAL` with

@@ -108,6 +108,7 @@ def bare(cfg=None, displays=TWO):
     r._borderless = False
     r._on_top = False
     r._wp_restore = None
+    r._wp_hold_at = 0.0
     r._win_rect = (10, 20, 640, 480)
     r._bridge = FakeBridge()
     r._refresh_displays = lambda: None      # SDL is faked out from under it
@@ -186,21 +187,26 @@ def an_x11_session_can_host_wallpaper_mode():
         ok, why = viz_common.wallpaper_support(X11_ENV)
     assert ok, why
 
-def wayland_is_refused_and_told_the_one_thing_that_would_fix_it():
-    """An X11 client under a Wayland compositor is an ordinary toplevel: there
-    is no below-the-desktop layer to ask for, on XWayland or natively. The only
-    thing the user can do is log in on Xorg, so the reason has to say so."""
+def a_wayland_session_with_xwayland_is_offered_it_too():
+    """This used to be a flat refusal, and it turned the feature off on the
+    most common Linux desktop there is. The window is an X11 surface either
+    way, and mutter puts a desktop-type XWayland window at the bottom of
+    _NET_CLIENT_LIST_STACKING and keeps it there -- measured on GNOME. What a
+    compositor with no desktop layer does instead is measured after the fact
+    by x11_lower_to_bottom, which is a better answer than a guess per
+    compositor that goes stale."""
     with as_platform("linux"):
         ok, why = viz_common.wallpaper_support(WAYLAND_ENV)
-    assert not ok, "offered wallpaper mode on Wayland"
-    assert "xorg" in why.lower(), why
+    assert ok, why
 
-def wayland_is_caught_without_xdg_session_type_too():
-    """That variable is not set on every login manager. WAYLAND_DISPLAY is."""
+def a_session_with_no_x_server_at_all_is_refused():
+    """DISPLAY unset is the one case that cannot work: no Xorg and no
+    XWayland means there is nothing to set a window type on."""
     with as_platform("linux"):
-        ok, _why = viz_common.wallpaper_support(
-            {"DISPLAY": ":0", "WAYLAND_DISPLAY": "wayland-0"})
-    assert not ok
+        ok, why = viz_common.wallpaper_support(
+            {"XDG_SESSION_TYPE": "wayland", "WAYLAND_DISPLAY": "wayland-0"})
+    assert not ok, "offered wallpaper mode with no X server to ask"
+    assert "xwayland" in why.lower(), why
 
 def no_display_at_all_is_refused():
     with as_platform("linux"):
@@ -238,10 +244,10 @@ def parking_as_the_desktop_drops_on_top_first():
 
 def a_session_that_cannot_host_it_refuses_with_a_reason():
     r = bare()
-    with as_platform("linux"), as_env(WAYLAND_ENV):
+    with as_platform("linux"), as_env({"XDG_SESSION_TYPE": "wayland"}):
         r._set_wallpaper_mode(True)
     assert r._wallpaper is False, "claimed wallpaper mode where it cannot work"
-    assert any("X11" in " ".join(map(str, t)) for t in r._bridge.toasts), \
+    assert any("XWayland" in " ".join(map(str, t)) for t in r._bridge.toasts), \
         r._bridge.toasts
 
 
@@ -553,8 +559,86 @@ def a_desktop_that_keeps_the_icons_below_says_so():
         viz_common.x11_window_origin = real_origin
         viz_common.x11_client_stack = real_stack
     assert r._wallpaper is True, "gave up on the mode over the stacking alone"
-    assert any("icons" in " ".join(map(str, t)) for t in r._bridge.toasts), \
+    assert any("behind it" in " ".join(map(str, t)) for t in r._bridge.toasts), \
         r._bridge.toasts
+
+# --- staying at the bottom ------------------------------------------------
+def _hold(clients, wallpaper=True, hold_at=0.0, now=1000.0):
+    """Run the real _hold_wallpaper_bottom against a fake server.
+
+    Returns (renderer, lib) so a test can look at what went on the wire.
+    """
+    r = bare({"fullscreen_display": 0}, TWO)
+    r._wallpaper = wallpaper
+    r._wp_hold_at = hold_at
+    r._native_handle, r._x11_display = APP_WIN, 1
+    lib = FakeXlib()
+    lib.clients = list(clients)
+    lib.stack = list(clients)
+    real_x11, real_tree = viz_common._libx11, viz_common._x11_query_tree
+    real_stack, real_time = viz_common.x11_client_stack, viz_common._time
+    viz_common._libx11 = lambda: lib
+    viz_common._x11_query_tree = lambda l, _dpy, w: l.tree(w)
+    viz_common.x11_client_stack = lambda l, _dpy: list(l.clients)
+    viz_common._time = type("C", (), {"monotonic": staticmethod(lambda: now)})
+    try:
+        r._hold_wallpaper_bottom()
+    finally:
+        viz_common._libx11 = real_x11
+        viz_common._x11_query_tree = real_tree
+        viz_common.x11_client_stack = real_stack
+        viz_common._time = real_time
+    return r, lib
+
+
+def a_wallpaper_that_has_been_pushed_back_up_is_lowered_again():
+    """Getting to the bottom once is not enough. A window manager restacks on
+    its own schedule -- a workspace switch, the icon manager restarting -- and
+    the toggle cannot know: it measured the stack and was right at the time.
+    Reported on Cinnamon as wallpaper mode covering the Nemo icons with no
+    toast to say anything had gone wrong."""
+    r, lib = _hold([ICONS, APP_WIN])
+    assert lib.restacks, "never asked the window manager to put it back"
+    win, sibling, detail = lib.restacks[0]
+    assert (win, sibling, detail) == (APP_WIN, ICONS, 1), lib.restacks[0]
+    assert lib.clients[0] == APP_WIN, lib.clients
+
+def a_wallpaper_already_at_the_bottom_says_nothing():
+    """One property read per pass and nothing on the wire unless the answer is
+    wrong -- otherwise this is two restack messages a second, for ever."""
+    r, lib = _hold([APP_WIN, ICONS])
+    assert not lib.restacks, lib.restacks
+    assert lib.lowered == 0, lib.lowered
+
+def a_window_manager_with_no_client_stack_is_left_alone():
+    """Nothing to measure against, and lowering on a hunch every two seconds
+    is how a window ends up fighting the thing above it."""
+    r, lib = _hold([])
+    assert not lib.restacks, lib.restacks
+    assert lib.lowered == 0, lib.lowered
+
+def the_check_is_throttled_rather_than_run_every_frame():
+    """At sixty frames a second an unthrottled check is sixty round trips to
+    the X server a second, for a thing that changes once an hour."""
+    r, lib = _hold([ICONS, APP_WIN], hold_at=999.5, now=1000.0)
+    assert not lib.restacks, "checked again 0.5s after the last one"
+    assert r._wp_hold_at == 999.5, "the clock was reset by a skipped pass"
+
+def a_failure_backs_off_instead_of_repeating_every_two_seconds():
+    r = bare({"fullscreen_display": 0}, TWO)
+    r._wallpaper = True
+    r._wp_hold_at = 0.0
+    r._native_handle, r._x11_display = APP_WIN, 1
+    real_x11, real_time = viz_common._libx11, viz_common._time
+    viz_common._libx11 = lambda: (_ for _ in ()).throw(OSError("no libX11"))
+    viz_common._time = type("C", (), {"monotonic": staticmethod(lambda: 1000.0)})
+    try:
+        r._hold_wallpaper_bottom()
+    finally:
+        viz_common._libx11 = real_x11
+        viz_common._time = real_time
+    assert r._wp_hold_at > 1000.0 + 30, r._wp_hold_at
+
 
 def becoming_the_desktop_asks_for_the_desktop_type_and_the_bottom_layer():
     r, lib, fake = _x11_run(True)
@@ -660,17 +744,31 @@ class _MenuHost:
     def _save_config(self, cfg): pass
 
 
-def _wallpaper_entries(host, layered=False, support=(True, "")):
-    """Build the menu with the desktop lookup and the session check stubbed;
-    its wallpaper items, as (text, enabled, tooltip).
+class _FakeTray:
+    """QSystemTrayIcon, for the one static the menu asks about. The offscreen
+    Qt platform has no tray, so the real class answers False here whatever the
+    test is about."""
+    available = True
+
+    @classmethod
+    def isSystemTrayAvailable(cls):
+        return cls.available
+
+
+def _wallpaper_entries(host, layered=False, support=(True, ""), tray=True):
+    """Build the menu with the desktop lookup, the session check and the tray
+    stubbed; its wallpaper items, as (text, enabled, tooltip).
 
     `support` is stubbed rather than driven through the environment because the
     menu is being tested here, not the session check -- and a replaced os.environ
     takes HOME and XDG_* away from everything else the menu builds.
     """
     real_host, real_sup = viz_common.find_desktop_host, viz_common.wallpaper_support
+    real_tray = viz_common.QSystemTrayIcon
     viz_common.find_desktop_host = lambda *a, **k: (host, layered)
     viz_common.wallpaper_support = lambda *a, **k: support
+    _FakeTray.available = tray
+    viz_common.QSystemTrayIcon = _FakeTray
     try:
         menu = viz_common.ContextMenu(renderer=_MenuHost(), cfg={},
                                       ratings={}, keymaps={})
@@ -679,6 +777,19 @@ def _wallpaper_entries(host, layered=False, support=(True, "")):
     finally:
         viz_common.find_desktop_host = real_host
         viz_common.wallpaper_support = real_sup
+        viz_common.QSystemTrayIcon = real_tray
+
+
+def a_desktop_with_no_tray_is_not_offered_a_one_way_trip():
+    """Wallpaper mode gets no keyboard and no mouse: the icons above it take
+    both. The tray icon is the only way back, so on a desktop without one --
+    a GNOME session with no AppIndicator extension, say -- switching it on
+    ends in killing the process."""
+    items = _wallpaper_entries(1, support=(True, ""), tray=False)
+    assert items, "no wallpaper entry at all"
+    text, enabled, tip = items[0]
+    assert not enabled, f"offered a one-way trip: {text!r}"
+    assert "tray" in tip.lower(), tip
 
 
 def a_session_that_cannot_host_it_gets_a_dead_entry_carrying_the_reason():
@@ -772,8 +883,8 @@ for fn in (the_worker_behind_the_icons_is_chosen,
            a_desktop_with_no_defview_gives_nothing,
            a_defview_with_no_sibling_gives_nothing,
            an_x11_session_can_host_wallpaper_mode,
-           wayland_is_refused_and_told_the_one_thing_that_would_fix_it,
-           wayland_is_caught_without_xdg_session_type_too,
+           a_wayland_session_with_xwayland_is_offered_it_too,
+           a_session_with_no_x_server_at_all_is_refused,
            no_display_at_all_is_refused,
            windows_needs_no_session_check,
            a_session_that_cannot_host_it_refuses_with_a_reason,
@@ -781,6 +892,11 @@ for fn in (the_worker_behind_the_icons_is_chosen,
            an_empty_list_deletes_the_property,
            becoming_the_desktop_asks_for_the_desktop_type_and_the_bottom_layer,
            the_window_is_lowered_under_the_icons,
+           a_wallpaper_that_has_been_pushed_back_up_is_lowered_again,
+           a_wallpaper_already_at_the_bottom_says_nothing,
+           a_window_manager_with_no_client_stack_is_left_alone,
+           the_check_is_throttled_rather_than_run_every_frame,
+           a_failure_backs_off_instead_of_repeating_every_two_seconds,
            lowering_keeps_at_it_until_the_window_is_really_at_the_bottom,
            a_reparenting_window_manager_has_its_frame_lowered_not_the_client,
            a_reparented_window_is_nudged_until_its_frame_lands_on_the_box,
@@ -802,6 +918,7 @@ for fn in (the_worker_behind_the_icons_is_chosen,
            a_machine_with_no_desktop_is_told_so_in_the_menu,
            a_session_that_cannot_host_it_gets_a_dead_entry_carrying_the_reason,
            an_x11_desktop_is_offered_the_real_entry,
+           a_desktop_with_no_tray_is_not_offered_a_one_way_trip,
            a_machine_with_a_workerw_gets_the_real_entry,
            windows_10_is_still_offered_the_layer_behind_the_icons,
            windows_11_uses_progmans_own_worker_and_asks_to_be_layered,

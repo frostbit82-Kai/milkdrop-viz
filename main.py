@@ -15,7 +15,8 @@ Extra CLI args accepted by this launcher:
   --preset-dir PATH     — override preset directory
   --screensaver         — fullscreen, and any real input quits
   --wallpaper           — draw on the desktop, behind the icons
-                          (Windows, or Linux on an X11 session)
+                          (Windows, or Linux with an X server — XWayland
+                          counts, see wallpaper_support)
 
 Windows screensaver arguments are accepted too: /s runs it, /c opens settings,
 /p draws the little preview. They arrive with a slash rather than a dash and
@@ -139,7 +140,10 @@ class App:
         self._bridge.wallpaper_changed.connect(self._on_wallpaper_changed)
         self._bridge.lock_changed.connect(
             lambda locked: self._toast.show_message(
-                "Preset locked" if locked else "Preset unlocked"))
+                # Says what the lock does, because the obvious reading of
+                # "locked" is that the controls have gone too, and they have not.
+                "Preset locked — it will not change on its own"
+                if locked else "Preset unlocked"))
 
         self._render_thread = threading.Thread(
             target=self._renderer.run, daemon=True
@@ -325,7 +329,7 @@ def main():
                         help="Fullscreen; any key or real mouse movement quits")
     parser.add_argument("--wallpaper", action="store_true",
                         help="Draw on the desktop behind the icons "
-                             "(Windows, or Linux on an X11 session)")
+                             "(Windows, or Linux with an X server)")
     args, _unknown = parser.parse_known_args()
 
     cfg_overrides = {}

@@ -824,6 +824,67 @@ md5 `97fdba8f19dc2f21fdf8550019537570`, floor GLIBC_2.34, and verified to
 start on a stock `ubuntu:24.04` with no libportaudio2.
 
 
+### Three changes from a few days of using it — 2026-09-13
+
+Reported after living with the 2.0.0 build for a few days. All three are done
+and all three are verified against the running app, not only against tests.
+
+**1. Cycling while locked.** Lock used to stop the controls as well as the
+clock, which is not what anyone means by it. Now the only thing it holds is the
+auto-advance timer in `Renderer.run`; next, previous, random and a jump from
+the preset browser all still move. The guard came out of four renderer methods
+and out of `ProjectM4.next_preset` / `prev_preset`. libprojectM needs no help
+here — measured against 4.1.0 with the core lock on, `play_next`,
+`play_previous` and `set_position` each moved the playlist and ten rendered
+frames later the new preset was still on screen. Confirmed on the real app over
+its stdin IPC: lock, then three `next_preset` walked through three presets and
+`prev_preset` came back one.
+
+**2. Wallpaper mode on Wayland — the refusal was wrong.** "X11 mode not
+enabled" on the main Linux box was `wallpaper_support()` refusing every Wayland
+session on the grounds that XWayland has no below-the-desktop layer. Measured
+on Ubuntu GNOME / mutter and that is simply not so: a desktop-type XWayland
+window goes to index 0 of `_NET_CLIENT_LIST_STACKING` and stays there, and the
+real app entered with `--wallpaper` and held index 0 for the whole run. The
+only Linux refusal left is having no `DISPLAY` at all. A compositor with no
+desktop layer is not guessed at — `x11_lower_to_bottom` already measures where
+the window landed and says so, and that does not go stale the way a list of
+compositor names would.
+
+The menu entry gained a second gate on the way past: **no system tray, no
+offer.** A desktop window gets no keyboard and no mouse, so the tray icon is
+the only way back out, and a GNOME session without an AppIndicator extension
+has no tray — switching it on there is a one-way trip ending in `kill`.
+
+**3. Covering the desktop icons on Mint.** Same session, different half: the
+mode switched on, said nothing, and sat over the Nemo icons. The toggle was not
+lying — it measured the stack and was right at the time. A window manager
+restacks on its own schedule and a compositing one paints from a stack of its
+own, so the one lower at map time is an invariant that quietly stops holding.
+`_hold_wallpaper_bottom` re-runs the measurement from the render loop every two
+seconds: one property read off the root, and nothing on the wire unless the
+answer is wrong. **This one is the only change here that has not been seen on
+the machine that reported it** — it needs a Cinnamon session. What can be shown
+from Linux is that the mechanism works and that it does nothing when it should
+not; whether it closes the Mint report is for Mint to say.
+
+**Plus: a Customize entry, above About.** The right-click menu has grown past a
+comfortable screenful and nearly every line on it is also a key, so each of the
+twenty-three entries can now be switched off — `MENU_ENTRIES` is the table,
+`config["menu_hidden"]` is the state, and the dialog puts each entry's key
+beside it because that is the answer to "can I lose this one?". Hidden entries
+are stored rather than shown ones, so an entry added in a later version turns
+up visible instead of vanishing on an old config. Customize and Quit are not in
+the table: one is the way back for anyone who switches everything else off, the
+other is the way out. The separators are written for the full menu, so
+`_tidy_separators` drops the rules left with nothing on one side of them.
+
+Two new suites, `test_lock.py` and `test_menu.py` — twenty-two now, not twenty.
+The menu one is the useful one: it hides each key in `MENU_ENTRIES` in turn and
+requires the menu to get exactly one row shorter, which is what catches a tick
+box wired to nothing.
+
+
 ## Notes
 
 - `SDL_GetWindowWMInfo` is used once, for the embedded-in-BomsAI-Studio case. The
