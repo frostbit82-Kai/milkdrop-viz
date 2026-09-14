@@ -98,6 +98,13 @@ DEFAULT_CONFIG = {
     # Pictures laid over the render: [{image, motion, size, alpha, blend}].
     # `image` is a file stem under user_data_dir()/sprites.
     "sprites":              [],
+    # Take a picture of a preset the first time it stays on screen long
+    # enough, so the browser fills in as the library is watched. Off means the
+    # browser only ever shows pictures asked for by hand.
+    "auto_thumbnails":      True,
+    # Whether the browser list draws those pictures. Off fits about twice as
+    # many presets on screen.
+    "browser_thumbnails":   True,
 }
 
 

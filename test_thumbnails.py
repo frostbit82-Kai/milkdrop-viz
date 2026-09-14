@@ -95,12 +95,28 @@ class FakePM:
     def current_preset_name(self):  return self.name
 
 
+class FakeSignal:
+    def __init__(self):        self.sent = []
+    def emit(self, *args):     self.sent.append(args)
+
+
+class FakeBridge:
+    """The two signals _maybe_thumbnail reaches for. thumbnail_ready is fired
+    from the writer thread, not this one."""
+    def __init__(self):
+        self.show_toast      = FakeSignal()
+        self.thumbnail_ready = FakeSignal()
+
+
 def bare_renderer():
     """A Renderer without __init__ — it starts audio capture and an IPC
     thread, and none of that is what these checks are about."""
     r = object.__new__(Renderer)
     r._pm = FakePM()
+    r._cfg = {}
+    r._bridge = FakeBridge()
     r._thumb_done = False
+    r._want_snapshot = False
     r._preset_start = time.monotonic()
     r.grabs = 0
     def grab():
@@ -154,6 +170,44 @@ def an_already_cached_preset_is_not_re_grabbed():
     r._preset_start = time.monotonic() - Renderer.THUMB_AFTER - 1
     r._maybe_thumbnail()
     assert r.grabs == 0, "re-grabbed a preset that already has a thumbnail"
+
+def the_automatic_picture_can_be_turned_off():
+    """Somebody who does not want the app deciding when to take a picture
+    still wants the button. Off stops the passive capture and nothing else."""
+    r = bare_renderer()
+    r._cfg = {"auto_thumbnails": False}
+    r._preset_start = time.monotonic() - Renderer.THUMB_AFTER - 1
+    r._maybe_thumbnail()
+    assert r.grabs == 0, "took a picture with the automatic capture off"
+    # ... and the button still works, which is the whole point of the setting
+    r._want_snapshot = True
+    r._maybe_thumbnail()
+    assert r.grabs == 1, "the button was refused along with the automatic one"
+
+
+def a_snapshot_jumps_every_gate_the_automatic_one_waits_for():
+    """The wait, the once-per-preset latch and the file already being there.
+    Somebody pressing the button is looking at the frame they want, and the
+    reason to press it a second time is that the first one was not it."""
+    r = bare_renderer()
+    r._pm = FakePM("snapped-one")
+    path = thumb_path("snapped-one")
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    open(path, "wb").write(b"x")
+    r._thumb_done = True                       # already had its one attempt
+    r._preset_start = time.monotonic()         # and has not settled either
+    r._want_snapshot = True
+    r._maybe_thumbnail()
+    assert r.grabs == 1, "the button was refused"
+    assert r._bridge.show_toast.sent, "snapped without saying so"
+    # Taken, not latched: a second press is a second picture.
+    r._want_snapshot = True
+    r._maybe_thumbnail()
+    assert r.grabs == 2, f"a second press gave {r.grabs} pictures"
+    # And nothing between them keeps taking pictures on its own.
+    r._maybe_thumbnail()
+    assert r.grabs == 2, "kept grabbing after the press was served"
+
 
 def a_new_preset_re_arms_the_gate():
     """_emit_current_preset is the hook; without it only the first preset in
@@ -243,6 +297,57 @@ def a_thumbnail_below_an_unwatched_row_is_not_squashed_into_it():
     win.close()
 
 
+def a_picture_that_arrives_after_the_row_was_read_still_appears():
+    """A row with no thumbnail is remembered as a miss -- that is what stops
+    ten thousand rows stat-ing the cache on every scroll -- so a snapshot
+    taken while the browser is open would otherwise not show until the list
+    was rebuilt."""
+    name = "Snapped while the browser was open"
+    class Late(BrowserHost):
+        entries = [(name, 5)]
+    win = PresetPlaylistWindow(host=Late())
+    win.resize(420, 400)
+    win.show()
+    app.processEvents()
+    win._load_visible_icons()
+    assert win._list.item(0).icon().isNull(), "started with a picture"
+    _write_thumb(thumb_path(name))
+    win._on_thumbnail_ready(name)
+    assert not win._list.item(0).icon().isNull(), \
+        "the new picture never reached the row"
+    win.close()
+
+
+def turning_the_pictures_off_gives_the_rows_their_height_back():
+    """Off has to undo both halves: the icons already on the rows, and the
+    stylesheet row height _make_room_for_icons set, which is what makes every
+    row tall whether it carries a picture or not."""
+    _write_thumb(thumb_path(NAME))
+    win = PresetPlaylistWindow(host=BrowserHost())
+    win.resize(420, 400)
+    win.show()
+    app.processEvents()
+    win._load_visible_icons()
+    assert win._list.iconSize() == win.ICON_SIZE
+    tall = win._list.visualItemRect(win._list.item(0)).height()
+
+    win._btn_thumbs.setChecked(False)
+    app.processEvents()
+    assert win._list.iconSize().width() == 0, win._list.iconSize()
+    assert win._list.item(0).icon().isNull(), "the row kept its picture"
+    assert "min-height" not in win._list.styleSheet(), \
+        "the rows are still reserving room for a picture"
+    short = win._list.visualItemRect(win._list.item(0)).height()
+    assert short < tall, f"rows are still {short}px, were {tall}px"
+
+    # And back on again, which is the half that needs the cache forgotten.
+    win._btn_thumbs.setChecked(True)
+    app.processEvents()
+    assert not win._list.item(0).icon().isNull(), \
+        "turning them back on left the row blank"
+    win.close()
+
+
 def an_empty_cache_leaves_no_gutter():
     """A fresh install has no thumbnails, and a 96px empty column down ten
     thousand rows looks like the list is broken."""
@@ -265,7 +370,11 @@ for fn in (a_thumbnail_path_is_stable_and_filesystem_safe,
            one_that_stays_gets_exactly_one,
            an_already_cached_preset_is_not_re_grabbed,
            a_new_preset_re_arms_the_gate,
+           the_automatic_picture_can_be_turned_off,
+           a_snapshot_jumps_every_gate_the_automatic_one_waits_for,
            the_browser_shows_a_cached_thumbnail_and_skips_the_rest,
+           a_picture_that_arrives_after_the_row_was_read_still_appears,
+           turning_the_pictures_off_gives_the_rows_their_height_back,
            an_empty_cache_leaves_no_gutter,
            a_thumbnail_below_an_unwatched_row_is_not_squashed_into_it):
     results.append(check(fn.__name__, fn))

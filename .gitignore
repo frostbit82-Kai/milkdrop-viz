@@ -34,3 +34,7 @@ installer/dist/
 # by hand. store/listing.md IS tracked -- it is the copy, not the media.
 store/demo.mp4
 store/screenshots/
+
+# Test material: the GIFs for the burn-in work. assets/ is copied wholesale
+# into the frozen bundle, so nothing that is not shipped may live there.
+testdata/

@@ -10,12 +10,12 @@ away, and Save must not quietly write the version on screen instead of it.
 
 Run: QT_QPA_PLATFORM=offscreen python test_code_editor.py
 """
-import os, sys
+import ast, inspect, os, sys, textwrap, threading
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import viz_common
-from viz_common import QApplication, theme_colour
+from viz_common import QApplication, theme_colour, QObject, pyqtSignal
 from preset_browser import TweakPanel
 
 ORIGINAL = """[preset00]
@@ -48,11 +48,20 @@ warp_1=`ret=0;
 """
 
 
-class FakeHost:
-    """Only the surface TweakPanel touches."""
+class FakeHost(QObject):
+    """Only the surface TweakPanel touches.
+
+    A QObject because the lock is no longer only ever moved from this panel:
+    the key and the right-click menu move it too, and the panel now follows
+    the host's signal to stay honest about it.
+    """
+
+    lock_changed = pyqtSignal(bool)
 
     def __init__(self):
+        super().__init__()
         self.text = ORIGINAL
+        self.rated = 0
         self.previewed = []
         self.saved = None
         self.reverted = 0
@@ -81,6 +90,11 @@ class FakeHost:
     def request_toggle_lock(self):
         self.toggles += 1
         self.locked = not self.locked
+        self.lock_changed.emit(self.locked)
+
+    # rating
+    def request_rate(self, delta):
+        self.rated += int(delta)
 
     # textures and overlays, which the panel builds whether we care or not
     def can_sprites(self):            return False
@@ -232,20 +246,87 @@ def a_clean_edit_shows_no_error():
 
 
 def the_lock_box_follows_the_host_without_toggling_it():
-    """reload() sets the box from the host. A blind toggle there would unlock
-    the preset it had just been told was locked."""
+    """reload() sets the button from the host. A blind toggle there would
+    unlock the preset it had just been told was locked."""
     host, panel = _panel()
     host.locked = True
     panel.reload()
-    assert panel._code_lock.isChecked()
+    assert panel._lock_btn.isChecked()
     assert host.toggles == 0, "reload toggled the lock"
 
 
 def ticking_the_lock_box_locks_the_preset():
     host, panel = _panel()
-    panel._code_lock.setChecked(True)
+    panel._lock_btn.setChecked(True)
     assert host.toggles == 1
     assert host.locked
+
+
+def the_lock_button_follows_the_key_and_the_menu():
+    """The lock moved off the Code tab and onto the tab row, where it is on
+    screen the whole time the panel is open. A button that only ever learns
+    about its own clicks is then wrong for as long as it is shown -- and the
+    key and the right-click menu both move the same lock."""
+    host, panel = _panel()
+    assert not panel._lock_btn.isChecked()
+    host.locked = True
+    host.lock_changed.emit(True)
+    app.processEvents()
+    assert panel._lock_btn.isChecked(), "the button ignored the host"
+    assert host.toggles == 0, "following the host toggled the lock back"
+
+
+def a_rating_request_accumulates_rather_than_latching():
+    """Three quick clicks are three stars. The render thread serves these
+    once per frame at best, so a flag that only remembered the last one would
+    throw away every click but one -- and the buttons are small and get
+    clicked in a row."""
+    r = object.__new__(viz_common.Renderer)
+    r._lock = threading.Lock()
+    r._req_rate = 0
+    viz_common.Renderer.request_rate(r, +1)
+    viz_common.Renderer.request_rate(r, +1)
+    viz_common.Renderer.request_rate(r, -1)
+    assert r._req_rate == 1, f"three clicks came out as {r._req_rate}"
+
+
+def the_render_loop_actually_serves_the_rating_request():
+    """Accumulating into a field nothing reads would pass the check above and
+    do nothing at all on screen. The dispatch block is in Renderer.run, which
+    needs a GPU to execute, so the shipped source is read instead of a copy."""
+    tree = ast.parse(textwrap.dedent(
+        inspect.getsource(viz_common.Renderer.run)))
+    served = [n for n in ast.walk(tree) if isinstance(n, ast.If)
+              and "_req_rate" in ast.unparse(n.test)
+              and "_rate_current" in ast.unparse(n)]
+    assert len(served) == 1, \
+        f"{len(served)} places in the run loop serve _req_rate, expected 1"
+    cleared = ast.unparse(served[0])
+    assert "_req_rate = 0" in cleared, \
+        "the run loop serves the rating request without clearing it, so it "\
+        "repeats every frame for the life of the app"
+
+
+def showing_the_lock_does_not_move_it():
+    """_lock_shown means show, not set. The host is the authority on whether
+    the preset is locked; a button that asked for a change on being *told* of
+    one would fight whatever had just told it -- and the key, the menu and
+    this button all move the same lock."""
+    host, panel = _panel()
+    host.locked = False                 # the host has not changed
+    panel._lock_shown(True)             # and we are only told how to look
+    assert panel._lock_btn.isChecked(), "the button ignored what it was told"
+    assert host.toggles == 0, "showing the lock asked the host to change it"
+
+
+def the_rating_buttons_rate_the_visual_on_screen():
+    """One star each way, and three clicks are three stars. The renderer
+    accumulates rather than latching, which is the only reason that holds."""
+    _host, panel = _panel()
+    panel._rate(+1)
+    panel._rate(+1)
+    panel._rate(-1)
+    assert _host.rated == 1, _host.rated
 
 
 def shifting_colours_plays_it_and_leaves_it_in_the_box():

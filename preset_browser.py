@@ -23,7 +23,7 @@ from viz_common import (
     PRESET_TWEAKS, preset_scalar, preset_driven_keys, patch_preset,
     preset_textures, texture_override_path, theme_colour,
     QComboBox, SPRITE_MOTIONS, SPRITE_BLENDS, MAX_SPRITES,
-    QPlainTextEdit, QCheckBox, QShortcut, QKeySequence, QFontDatabase,
+    QPlainTextEdit, QShortcut, QKeySequence, QFontDatabase,
     shift_preset_colours, add_per_frame_line, mashup_preset, QTextCursor,
     MilkHighlighter,
 )
@@ -179,15 +179,6 @@ class TweakPanel(QWidget):
         code_foot = QHBoxLayout()
         code_foot.setContentsMargins(0, 0, 0, 0)
         code_foot.setSpacing(6)
-        # Without this the playlist moves on mid-sentence and the box is
-        # showing a preset that is no longer playing. The key exists already;
-        # a checkbox here is what makes it findable while typing.
-        self._code_lock = QCheckBox("Keep this preset on screen")
-        self._code_lock.setToolTip(
-            "Stops the playlist changing the preset while you type. "
-            "Same as the lock in the right-click menu.")
-        self._code_lock.toggled.connect(self._code_lock_toggled)
-        code_foot.addWidget(self._code_lock)
         code_foot.addStretch(1)
         btn_apply = QPushButton("Apply")
         btn_apply.setToolTip("Play what is in the box now (Ctrl+Enter)")
@@ -224,6 +215,43 @@ class TweakPanel(QWidget):
         spr_scroll.setHorizontalScrollBarPolicy(
             Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self._spr_tab = self._tabs.addTab(spr_scroll, "Overlay")
+
+        # The tab row's spare right-hand end. Three controls that apply to
+        # every tab: without the lock the playlist moves on mid-sentence and
+        # the panel is editing a preset that is no longer playing, and the
+        # rating is the one judgement worth making while looking at the thing
+        # being judged. Icons, not words: four tabs and "Lock Visuals" do not
+        # both fit across 470px, which is the width this window opens at.
+        corner = QWidget()
+        corner_lay = QHBoxLayout(corner)
+        corner_lay.setContentsMargins(0, 0, 4, 0)
+        corner_lay.setSpacing(2)
+        self._lock_btn = QPushButton("\U0001f513")
+        self._lock_btn.setCheckable(True)
+        self._lock_btn.setFixedWidth(30)
+        self._lock_btn.setToolTip(
+            "Keep this visual on screen \u2014 stops the playlist changing it "
+            "while you work. Same lock as the right-click menu and the key.")
+        self._lock_btn.toggled.connect(self._lock_toggled)
+        corner_lay.addWidget(self._lock_btn)
+        btn_rate_dn = QPushButton("\u2605\u2212")
+        btn_rate_dn.setFixedWidth(32)
+        btn_rate_dn.setToolTip("Rate this visual down one star")
+        btn_rate_dn.clicked.connect(lambda: self._rate(-1))
+        corner_lay.addWidget(btn_rate_dn)
+        btn_rate_up = QPushButton("\u2605+")
+        btn_rate_up.setFixedWidth(32)
+        btn_rate_up.setToolTip("Rate this visual up one star")
+        btn_rate_up.clicked.connect(lambda: self._rate(+1))
+        corner_lay.addWidget(btn_rate_up)
+        self._tabs.setCornerWidget(corner, Qt.Corner.TopRightCorner)
+
+        # The lock also moves from the key and the menu, and a button that
+        # only ever learns about its own clicks is wrong the rest of the time.
+        try:
+            self._host.lock_changed.connect(self._lock_shown)
+        except Exception:
+            pass
 
         foot = QHBoxLayout()
         foot.setContentsMargins(0, 0, 0, 0)
@@ -289,7 +317,7 @@ class TweakPanel(QWidget):
             self._code.document().setModified(False)
         self._code_error.hide()
         try:
-            self._code_lock.setChecked(bool(self._host.is_locked()))
+            self._lock_shown(bool(self._host.is_locked()))
         except Exception:
             pass
 
@@ -792,12 +820,25 @@ class TweakPanel(QWidget):
         self._code.document().setModified(True)
         self._apply_code()
 
-    def _code_lock_toggled(self, on: bool):
-        # Only when it actually differs: the box is also set from the host in
-        # reload(), and a blind toggle there would unlock what it just read.
+    def _lock_toggled(self, on: bool):
+        # Only when it actually differs: the button is also set from the host,
+        # and a blind toggle there would unlock what it just read.
         try:
             if bool(self._host.is_locked()) != bool(on):
                 self._host.request_toggle_lock()
+        except Exception:
+            pass
+
+    def _lock_shown(self, on: bool):
+        """Show the lock as `on` without asking the host to change it."""
+        was = self._lock_btn.blockSignals(True)
+        self._lock_btn.setChecked(bool(on))
+        self._lock_btn.setText("\U0001f512" if on else "\U0001f513")
+        self._lock_btn.blockSignals(was)
+
+    def _rate(self, delta: int):
+        try:
+            self._host.request_rate(delta)
         except Exception:
             pass
 
@@ -930,6 +971,23 @@ class PresetPlaylistWindow(QWidget):
         btn_refresh.clicked.connect(self.refresh)
         bar.addWidget(btn_refresh)
 
+        self._btn_thumbs = QPushButton("\U0001f5bc")
+        self._btn_thumbs.setFixedWidth(34)
+        self._btn_thumbs.setCheckable(True)
+        self._btn_thumbs.setToolTip(
+            "Show each preset's picture in the list. Off fits about twice as "
+            "many presets on screen.")
+        self._btn_thumbs.toggled.connect(self._toggle_thumbs)
+        bar.addWidget(self._btn_thumbs)
+
+        btn_snap = QPushButton("\U0001f4f7")
+        btn_snap.setFixedWidth(34)
+        btn_snap.setToolTip(
+            "Take the list's picture of the visual on screen now, replacing "
+            "whatever is there.")
+        btn_snap.clicked.connect(self._snap)
+        bar.addWidget(btn_snap)
+
         # The drop-down. Collapsed by default, so the browser is unchanged
         # for anyone who never opens it.
         self._btn_tweak = QPushButton("🎛")
@@ -975,6 +1033,18 @@ class PresetPlaylistWindow(QWidget):
         #: view far more often than they change, and a miss is as worth
         #: remembering as a hit -- most presets have no thumbnail yet.
         self._iconed = set()
+        #: Whether the list draws them at all. Read before the first refresh:
+        #: _load_visible_icons is what would otherwise have already put a
+        #: thumbnail on every visible row.
+        self._thumbs_on = True
+        try:
+            self._thumbs_on = bool(
+                host.get_setting("browser_thumbnails", True))
+        except Exception:
+            pass
+        self._btn_thumbs.blockSignals(True)
+        self._btn_thumbs.setChecked(self._thumbs_on)
+        self._btn_thumbs.blockSignals(False)
         self._list.verticalScrollBar().valueChanged.connect(
             self._load_visible_icons)
         lay.addWidget(self._list, stretch=1)
@@ -987,6 +1057,11 @@ class PresetPlaylistWindow(QWidget):
         if hasattr(host, "playlist_changed"):
             try:
                 host.playlist_changed.connect(self.refresh)
+            except Exception:
+                pass
+        if hasattr(host, "thumbnail_ready"):
+            try:
+                host.thumbnail_ready.connect(self._on_thumbnail_ready)
             except Exception:
                 pass
 
@@ -1090,6 +1165,8 @@ class PresetPlaylistWindow(QWidget):
         with no thumbnail yet simply have none: the cache fills in as they are
         watched, which is the point of it.
         """
+        if not self._thumbs_on:
+            return
         view = self._list.viewport().rect()
         first = self._list.indexAt(view.topLeft()).row()
         if first < 0:
@@ -1124,6 +1201,53 @@ class PresetPlaylistWindow(QWidget):
         """
         self._list.setStyleSheet(
             "QListWidget::item { min-height: %dpx; }" % self.ICON_SIZE.height())
+
+    def _toggle_thumbs(self, on: bool):
+        """Draw the pictures, or give the room back to the list.
+
+        Turning them off cannot just stop loading new ones: the rows already
+        carrying an icon keep drawing it, and the stylesheet row height
+        _make_room_for_icons set is what makes every row tall. Both have to
+        come back off, and the "already looked" set has to be forgotten so
+        that turning them on again re-reads the rows on screen.
+        """
+        self._thumbs_on = bool(on)
+        self._iconed.clear()
+        if on:
+            self._load_visible_icons()
+        else:
+            for i in range(self._list.count()):
+                self._list.item(i).setIcon(QIcon())
+            self._list.setIconSize(QSize(0, 0))
+            self._list.setStyleSheet("")
+        try:
+            self._host.put_setting("browser_thumbnails", self._thumbs_on)
+        except Exception:
+            pass
+
+    def _snap(self):
+        try:
+            self._host.request_snapshot()
+        except Exception:
+            pass
+
+    def _on_thumbnail_ready(self, name: str):
+        """One preset's picture was just written. Redraw that row.
+
+        A row whose thumbnail was missing is remembered as a miss -- that is
+        what stops ten thousand rows stat-ing the cache on every scroll -- so
+        without this the new picture does not appear until the list is rebuilt.
+        """
+        if not self._thumbs_on:
+            return
+        entries = getattr(self, "_entries", ())
+        for i, (n, _r) in enumerate(entries):
+            if n == name:
+                self._iconed.discard(i)
+                break
+        else:
+            return
+        self._load_visible_icons()
 
     def _highlight(self, pos: int):
         if 0 <= pos < self._list.count():

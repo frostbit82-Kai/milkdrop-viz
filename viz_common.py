@@ -1077,6 +1077,7 @@ DEFAULT_KEYMAPS = {
     "record":           "F9",
     "toggle_wallpaper": "d",
     "exclude":          "x",
+    "snapshot":         "c",
 }
 
 
@@ -2804,6 +2805,7 @@ class Bridge(QObject):
     playlist_changed   = pyqtSignal()           # order/contents changed (sort, delete, mode)
     no_presets         = pyqtSignal(str)        # nothing loaded; arg is the directory tried
     wallpaper_changed  = pyqtSignal(bool)       # window is/is not the desktop
+    thumbnail_ready    = pyqtSignal(str)        # a preset's picture was written
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -3790,6 +3792,7 @@ ACTION_LABELS = {
     "record":           "Start / stop recording a clip",
     "toggle_wallpaper": "Desktop wallpaper mode on / off",
     "exclude":          "Exclude this visual (rate it 0★) and move on",
+    "snapshot":         "Snapshot this visual for the browser",
 }
 
 ACTION_NOTES = {
@@ -3802,6 +3805,7 @@ ACTION_NOTES = {
     "toggle_wallpaper": "Leave it again from the tray icon — a desktop "
                         "window gets no keys",
     "exclude":          "Hides it from rotation. Nothing is deleted",
+    "snapshot":         "Replaces the picture the browser already has",
 }
 
 
@@ -6152,15 +6156,21 @@ class _ThumbWriter(threading.Thread):
         import queue
         self._q = queue.Queue(maxsize=4)
 
-    def submit(self, path: str, w: int, h: int, buf: bytes):
+    def submit(self, path: str, w: int, h: int, buf: bytes, done=None):
+        """`done` is called on this thread once the file is on disk.
+
+        Not when the frame is handed over: the browser draws whatever is at
+        the path the moment it is told, and told too early it caches the miss
+        and the row stays blank until something else invalidates it.
+        """
         try:
-            self._q.put_nowait((path, w, h, buf))
+            self._q.put_nowait((path, w, h, buf, done))
         except Exception:
             pass          # a thumbnail is never worth waiting for
 
     def run(self):
         while True:
-            path, w, h, buf = self._q.get()
+            path, w, h, buf, done = self._q.get()
             try:
                 os.makedirs(os.path.dirname(path), exist_ok=True)
                 img = QImage(buf, w, h, w * 3, QImage.Format.Format_RGB888)
@@ -6181,6 +6191,8 @@ class _ThumbWriter(threading.Thread):
                 # finds it either way.
                 if img.save(part, "JPG", 80) or img.save(part, "PNG"):
                     os.replace(part, path)
+                    if done is not None:
+                        done()
             except Exception as e:
                 print(f"[thumb] {path}: {e}", flush=True)
 
@@ -6511,6 +6523,8 @@ class Renderer:
         self._req_preset_data            = None   # preset text to play now
         self._req_reset_textures         = False  # rescan after a swap
         self._req_sprites                = False  # rebuild the overlay list
+        self._req_rate                   = 0      # stars to add, from the GUI
+        self._req_snapshot               = False  # re-take the browser picture
         #: Frames left before an edit's error is read back. 0 = not editing,
         #: which is what keeps a 130,000-preset pack from toasting all night.
         self._edit_error_in              = 0
@@ -6566,6 +6580,10 @@ class Renderer:
         self._wp_box_moaned = False
         self._wp_gave_up = False
         self._thumb_done = True    # one attempt per preset; see _maybe_thumbnail
+        #: Set by the key or the browser's button. Taken on the render thread
+        #: at the one point in the loop where the back buffer holds this
+        #: frame, which is where _maybe_thumbnail already runs.
+        self._want_snapshot = False
         #: Idle pause. _last_sound is when audio was last above SILENCE_PEAK,
         #: _idle whether the loop is currently not drawing, and _idle_since
         #: when it stopped -- the preset clock is pushed forward by that much
@@ -6836,6 +6854,32 @@ class Renderer:
     def request_random(self):
         with self._lock: self._req_random = True
 
+    def request_rate(self, delta: int):
+        """Nudge the current preset's rating. Safe from the Qt thread.
+
+        Added rather than calling _rate_current directly: it asks projectM for
+        the preset name, and every other question put to projectM is asked on
+        the render thread. Accumulated rather than latched, so three quick
+        clicks are three stars and not one.
+        """
+        with self._lock:
+            self._req_rate += int(delta)
+
+    def request_snapshot(self):
+        """Take the browser's picture of this preset again, now."""
+        with self._lock:
+            self._req_snapshot = True
+
+    def get_setting(self, key: str, default=None):
+        """One config value. Qt thread; the browser keeps its own switches
+        here rather than inventing a second settings file for two booleans."""
+        return self._cfg.get(key, default)
+
+    def put_setting(self, key: str, value):
+        """Write one config value straight through to disk."""
+        self._cfg[key] = value
+        self._save_config(self._cfg)
+
     def request_toggle_lock(self):
         with self._lock:
             self._req_lock   = True
@@ -6884,6 +6928,20 @@ class Renderer:
     def playlist_changed(self):
         """Bridge signal fired when the playlist order/contents change."""
         return self._bridge.playlist_changed
+
+    @property
+    def lock_changed(self):
+        """Bridge signal fired when the lock goes on or off, whatever moved
+        it -- the key, the menu or the browser's own button."""
+        return self._bridge.lock_changed
+
+    @property
+    def thumbnail_ready(self):
+        """Bridge signal carrying the name of a preset whose picture has just
+        been written. The browser caches a missing thumbnail as a miss, so
+        without this a fresh snapshot does not appear until the list is
+        rebuilt."""
+        return self._bridge.thumbnail_ready
 
     def sort_order(self, by: str = "name"):
         self.request_sort(by)
@@ -7539,6 +7597,13 @@ class Renderer:
                 if self._req_sprites:
                     self._req_sprites = False
                     self._do_apply_sprites()
+                if self._req_rate:
+                    delta = self._req_rate
+                    self._req_rate = 0
+                    self._rate_current(delta)
+                if self._req_snapshot:
+                    self._req_snapshot = False
+                    self._want_snapshot = True
                 if self._req_preset_data is not None:
                     text = self._req_preset_data
                     self._req_preset_data = None
@@ -7688,6 +7753,8 @@ class Renderer:
             self._rate_current(+1)
         elif km("rate_down", sym, scancode):
             self._rate_current(-1)
+        elif km("snapshot", sym, scancode):
+            self._want_snapshot = True
 
     # ── Preset navigation ─────────────────────────────────────────────────
 
@@ -8621,20 +8688,36 @@ class Renderer:
         thousand presets rendered for a second each is two hours of nobody's
         time, and the thumbnails that matter are the ones for presets the
         owner has actually sat through.
+
+        An asked-for snapshot jumps every one of those guards -- the wait, the
+        once-per-preset latch and the file already being there. Somebody
+        pressing the button is looking at the frame they want.
         """
-        if self._thumb_done:
-            return
-        if _time.monotonic() - self._preset_start < self.THUMB_AFTER:
-            return
-        self._thumb_done = True
+        forced = self._want_snapshot
+        self._want_snapshot = False
+        if not forced:
+            if self._thumb_done or not self._cfg.get("auto_thumbnails", True):
+                return
+            if _time.monotonic() - self._preset_start < self.THUMB_AFTER:
+                return
+            self._thumb_done = True
         try:
             name = self._pm.current_preset_name()
-            if not name or os.path.isfile(thumb_path(name)):
+            if not name:
+                return
+            if not forced and os.path.isfile(thumb_path(name)):
                 return
             grab = self._grab_frame()
             if grab:
                 w, h, buf = grab
-                thumb_writer().submit(thumb_path(name), w, h, buf)
+                # Bound late, and by value: the preset will have moved on by
+                # the time the writer gets here, and the row that needs
+                # redrawing is the one this picture belongs to.
+                thumb_writer().submit(
+                    thumb_path(name), w, h, buf,
+                    lambda n=name: self._bridge.thumbnail_ready.emit(n))
+                if forced:
+                    self._bridge.show_toast.emit(f"\U0001f4f7  Snapped {name}")
         except Exception as e:
             print(f"[thumb] capture failed: {e}", flush=True)
 
