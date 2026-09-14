@@ -137,20 +137,51 @@ def highlight_shows_stars_too():
 def the_window_opens_at_least_as_wide_as_its_own_toolbar():
     """Qt will not open a window narrower than the widest thing in it, so a
     resize() below the toolbar's minimum is a number that describes nothing.
-    That is exactly what had happened: 470 was in the source while the row
-    needed 522, and every button added since had silently widened the window
-    a bit more. An eleventh one fails here instead."""
-    bar = win.layout().itemAt(1)
+
+    This used to compare the toolbar against a hand-measured WIDTH, and that
+    check could only ever be right on one machine: the width of a row of
+    labelled buttons is a *font* measurement. The same ten buttons need 602px
+    on Linux, 599 on Windows in Segoe UI, and **818 under the offscreen
+    plugin's fallback font** -- which is the font this suite runs in and the
+    one the app never uses. It was failing on Windows for a window that opens
+    at 612 there in real life.
+
+    What is asserted now is the construction: the window opens at the
+    toolbar's own minimum when that is the larger, so it cannot be a lie in
+    any font. Deleting that max() fails here."""
+    # A window of its own: the one above is deliberately resized to 380 by
+    # the elision checks, so it cannot answer what the constructor chose.
+    fresh = PresetPlaylistWindow(host=FakeHost())
+    bar = fresh.layout().itemAt(1)
     need = bar.minimumSize().width()
-    assert need <= win.WIDTH, (
-        f"the toolbar needs {need}px and the window opens at {win.WIDTH}px, "
-        f"so Qt will widen it to {need} and WIDTH is a lie")
-    # And not absurdly wide either: this window sits beside the visuals.
-    assert win.WIDTH <= need + 40, (
-        f"the window opens {win.WIDTH - need}px wider than anything needs")
+    assert fresh.width() >= need, (
+        f"the toolbar needs {need}px and the window opened at "
+        f"{fresh.width()}px, so the resize() is not following the toolbar")
+    assert fresh.width() >= fresh.WIDTH, (
+        f"WIDTH is meant to be a floor and the window opened at "
+        f"{fresh.width()}px, under it")
+    fresh.deleteLater()
+
+
+def the_toolbar_is_still_a_row_somebody_can_read():
+    """The check the pixel one was really standing in for.
+
+    A button count is the same number in every font, which a width is not.
+    Ten is what this row was designed around; an eleventh is a decision about
+    the layout -- a second row, or a menu -- and not something to absorb by
+    letting the window grow another 60px beside the visuals.
+    """
+    bar = win.layout().itemAt(1)
+    buttons = [bar.itemAt(i).widget() for i in range(bar.count())
+               if bar.itemAt(i).widget() is not None]
+    assert len(buttons) <= 10, (
+        f"{len(buttons)} buttons in the toolbar: "
+        + ", ".join(b.text() or b.objectName() or type(b).__name__
+                    for b in buttons))
 
 
 for fn in (the_window_opens_at_least_as_wide_as_its_own_toolbar,
+           the_toolbar_is_still_a_row_somebody_can_read,
            the_toolbar_does_not_move_for_a_long_name,
            the_composed_line_actually_fits,
            the_title_stays_one_line,

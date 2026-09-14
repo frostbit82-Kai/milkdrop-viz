@@ -450,6 +450,22 @@ There is no display in an agent shell and SDL needs one, so:
   wrapper around our id, so deleting one is a sampler reading a texture that
   is not there.
 
+- **A bare PyOpenGL call on a teardown path is a Windows-only crash.**
+  PyOpenGL resolves an entry point on first use and raises
+  `NullFunctionError` when it cannot -- and "cannot" includes having no
+  current context, which Linux quietly no-ops through. Same split as the
+  `glViewport` one further down, but this one was in shipped code rather than
+  a test: `Renderer._stop_dual` ended with a bare `glBindFramebuffer`, and the
+  route that reaches it is `_render_visuals` calling `_do_set_dual(False)`
+  when the blend program will not build -- so the machine with no framebuffer
+  entry points is exactly the machine that runs that line, and the exception
+  kills the render thread with a black window and nothing in the log. Guarded
+  with `if bool(glBindFramebuffer)`, which is the idiom PyOpenGL's own error
+  message names. `_Blender.drop()` and `_LiveTexture.stop()` were checked at
+  the same time and are fine -- the first wraps everything, the second touches
+  no GL at all. **Any new GL call on a stop/destroy/fallback path needs one of
+  those two shapes.**
+
 - **projectM's sprite blend modes do not do what their MilkDrop names say.**
   Mode 0 ("alpha") ignores the texture's alpha channel entirely and draws the
   whole rectangle; mode 4 ("colour key") is the only one that honours it —
@@ -473,6 +489,21 @@ There is no display in an agent shell and SDL needs one, so:
   `layout().itemAt(1).minimumSize().width()` against a shown window, not from
   the source. `PresetPlaylistWindow.WIDTH` now carries the measured number and
   `test_browser_title` fails if a new button outgrows it.
+
+  **And then the measured number was wrong too, because a row of labelled
+  buttons is a *font* measurement and the suite does not run in the app's
+  font.** 2026-09-14, on Windows. The same ten buttons need **602px on Linux,
+  599 on Windows in Segoe UI, and 818 under `QT_QPA_PLATFORM=offscreen`** --
+  the offscreen plugin falls back to "Sans Serif" and reports 818 for a window
+  that opens at 612 on that machine in real life. So the check failed on
+  Windows over a defect that was not there, and had only ever passed on Linux
+  because that box's offscreen fallback happens to sit near its real font.
+  A pixel threshold measured under offscreen is not the app's threshold: to
+  get the real number, run the probe with `QT_QPA_PLATFORM` **unset** and
+  confirm the font it prints is the system UI font. The window now opens at
+  `max(WIDTH, bar.minimumSize().width())`, which is right in any font, and
+  what the suite pins is the **button count** -- the thing that was actually
+  being watched, and the same number everywhere.
 
 - **`uniformItemSizes` on a `QListWidget` measures once and never again.**
   Not on a size-hint change, not on `doItemsLayout`, not on clear-and-refill.

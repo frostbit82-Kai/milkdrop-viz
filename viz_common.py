@@ -10117,7 +10117,17 @@ class Renderer:
         if self._blend is not None:
             self._blend.drop()
             self._blend = None
-        glBindFramebuffer(GL_FRAMEBUFFER, 0)
+        # Guarded, and the guard is not for the tests. PyOpenGL resolves an
+        # entry point on first use and raises NullFunctionError when it
+        # cannot -- silently no-opping on Linux and raising on Windows, the
+        # same split CLAUDE.md records for glViewport. The route that gets
+        # here is the one that matters: a blender that would not build calls
+        # _do_set_dual(False) from inside the render loop, so the machine
+        # with no framebuffer entry points is exactly the machine that runs
+        # this line, and an exception there kills the render thread with a
+        # black window and no frames.
+        if bool(glBindFramebuffer):
+            glBindFramebuffer(GL_FRAMEBUFFER, 0)
         print("[dual] off", flush=True)
 
     def _do_set_focus(self, which: int):

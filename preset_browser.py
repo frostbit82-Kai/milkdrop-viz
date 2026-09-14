@@ -1207,8 +1207,11 @@ class PresetPlaylistWindow(QWidget):
     #: letterboxed into it.
     ICON_SIZE = QSize(96, 54)
 
-    #: What the window opens at. Has to be at least the toolbar's minimum --
-    #: see the comment in __init__ for what happens when it is not.
+    #: The floor the window opens at. It is not the whole answer any more:
+    #: what the toolbar needs depends on the font, so the window is opened at
+    #: whichever of the two is larger and this is only the width below which
+    #: the list itself gets cramped. Measured at 602 on Linux and 599 on
+    #: Windows in the real UI font, so it is a floor both platforms clear.
     WIDTH = 610
 
     def __init__(self, host, on_shuffle=None, parent=None):
@@ -1216,15 +1219,8 @@ class PresetPlaylistWindow(QWidget):
         self._host = host
         self._on_shuffle = on_shuffle      # callback to toggle visual shuffle
         self.setWindowTitle("Preset Browser")
-        # The toolbar's own minimum width is what decides this, not the list:
-        # ten buttons in one row, and Qt will not open a window narrower than
-        # the widest thing in it. 470 was written here and had already stopped
-        # being true -- the row needed 522 before this version and Qt was
-        # silently widening the window to fit, so the number in the source
-        # described nothing. Measured, not guessed, and test_browser_title
-        # pins it: an eleventh button fails a suite rather than quietly
-        # growing the window again.
-        self.resize(self.WIDTH, 620)
+        # The window is sized at the end of __init__, once the toolbar it has
+        # to fit exists. See the resize after `lay.addLayout(bar)`.
         # Built in viz_common so every themed surface shares one palette.
         self.setStyleSheet(browser_qss())
 
@@ -1323,6 +1319,23 @@ class PresetPlaylistWindow(QWidget):
 
         bar.addStretch(1)
         lay.addLayout(bar)
+
+        # Qt will not open a window narrower than the widest thing in it, so a
+        # resize() below the toolbar's minimum describes nothing -- it was 470
+        # in the source while the row needed 522, and every button added since
+        # had silently widened the window a little more.
+        #
+        # Measuring it once and writing the number down does not fix that,
+        # because the number is not one number: the same ten buttons need 602px
+        # on Linux, 599 on Windows in Segoe UI, and 818 under the offscreen
+        # plugin's fallback font -- which is what `QT_QPA_PLATFORM=offscreen`
+        # gives the test suite, and is a font this app never runs in. So the
+        # window is opened at whatever the toolbar actually needs in whatever
+        # font is in front of it, and WIDTH is only a floor. An eleventh button
+        # now widens the window honestly instead of making the source a lie;
+        # what test_browser_title pins is the button count, which is the thing
+        # that was really being watched and is the same in every font.
+        self.resize(max(self.WIDTH, bar.minimumSize().width()), 620)
 
         self._tweaks = TweakPanel(host)
         self._tweaks.hide()

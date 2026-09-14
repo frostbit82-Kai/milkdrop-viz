@@ -1496,3 +1496,80 @@ dialog under the first visual's quality.
 
 Measuring the blend by pixel rather than by eye is what made the last row
 provable: solid-colour presets turn "which one moved?" into arithmetic.
+
+
+### Windows caught up with 2.1.2 — 2026-09-14
+
+The clone was already at `5ec553d`; nothing to merge. Twenty-two of the
+twenty-four suites were green on the first run, and **both failures were real
+findings rather than noise** — one a shipped bug, one a test that could only
+ever have been right on one machine.
+
+**A bare `glBindFramebuffer` on the dual teardown path, and Windows is where
+it bites.** `test_dual.stopping_puts_everything_back` died with
+`NullFunctionError`. PyOpenGL resolves an entry point on first use and raises
+when it cannot, which on Linux is a silent no-op — the same split CLAUDE.md
+already records for `glViewport`, except this one is in shipped code. The
+route that reaches the line is the one that matters: `_render_visuals` calls
+`_do_set_dual(False)` when the blend program will not build, so **the machine
+with no framebuffer entry points is exactly the machine that runs it**, and
+the exception kills the render thread — black window, no frames, and the log
+ending on "could not build". Guarded with `if bool(glBindFramebuffer)`, which
+is the idiom PyOpenGL's own error text names. `_Blender.drop()` and
+`_LiveTexture.stop()` were checked alongside it and are already safe.
+
+**The browser's toolbar width is a font measurement, and the suite does not
+run in the app's font.** `test_browser_title` said the toolbar needed 818px
+against a `WIDTH` of 610 — but the browser opens at **612** on this machine in
+real life. The 818 comes from `QT_QPA_PLATFORM=offscreen` falling back to
+"Sans Serif"; with the plugin unset the same row measures **599** in Segoe UI,
+against Linux's 602. So a hand-measured constant was never going to be right
+on both, and the check had only passed on Linux because that box's offscreen
+fallback sits near its real font. The window now opens at
+`max(WIDTH, bar.minimumSize().width())` — correct in any font — and what the
+suite pins is the **button count**, which is the thing that was really being
+watched and is the same number everywhere. Mutation-checked: deleting the
+`max()` fails the suite.
+
+**Driven on the real app, one feature per run, with the evidence measured
+rather than eyeballed.**
+
+| what | evidence on Windows |
+|---|---|
+| live GIF texture (sprite) | a colour-cycling GIF: centre pixel `0,180,0` then `252,0,0` 1.2s later |
+| live video texture | `[texture] spr_vidtest 512x288 from spr_vidtest.mp4`; counter digit and colour bars both moved between grabs |
+| sprite scaling | 0.15 draws a small square, 0.5 fills the window — responds to size, not broken |
+| burn-in | `[burn] 512x288 at 156,135 587x330 of 900x600`, and **visible** against the welcome preset, correctly placed and the right way up, so the vertical flip holds here too |
+| dual visuals | `[dual] on`, a second instance created (a second texture-path line), the second preset plainly blended through the first, no GL error |
+| dual teardown | `[dual] off`, process alive, frames still coming, fps back to single-visual levels — i.e. the guard above is transparent when the entry point does resolve |
+| tab-row lock and rating | the corner widget is on the tab row on every tab |
+| number sliders | pinned from the Code tab, labelled `fDecay` from the setting name, "Clear sliders" appears |
+| browser at 612px | ten buttons in one readable row, thumbnails on the rows, scroll handle visible |
+
+Burn-in is invisible on most presets and that is not a Windows problem: the
+burn goes into the framebuffer **before** the preset renders, so anything that
+paints its whole canvas covers it. It took the welcome preset — plain black,
+nothing over it — to see the picture at all. Linux said the same thing about
+not being able to isolate the Burn slider.
+
+**Three hazard classes checked and cleared** while looking for more of the
+first finding's shape, since a Linux box cannot see any of them:
+
+- both new `ffmpeg` subprocesses (the video probe and the decode) set
+  `CREATE_NO_WINDOW` and resolve the binary through `find_ffmpeg()` — no
+  console window flashing over a windowed build;
+- the texture-load callback keeps its trampoline alive on `self._tex_cb`, with
+  `argtypes`/`restype` spelled out, so there is no garbage-collected callback
+  for C to fall into;
+- `live_texture_file`'s containment is structural, not just the basename
+  reduction: the path it returns is always `os.path.join(d, f)` with `f` taken
+  from `os.listdir(d)`, so no name a preset supplies can escape whatever the
+  separator rules are on the platform.
+
+**`BomsAIVisualizer-2.1.2-win64-setup.exe`** — built from the tree at this
+commit. The Linux tarball in `installer/dist/` is still the 2.1.2 one built
+from `4dc8258`, now five commits behind; that is Linux's to rebuild.
+
+Not done: the Inno installer itself. Running it trips UAC and there is no
+non-interactive elevation here, so a fresh install, the shortcuts and the
+screensaver registration stay unverified — the payload is not.
