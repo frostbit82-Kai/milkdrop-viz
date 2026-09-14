@@ -248,10 +248,13 @@ There is no display in an agent shell and SDL needs one, so:
   Nemo's ignore list while Nemo went on reading a dconf entry that had never
   moved, and the giveaway was that a `gsettings get` in a normal shell and the
   same one under the bundle's `LD_LIBRARY_PATH` returned **different lists**.
-  `system_env()` hands subprocesses `LD_LIBRARY_PATH_ORIG`, which PyInstaller
-  saves for exactly this. Use it for any system binary the app shells out to,
-  and never trust a frozen build's word that a desktop setting was written —
-  read it back from a shell that is not the app's.
+  `child_env()` hands subprocesses `LD_LIBRARY_PATH_ORIG`, which PyInstaller
+  saves for exactly this — the **same** helper the bundled-libstdc++ ffmpeg
+  trap further down already needed, which is why there is one of it and not
+  two. Use it for any system binary the app shells out to, whether or not that
+  binary is known to link anything the bundle carries, and never trust a frozen
+  build's word that a desktop setting was written — read it back from a shell
+  that is not the app's.
 
 - **Nemo gives up the desktop icons entirely when another window claims to be
   the desktop — and nothing about the stacking is wrong when it does.**

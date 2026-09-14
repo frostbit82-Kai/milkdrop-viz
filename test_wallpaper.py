@@ -7,7 +7,7 @@ geometry that follows. Parenting into the FIRST one is the classic mistake —
 it covers the desktop icons instead of sitting behind them.
 Run: QT_QPA_PLATFORM=offscreen python test_wallpaper.py
 """
-import os, sys, ctypes, time
+import os, sys, ctypes, time, ast, inspect, textwrap, io
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
@@ -111,6 +111,7 @@ def bare(cfg=None, displays=TWO):
     r._wp_hold_at = 0.0
     r._wp_fixes = 0
     r._wp_box_moaned = False
+    r._wp_gave_up = False
     r._win_rect = (10, 20, 640, 480)
     r._bridge = FakeBridge()
     r._refresh_displays = lambda: None      # SDL is faked out from under it
@@ -650,9 +651,16 @@ def a_window_manager_that_insists_is_not_fought_forever():
     """A window manager entitled to place a desktop window its own way will
     undo every correction. Without a stop, that is a fight every two seconds
     for the life of the app, and the window flickers between the two answers."""
-    r, moves, _f = _box((0, -32, 1920, 1080),
-                        fixes=viz_common.Renderer.WP_FIX_LIMIT)
+    said = io.StringIO()
+    with contextlib.redirect_stdout(said):
+        r, moves, _f = _box((0, -32, 1920, 1080),
+                            fixes=viz_common.Renderer.WP_FIX_LIMIT)
     assert moves == [], "kept pushing after the limit"
+    # Giving up is right; giving up quietly is not. This is the one path that
+    # ends in a wallpaper in the wrong place, and it has to be readable in a
+    # log rather than guessed at from a photograph of somebody's screen.
+    assert "0,-32" in said.getvalue() and "0,0" in said.getvalue(), (
+        f"gave up without saying so: {said.getvalue()!r}")
 
 
 def getting_it_right_again_buys_back_the_budget():
@@ -690,6 +698,35 @@ def the_geometry_cannot_stop_the_stacking_hold():
         viz_common._time = real_time
     assert lib.restacks, "a broken geometry read stopped the stacking hold"
     assert r._wp_hold_at == 1000.0, f"backed off anyway: {r._wp_hold_at}"
+
+
+def the_holds_run_before_the_idle_pause_parks_the_loop():
+    """Position in Renderer.run, pulled out of the source, because nothing a
+    stubbed loop can be asked will notice this one.
+
+    A wallpaper spends most of its life parked -- the idle pause is on silence
+    and a desktop is usually quiet -- and below that `continue` both holds
+    stop defending the window for exactly as long as nobody is playing
+    anything. That is what leaves the visuals over the desktop icons when
+    x11_lower_to_bottom loses the race at map time: the timer that would have
+    put it right within two seconds is already asleep. Measured: a window
+    shoved off the bottom edge while parked stayed there until sound came
+    back.
+
+    It reads as a tidy-up -- the holds *look* like they belong with the other
+    wallpaper work further down -- so it is exactly the edit somebody makes
+    while cleaning, with every suite still green afterwards."""
+    tree = ast.parse(textwrap.dedent(inspect.getsource(viz_common.Renderer.run)))
+    holds = [n for n in ast.walk(tree) if isinstance(n, ast.If)
+             and "_hold_wallpaper_bottom" in ast.unparse(n)]
+    pauses = [n for n in ast.walk(tree) if isinstance(n, ast.If)
+              and "_check_idle" in ast.unparse(n.test)
+              and any(isinstance(k, ast.Continue) for k in ast.walk(n))]
+    assert len(holds) == 1, f"expected one wallpaper hold in run(), got {len(holds)}"
+    assert len(pauses) == 1, f"expected one idle-pause continue, got {len(pauses)}"
+    assert holds[0].lineno < pauses[0].lineno, (
+        "the wallpaper holds sit below the idle-pause `continue`, so a parked "
+        "wallpaper stops defending its place and its size until sound returns")
 
 
 # --- staying at the bottom ------------------------------------------------
@@ -1110,13 +1147,60 @@ def a_refused_write_is_not_reported_as_done():
     assert viz_common.nemo_allow_desktop_window("BomsAIVisualizer", run=gs) == ""
 
 
+def _wm_class(raw):
+    """Run the real x11_wm_class against a window whose WM_CLASS is `raw`.
+
+    Small and local rather than bolted onto FakeXlib, which nothing else asks
+    for a property through. `raw` of None is the window that has no WM_CLASS
+    at all: XGetWindowProperty returns Success and leaves the pointer NULL.
+    """
+    keep = []
+
+    class Lib:
+        @staticmethod
+        def XInternAtom(_d, _n, _e):
+            return 67
+        @staticmethod
+        def XGetWindowProperty(_d, _w, _p, _off, _len, _del, _t,
+                               atype, afmt, nitems, after, data):
+            if raw is None:
+                return 0
+            buf = (ctypes.c_ubyte * len(raw)).from_buffer_copy(raw)
+            keep.append(buf)            # the pointer has to stay valid
+            atype._obj.value, afmt._obj.value = 31, 8
+            nitems._obj.value, after._obj.value = len(raw), 0
+            data._obj.contents = ctypes.cast(
+                buf, ctypes.POINTER(ctypes.c_ubyte)).contents
+            return 0
+        @staticmethod
+        def XFree(_p):
+            keep.clear()
+
+    return viz_common.x11_wm_class(Lib(), 1, APP_WIN)
+
+
 def the_instance_name_is_what_nemo_matches():
     """WM_CLASS is instance then class, and the stock entries are instance
     names -- conky's class is `Conky`. Reading the class half would put a name
-    on the list that Nemo never compares against."""
-    import viz_common as v
-    src = v.x11_wm_class.__doc__ or ""
-    assert "instance" in src.lower(), src
+    on the list that Nemo never compares against.
+
+    Against the parsing, not against the docstring: this check used to assert
+    that the word "instance" appeared in the function's own comment, which is
+    a thing only an editor can break. Swapping the halves left every suite
+    green."""
+    assert _wm_class(b"conky\0Conky\0") == "conky", _wm_class(
+        b"conky\0Conky\0")
+    assert _wm_class(b"BomsAIVisualizer\0BomsAIVisualizer\0") == \
+        "BomsAIVisualizer"
+
+
+def a_window_with_no_wm_class_is_not_guessed_at():
+    """No property is the empty string, which nemo_allow_desktop_window
+    refuses -- rather than a name made up from somewhere else and written to
+    somebody's desktop settings."""
+    assert _wm_class(None) == ""
+    assert viz_common.nemo_allow_desktop_window("", run=FakeGSettings(
+        list(STOCK))) == ""
 
 
 
@@ -1164,7 +1248,7 @@ def an_unfrozen_run_keeps_the_environment_it_was_given():
     try:
         _os.environ.pop("LD_LIBRARY_PATH_ORIG", None)
         _os.environ["LD_LIBRARY_PATH"] = "/home/someone/lib"
-        assert viz_common.system_env().get(
+        assert viz_common.child_env().get(
             "LD_LIBRARY_PATH") == "/home/someone/lib"
     finally:
         _os.environ.clear()
@@ -1250,7 +1334,9 @@ for fn in (the_worker_behind_the_icons_is_chosen,
            a_wallpaper_the_panel_shrank_is_grown_back,
            a_window_manager_that_insists_is_not_fought_forever,
            getting_it_right_again_buys_back_the_budget,
-           the_geometry_cannot_stop_the_stacking_hold):
+           the_geometry_cannot_stop_the_stacking_hold,
+           the_holds_run_before_the_idle_pause_parks_the_loop,
+           a_window_with_no_wm_class_is_not_guessed_at):
     results.append(check(fn.__name__, fn))
 
 print("all wallpaper checks passed" if all(results) else "FAILURES")

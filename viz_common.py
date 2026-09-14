@@ -5192,6 +5192,17 @@ def child_env() -> dict:
     the 1.5.0 Linux build, where the bundle is deliberately built old to keep
     the glibc floor down. PyInstaller saves the original in <VAR>_ORIG for
     exactly this; an empty one means the variable was not set to begin with.
+
+    The second time this bit, it did not crash, which was worse. `gsettings`
+    run from inside the bundle loaded the bundled libgio, which cannot load
+    the system's dconf GIO module, and silently fell back to the **keyfile**
+    backend: `get` returned the schema defaults, `set` returned 0, the value
+    persisted across runs -- in ~/.config/glib-2.0/settings/keyfile, where
+    nothing else on the desktop looks. Measured 14 Sep 2026, when the app
+    reported writing Nemo's ignore list while Nemo went on reading a dconf
+    entry that had never changed. So: every system binary this app shells out
+    to gets this environment, whether or not it is known to link anything the
+    bundle carries.
     """
     env = dict(os.environ)
     for var in ("LD_LIBRARY_PATH", "DYLD_LIBRARY_PATH"):
@@ -5871,35 +5882,6 @@ def x11_client_stack(lib, dpy):
 _NEMO_SCHEMA, _NEMO_KEY = "org.nemo.desktop", "ignored-desktop-handlers"
 
 
-def system_env() -> dict:
-    """os.environ with the frozen bundle's own library path taken back out.
-
-    A system program run from inside a PyInstaller bundle inherits an
-    LD_LIBRARY_PATH pointing at `_internal`, and loads the bundle's copies of
-    whatever it needs rather than the system's. For `gsettings` that is not a
-    crash, which is what makes it nasty: the bundled libgio cannot load the
-    system's dconf GIO module, silently falls back to the **keyfile** backend,
-    and reads and writes `~/.config/glib-2.0/settings/keyfile` instead of
-    dconf. Every call succeeds. `gsettings get` returns the schema defaults,
-    `gsettings set` returns 0, the value persists across runs -- and nothing
-    else on the desktop can see any of it. Measured 14 Sep 2026: the app
-    reported writing Nemo's ignore list while Nemo went on reading a dconf
-    entry that had never changed.
-
-    PyInstaller keeps the real value in LD_LIBRARY_PATH_ORIG for exactly this.
-    """
-    env = dict(os.environ)
-    if "LD_LIBRARY_PATH_ORIG" in env:
-        orig = env.pop("LD_LIBRARY_PATH_ORIG")
-        if orig:
-            env["LD_LIBRARY_PATH"] = orig
-        else:
-            env.pop("LD_LIBRARY_PATH", None)
-    elif getattr(sys, "frozen", False):
-        env.pop("LD_LIBRARY_PATH", None)
-    return env
-
-
 def x11_wm_class(lib, dpy, win) -> str:
     """The window's WM_CLASS *instance* name, or "".
 
@@ -5963,7 +5945,7 @@ def nemo_allow_desktop_window(wm_class: str, run=None) -> str:
 
     def gs(*args):
         return run(["gsettings", *args], capture_output=True, text=True,
-                   timeout=10, env=system_env())
+                   timeout=10, env=child_env())
 
     try:
         got = gs("get", _NEMO_SCHEMA, _NEMO_KEY)
@@ -6580,8 +6562,9 @@ class Renderer:
         self._wp_hold_at = 0.0
         #: Consecutive geometry corrections; see _hold_wallpaper_box.
         self._wp_fixes = 0
-        #: Said once, not every two seconds for the life of the app.
+        #: Both said once, not every two seconds for the life of the app.
         self._wp_box_moaned = False
+        self._wp_gave_up = False
         self._thumb_done = True    # one attempt per preset; see _maybe_thumbnail
         #: Idle pause. _last_sound is when audio was last above SILENCE_PEAK,
         #: _idle whether the loop is currently not drawing, and _idle_since
@@ -8373,6 +8356,16 @@ class Renderer:
             self._wp_fixes = 0          # settled; spend the budget again later
             return
         if self._wp_fixes >= self.WP_FIX_LIMIT:
+            if not self._wp_gave_up:
+                # The one path that would otherwise end in a wallpaper in the
+                # wrong place and an empty log. Giving up is the right answer
+                # -- a window manager entitled to place a desktop window will
+                # win -- but it is not something to do quietly.
+                self._wp_gave_up = True
+                print(f"[wallpaper] this desktop keeps putting the window at "
+                      f"{rect[0]},{rect[1]} {rect[2]}x{rect[3]} rather than "
+                      f"{box[0]},{box[1]} {box[2]}x{box[3]} — left as it is",
+                      flush=True)
             return
         self._wp_fixes += 1
         # Through X rather than SDL, which is the whole reason this is needed:

@@ -1069,7 +1069,10 @@ persisted across runs, and it all went into
 running the same `gsettings get` twice -- bare, and under the bundle's
 `LD_LIBRARY_PATH` -- and getting two different lists. `system_env()` restores
 `LD_LIBRARY_PATH_ORIG`, which PyInstaller saves for this, and any other system
-binary the app shells out to should use it.
+binary the app shells out to should use it. *(`system_env` was deleted the
+next day: `child_env`, written for the ffmpeg version of this same trap, was
+already doing exactly that and covers `DYLD_LIBRARY_PATH` as well. The call
+site uses `child_env`.)*
 
 **A session that has already lost its icons does not get them back until Nemo
 restarts** — the setting is read at Nemo's startup. The toast says so. Logging
@@ -1123,6 +1126,75 @@ here is whether GNOME's desktop-icons extension has its own version of Nemo's
 "another application is already managing the desktop" refusal — that needs
 someone on the 26.04 box to turn wallpaper mode on and say whether the icons
 survive.
+
+### Reviewing the Mint fixes — 2026-09-14
+
+Read back over `d87dfee..4dc8258` and mutation-tested the new code: six ways of
+breaking it, four caught by the suites as they stood. The two that were not are
+the point of this pass.
+
+**The holds sitting above the idle-pause `continue` was not pinned.** Moving
+them back below it -- which is the tidy-up somebody makes while cleaning, since
+they *look* like they belong with the other wallpaper work further down -- left
+all twenty-two suites green. That single edit reinstates the Mint report: a
+wallpaper is parked nearly always, and below the `continue` neither hold
+defends the window until sound comes back. `the_holds_run_before_the_idle_pause_parks_the_loop`
+pulls both nodes out of `Renderer.run` with `ast` and compares their lines, the
+same trick `test_lock.py` uses on the auto-advance guard.
+
+**`x11_wm_class` reading the instance rather than the class was not pinned
+either.** `the_instance_name_is_what_nemo_matches` asserted that the word
+"instance" appeared in the function's own docstring -- a check only an editor
+can fail. Swapping `split(b"\0")[0]` for `[1]` left every suite green. It now
+runs the real function against a window whose `WM_CLASS` is `conky\0Conky\0`
+and requires `conky`, plus a window with no `WM_CLASS` at all, which must come
+back "" rather than a name invented from somewhere else and written into
+somebody's desktop settings.
+
+**`system_env` was `child_env` with less of it.** Measured: `system_env() ==
+child_env()`, and `child_env` covers `DYLD_LIBRARY_PATH` too, so the new one
+was a strict subset written seven hundred lines below the old one. Deleted; the
+gsettings half of the story moved into `child_env`'s docstring, where it
+belongs -- it is the second measured instance of one trap, not two traps.
+
+**The geometry hold gave up silently.** After `WP_FIX_LIMIT` corrections it
+returned and logged nothing; `_wp_box_moaned` only ever covered the exception
+path. That is the one route that ends in a wallpaper in the wrong place and an
+empty log, which is a thing this repo has been bitten by before. It now says
+where the window keeps landing and where it was asked to go, once.
+
+Two findings from the same read were left alone, deliberately:
+
+- **`_hold_wallpaper_box`'s docstring says re-measuring "picks up the work area
+  changing later -- a panel hidden, shown, or set to auto-hide".** It does not.
+  `_wallpaper_box()` is built from `SDL_GetDisplayBounds`, which is monitor
+  geometry; no panel can move it. What re-measuring catches is the *window*
+  being wrong, whoever moved it -- including a window manager that clamped it
+  to the work area once and never revisited, which is what the test of that
+  name actually exercises. Worth correcting before somebody "fixes"
+  `_wallpaper_box` to `SDL_GetDisplayUsableBounds` to match the prose and
+  brings the strip along the bottom straight back.
+- **The six `pactl` / `parec` calls do not use `child_env`.** Measured and not
+  currently broken: both link only libpulse and libpulsecommon, the bundle
+  carries neither, and `pactl list sources short` is byte-identical bare and
+  under `_internal`. That is an accident of what PySide6 drags in rather than a
+  decision, and this is the third appearance of the trap.
+
+One more measured thing, about the code rather than the tests: **`org.nemo.desktop`
+exists on this Ubuntu GNOME box**, so `nemo_allow_desktop_window` runs to
+completion and writes here. The comment saying the schema is "absent on every
+desktop that is not Nemo" is not true of a machine that merely has Nemo
+installed. The write is inert -- nothing is reading that list on a GNOME
+session -- but the check is "Nemo is installed", not "Nemo is the desktop". It
+was written and reset during the review: `dconf reset
+/org/nemo/desktop/ignored-desktop-handlers` puts it back to the stock
+`['conky', 'csd-background']`.
+
+`installer/dist/` still holds the 2.1.2 tarball built from `4dc8258`; this
+commit changes `viz_common.py`, so it is one commit behind. Left as it is on
+purpose -- more changes are coming before the Windows trip, and the package is
+worth building once at the end of them.
+
 
 ## Notes
 
