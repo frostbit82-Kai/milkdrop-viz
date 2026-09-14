@@ -8,8 +8,10 @@ actually exposes, and against what this app already ships. Most of MilkDrop 3's
 headline list is either already here or lives inside libprojectM's renderer,
 where we are not going.
 
-**VERSION is 2.0.0 as of 2026-09-09.** The gate was the whole of section A, and
-the highlighter was the last of it. The Inno Setup `AppId` GUID does not change
+**VERSION is 2.0.0 as of 2026-09-09** — 2.1.0 as of 2026-09-13, for three
+features that arrived after a few days of using 2.0.0; see PORTING.md. The
+gate for 2.0 was the whole of section A, and the highlighter was the last of
+it. The Inno Setup `AppId` GUID does not change
 with it — that GUID is what makes the installer an upgrade rather than a second
 copy, and it never changes, 2.0 or not.
 

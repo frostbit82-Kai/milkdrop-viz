@@ -202,7 +202,11 @@ no ads, no in-app purchases, no gambling.
 - EULA: paste `installer/licenses/EULA.txt` into the store's own field.
   Complete — section 12 names Wisconsin.
 
-## Not yet in this listing — 2.0
+## Not yet in this listing — 2.1
+
+**The version being submitted is 2.1.0**, not 2.0.0 — the three 2026-09-13
+changes below are features, so the minor moved. Anywhere the copy ends up
+naming a number, that is the number.
 
 **Every word above the screenshot list is 1.x copy.** Name, short description,
 description, feature bullets and search terms were all written before section

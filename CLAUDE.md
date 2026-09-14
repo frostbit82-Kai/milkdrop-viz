@@ -72,6 +72,13 @@ through PyInstaller and Inno Setup 6, plus the portable tree beside it.
 `-SkipInstaller` stops after freezing. Inno Setup installs per-user under winget,
 so the script looks in `%LOCALAPPDATA%\Programs` as well as Program Files.
 
+**The version lives in `VERSION` and nowhere else, bar one guarded line.**
+Both build scripts read that file. `installer/licenses/EULA.txt` also names the
+version, in prose, and nothing reads it back — so both scripts refuse to build
+unless the licence says "Applies to version `<VERSION>`". The other half of
+that line, the date the *terms* were written, deliberately does not move with
+the version.
+
 **`installer/PROJECTM_COMMIT` pins the exact libprojectM commit both platforms
 build.** It is a SHA on master, not a tag, because the API we want has never
 been released — upstream's newest tag is v4.1.7 and master declares 4.2.0 with

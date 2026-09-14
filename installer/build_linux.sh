@@ -11,6 +11,15 @@ REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 HERE="$REPO/installer"
 VERSION="$(cat "$REPO/VERSION")"
 NAME="BomsAIVisualizer-${VERSION}-linux-x86_64"
+
+# The EULA names the version it applies to in prose, and nothing reads it back:
+# the version half moves with every bump, the terms date deliberately does not,
+# and a line that has drifted looks exactly like one that has not. Fail here
+# rather than ship a licence that talks about the version before this one.
+grep -qF "Applies to version $VERSION " "$HERE/licenses/EULA.txt" || {
+    echo "installer/licenses/EULA.txt does not say \"Applies to version $VERSION\"" >&2
+    exit 1
+}
 BUILD="$HERE/build"
 OUT="$HERE/dist"
 

@@ -521,11 +521,16 @@ and on Mint's own hardware, so a difference is a Windows difference.
    nobody has spoken into one, and the Windows and sounddevice backends have
    not been tried at all. A headset and one sentence closes roadmap D.
 
-**VERSION is 2.0.0.** Bumped on 2026-09-09, once section A was complete; both
-build scripts read the `VERSION` file, so nothing else needs editing to make a
-2.0.0 package. The Inno `AppId` GUID does **not** move with it — that GUID is
-what makes the installer an upgrade rather than a second copy, and it never
-changes.
+**VERSION is 2.1.0.** 2.0.0 was bumped on 2026-09-09 once section A was
+complete, 2.1.0 on 2026-09-13 — what landed between them is three features (a
+lock that no longer takes the controls away, wallpaper mode on Wayland, the
+Customize menu), not repairs to 2.0.0, so the minor moves rather than the
+patch. Both build scripts read the `VERSION` file, and both now refuse to build
+unless `installer/licenses/EULA.txt` names the same version: that line is the
+only place the number is written out in prose, nothing reads it back, and a
+line that has drifted looks exactly like one that has not. The Inno `AppId`
+GUID does **not** move with any of it — that GUID is what makes the installer
+an upgrade rather than a second copy, and it never changes.
 
 **`wallpaper-mode.png` still needs re-shooting on Windows** for the store
 listing.
@@ -819,9 +824,11 @@ That is why `add5384` is a Linux-only story — sounddevice's own `except
 OSError` loads that copy on Windows, and the branch for every other platform
 is a bare `raise`. Nothing to fix there; just do not go looking for it.
 
-**The Linux tarball is current**: rebuilt at 14:19 from `0bc88dc`, 86 MB,
+~~**The Linux tarball is current**: rebuilt at 14:19 from `0bc88dc`, 86 MB,
 md5 `97fdba8f19dc2f21fdf8550019537570`, floor GLIBC_2.34, and verified to
-start on a stock `ubuntu:24.04` with no libportaudio2.
+start on a stock `ubuntu:24.04` with no libportaudio2.~~ **Superseded by the
+2.1.0 package, 2026-09-13** — see the last section. That 2.0.0 tarball has
+been deleted; there is only ever one package in `installer/dist/`.
 
 
 ### Three changes from a few days of using it — 2026-09-13
@@ -883,6 +890,48 @@ Two new suites, `test_lock.py` and `test_menu.py` — twenty-two now, not twenty
 The menu one is the useful one: it hides each key in `MENU_ENTRIES` in turn and
 requires the menu to get exactly one row shorter, which is what catches a tick
 box wired to nothing.
+
+
+### 2.1.0, and a fresh Linux package — 2026-09-13
+
+**The version is 2.1.0, not 2.0.1.** The three changes above are features — a
+lock that no longer takes the controls away, wallpaper mode working on Wayland,
+a menu that can be trimmed — so the minor moves. A patch number would have said
+"2.0.0 was broken and here is the repair", which is not what happened.
+
+`VERSION` is the only place the number lives and both build scripts read it,
+with one exception that is now guarded: `installer/licenses/EULA.txt` names the
+version in prose, nothing reads that line back, and its other half — the date
+the *terms* were written — deliberately does not move with it. Both
+`build_linux.sh` and `build_windows.ps1` now refuse to build unless the licence
+says "Applies to version `<VERSION>`". Proved both ways on the bash side; the
+PowerShell half has not been run, because there is no pwsh on this box.
+
+**`BomsAIVisualizer-2.1.0-linux-x86_64.tar.gz`** — built 23:11 from a working
+tree at `460fbc9` plus this bump, 86 MB, md5
+`069d7ac86101cd35e171792785a3075a`, floor **GLIBC_2.34**, libprojectM rebuilt
+in the container from `/home/fr0st/projectm` at the pin. The 2.0.0 tarball is
+deleted.
+
+Verified against the artifact, not the tree:
+
+- Extracted and started on a **stock `ubuntu:24.04`** with no libportaudio2
+  (`libgl1 libglib2.0-0t64 libegl1` and nothing else added). It prints the
+  `sounddevice unavailable` line and carries on to `--help` and exit 0, which
+  is the `add5384` behaviour, and `--wallpaper` is in the help text.
+- Both `VERSION` files in the package say 2.1.0, and so does the licence.
+- **The new code is in the binary.** None of it is greppable from the extracted
+  tree — the app's own modules are one zlib stream each inside the PYZ in the
+  executable — so the blobs were decompressed and searched, the same way the
+  stale Windows installer was read. All six of `_hold_wallpaper_bottom`,
+  `WP_HOLD_EVERY`, `MENU_ENTRIES`, `menu_hidden`, `_tidy_separators` and the
+  new lock toast are present. The same scan over the 2.0.0 executable finds
+  **none** of the six, which is what makes the first result mean anything.
+
+Not done here: the app was not driven through its IPC from the package. The
+features were confirmed on the running app at `460fbc9` when they were written,
+and what a package can add to that is whether it carries the same code, which
+is the scan above. The Windows installer is still the 10 Sep 2.0.0 build.
 
 
 ## Notes
