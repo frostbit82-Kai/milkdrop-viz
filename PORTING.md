@@ -1567,7 +1567,20 @@ first finding's shape, since a Linux box cannot see any of them:
   separator rules are on the platform.
 
 **`BomsAIVisualizer-2.1.2-win64-setup.exe`** — built from the tree at this
-commit. The Linux tarball in `installer/dist/` is still the 2.1.2 one built
+commit, 78.4 MB, sha256
+`c3932b53fcb370851ed937988336244151ef4f5961960d4ab5eb94f210e119c1`.
+
+Verified against the artifact, not the tree: both `VERSION` files say 2.1.2 and
+so does the licence; seven licence files; both projectM DLLs and SDL2, no
+`glew32.dll`, the `.scr` present; the bundled ffmpeg reports no `--enable-gpl`;
+and the `testdata/` GIF and video used for the runs above are **not** in it,
+which is the trap Linux paid for when four test GIFs nearly shipped inside
+`assets/`. All fifteen markers of the new work — `live_texture_file`,
+`_LiveTexture`, `projectm_opengl_burn_texture`, `burn_canvas`,
+`projectm_opengl_render_frame_fbo`, `_Blender`, `_stop_dual`, `number_span_at`,
+`slider_range`, `_hold_wallpaper_box`, `nemo_allow_desktop_window` among them —
+are inside the frozen executable, and **none of the fifteen** is in the 2.1.0
+executable beside it, which is what makes the first result mean anything. The Linux tarball in `installer/dist/` is still the 2.1.2 one built
 from `4dc8258`, now five commits behind; that is Linux's to rebuild.
 
 Not done: the Inno installer itself. Running it trips UAC and there is no
