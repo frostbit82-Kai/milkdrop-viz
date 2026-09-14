@@ -213,6 +213,23 @@ There is no display in an agent shell and SDL needs one, so:
 
 ## Traps already paid for
 
+- **A system program run from inside the frozen bundle loads the bundle's
+  libraries, and for `gsettings` that is silent corruption rather than a
+  crash.** PyInstaller points `LD_LIBRARY_PATH` at `_internal`, so
+  `/usr/bin/gsettings` picks up the bundled `libgio-2.0.so.0`, which cannot
+  load the system's dconf GIO module and **falls back to the keyfile
+  backend**. Every call then succeeds against the wrong store: `get` returns
+  the schema defaults, `set` returns 0, the value persists across runs in
+  `~/.config/glib-2.0/settings/keyfile` — and nothing else on the desktop can
+  see any of it. Measured 14 Sep 2026: the app logged that it had written
+  Nemo's ignore list while Nemo went on reading a dconf entry that had never
+  moved, and the giveaway was that a `gsettings get` in a normal shell and the
+  same one under the bundle's `LD_LIBRARY_PATH` returned **different lists**.
+  `system_env()` hands subprocesses `LD_LIBRARY_PATH_ORIG`, which PyInstaller
+  saves for exactly this. Use it for any system binary the app shells out to,
+  and never trust a frozen build's word that a desktop setting was written —
+  read it back from a shell that is not the app's.
+
 - **Nemo gives up the desktop icons entirely when another window claims to be
   the desktop — and nothing about the stacking is wrong when it does.**
   Measured on Cinnamon 6.0.5, 14 Sep 2026. `nemo-desktop` checks for other

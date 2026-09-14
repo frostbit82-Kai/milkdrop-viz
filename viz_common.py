@@ -5863,6 +5863,35 @@ def x11_client_stack(lib, dpy):
 _NEMO_SCHEMA, _NEMO_KEY = "org.nemo.desktop", "ignored-desktop-handlers"
 
 
+def system_env() -> dict:
+    """os.environ with the frozen bundle's own library path taken back out.
+
+    A system program run from inside a PyInstaller bundle inherits an
+    LD_LIBRARY_PATH pointing at `_internal`, and loads the bundle's copies of
+    whatever it needs rather than the system's. For `gsettings` that is not a
+    crash, which is what makes it nasty: the bundled libgio cannot load the
+    system's dconf GIO module, silently falls back to the **keyfile** backend,
+    and reads and writes `~/.config/glib-2.0/settings/keyfile` instead of
+    dconf. Every call succeeds. `gsettings get` returns the schema defaults,
+    `gsettings set` returns 0, the value persists across runs -- and nothing
+    else on the desktop can see any of it. Measured 14 Sep 2026: the app
+    reported writing Nemo's ignore list while Nemo went on reading a dconf
+    entry that had never changed.
+
+    PyInstaller keeps the real value in LD_LIBRARY_PATH_ORIG for exactly this.
+    """
+    env = dict(os.environ)
+    if "LD_LIBRARY_PATH_ORIG" in env:
+        orig = env.pop("LD_LIBRARY_PATH_ORIG")
+        if orig:
+            env["LD_LIBRARY_PATH"] = orig
+        else:
+            env.pop("LD_LIBRARY_PATH", None)
+    elif getattr(sys, "frozen", False):
+        env.pop("LD_LIBRARY_PATH", None)
+    return env
+
+
 def x11_wm_class(lib, dpy, win) -> str:
     """The window's WM_CLASS *instance* name, or "".
 
@@ -5926,7 +5955,7 @@ def nemo_allow_desktop_window(wm_class: str, run=None) -> str:
 
     def gs(*args):
         return run(["gsettings", *args], capture_output=True, text=True,
-                   timeout=10)
+                   timeout=10, env=system_env())
 
     try:
         got = gs("get", _NEMO_SCHEMA, _NEMO_KEY)

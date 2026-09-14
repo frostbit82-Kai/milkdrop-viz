@@ -901,9 +901,11 @@ class FakeGSettings:
         self.value = value
         self.set_rc = set_rc
         self.calls = []
+        self.envs = []
 
     def __call__(self, argv, **kw):
         self.calls.append(list(argv))
+        self.envs.append(kw.get("env"))
         assert argv[0] == "gsettings", argv
 
         class R:
@@ -1008,6 +1010,47 @@ def a_list_somebody_has_emptied_is_still_written_to():
 
 
 
+def gsettings_is_run_outside_the_bundles_library_path():
+    """The one that made the fix look like it worked when it did not. A system
+    binary run from inside a PyInstaller bundle inherits LD_LIBRARY_PATH
+    pointing at `_internal`; the bundled libgio then cannot load the system
+    dconf module, falls back to the keyfile backend, and every call succeeds
+    against a store nothing else on the desktop reads. Measured: the app
+    reported writing Nemo's list while the value in dconf never moved."""
+    import os as _os
+    saved = dict(_os.environ)
+    try:
+        _os.environ["LD_LIBRARY_PATH"] = "/somewhere/_internal"
+        _os.environ["LD_LIBRARY_PATH_ORIG"] = "/usr/lib/real"
+        gs = FakeGSettings(list(STOCK))
+        viz_common.nemo_allow_desktop_window("BomsAIVisualizer", run=gs)
+        assert gs.envs, "no environment was passed to gsettings at all"
+        for env in gs.envs:
+            assert env is not None, "gsettings inherited the bundle's env"
+            assert env.get("LD_LIBRARY_PATH") == "/usr/lib/real", env.get(
+                "LD_LIBRARY_PATH")
+            assert "LD_LIBRARY_PATH_ORIG" not in env, env.keys()
+    finally:
+        _os.environ.clear()
+        _os.environ.update(saved)
+
+
+def an_unfrozen_run_keeps_the_environment_it_was_given():
+    """The seam must not start stripping a developer's own LD_LIBRARY_PATH on a
+    source run, where there is no bundle and nothing to undo."""
+    import os as _os
+    saved = dict(_os.environ)
+    try:
+        _os.environ.pop("LD_LIBRARY_PATH_ORIG", None)
+        _os.environ["LD_LIBRARY_PATH"] = "/home/someone/lib"
+        assert viz_common.system_env().get(
+            "LD_LIBRARY_PATH") == "/home/someone/lib"
+    finally:
+        _os.environ.clear()
+        _os.environ.update(saved)
+
+
+
 def becoming_the_desktop_asks_nemo_to_keep_the_icons():
     """The wiring, not the logic -- the logic is checked directly above. What
     this pins is that the ask happens on the way *in* and not on the way out:
@@ -1077,6 +1120,8 @@ for fn in (the_worker_behind_the_icons_is_chosen,
            a_refused_write_is_not_reported_as_done,
            the_instance_name_is_what_nemo_matches,
            a_list_somebody_has_emptied_is_still_written_to,
+           gsettings_is_run_outside_the_bundles_library_path,
+           an_unfrozen_run_keeps_the_environment_it_was_given,
            becoming_the_desktop_asks_nemo_to_keep_the_icons):
     results.append(check(fn.__name__, fn))
 

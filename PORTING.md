@@ -1059,6 +1059,18 @@ mode should not have its desktop settings touched. It is wrapped in its own
 try: a convenience for the next session is not a reason to refuse to be the
 wallpaper in this one.
 
+**The first build of this said it had written the setting and had not.** A
+system binary run from inside the PyInstaller bundle inherits an
+`LD_LIBRARY_PATH` pointing at `_internal`, so `/usr/bin/gsettings` loaded the
+bundled `libgio-2.0.so.0`, which cannot load the system's dconf GIO module and
+quietly fell back to the keyfile backend. Both calls returned 0, the value
+persisted across runs, and it all went into
+`~/.config/glib-2.0/settings/keyfile` where Nemo never looks. The tell was
+running the same `gsettings get` twice -- bare, and under the bundle's
+`LD_LIBRARY_PATH` -- and getting two different lists. `system_env()` restores
+`LD_LIBRARY_PATH_ORIG`, which PyInstaller saves for this, and any other system
+binary the app shells out to should use it.
+
 **A session that has already lost its icons does not get them back until Nemo
 restarts** — the setting is read at Nemo's startup. The toast says so. Logging
 out and back in is the fix; so is `nemo-desktop &` from a terminal.
