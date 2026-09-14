@@ -40,6 +40,13 @@ fDecay=0.100
 warp_1=`ret = 9;
 """
 
+NUMBERS = """[preset00]
+fRating=3.000
+nMotionVectorsX=12
+fDecay=0.960
+warp_1=`shader_body { ret = 0; }
+"""
+
 WITH_CODE = """[preset00]
 fDecay=0.960
 per_frame_1=q1=bass
@@ -134,6 +141,121 @@ def _type(panel, text):
     """What a keystroke does, which setPlainText does not: mark it modified."""
     panel._code.setPlainText(text)
     panel._code.document().setModified(True)
+
+
+def _pin_at(panel, needle, offset=0):
+    """Put the caret inside a number and press the pin button."""
+    text = panel._code.toPlainText()
+    cur = panel._code.textCursor()
+    cur.setPosition(text.index(needle) + offset)
+    panel._code.setTextCursor(cur)
+    panel._pin_number()
+
+
+def _numbers(host):
+    host.text = NUMBERS
+    h, panel = host, TweakPanel(host)
+    panel.reload()
+    return h, panel
+
+
+def a_slider_reaches_a_number_no_named_setting_covers():
+    """A constant inside a shader is not a key=value line, so the Tweak tab's
+    ten named settings cannot see it at all. That is the whole reason these
+    exist."""
+    host, panel = _numbers(FakeHost())
+    _pin_at(panel, "ret = 0", len("ret = "))
+    assert len(panel._pins) == 1, panel._code_error.text()
+    pin = panel._pins[0]
+    assert panel._code.toPlainText()[pin.start:pin.end] == "0"
+    panel._pin_moved(pin, panel.STEPS)
+    assert "ret = 1;" in panel._code.toPlainText(), panel._code.toPlainText()
+
+
+def a_slider_keeps_the_spelling_the_number_had_and_can_find_it_again():
+    """Centred on the original, so the middle of the slider is where it
+    started -- and 0.960 comes back as 0.960, not 0.96."""
+    host, panel = _numbers(FakeHost())
+    _pin_at(panel, "fDecay=0.960", len("fDecay="))
+    assert len(panel._pins) == 1, panel._code_error.text()
+    panel._pin_moved(panel._pins[0], panel.STEPS // 2)
+    line = [l for l in panel._code.toPlainText().splitlines()
+            if l.startswith("fDecay=")][0]
+    assert line == "fDecay=0.960", line
+
+
+def two_sliders_do_not_drift_into_each_other():
+    """Dragging the first one changes the length of the text after it, which
+    moves every character the second one is measured from."""
+    host, panel = _numbers(FakeHost())
+    _pin_at(panel, "nMotionVectorsX=12", len("nMotionVectorsX="))
+    _pin_at(panel, "fDecay=0.960", len("fDecay="))
+    assert len(panel._pins) == 2, panel._code_error.text()
+    first, second = panel._pins
+    panel._pin_moved(first, 0)               # 12 -> 0, one character shorter
+    text = panel._code.toPlainText()
+    assert "nMotionVectorsX=0\n" in text, text
+    assert text[second.start:second.end] == "0.960", \
+        f"the second slider slid onto {text[second.start:second.end]!r}"
+    panel._pin_moved(second, 0)
+    assert "fDecay=0.000" in panel._code.toPlainText(), \
+        panel._code.toPlainText()
+
+
+def a_slider_will_not_land_on_the_digits_in_a_name():
+    """The 1 in per_frame_1 is part of the key. A slider on it would rewrite
+    the key and drop the equation on that line without a word."""
+    host, panel = _numbers(FakeHost())
+    _pin_at(panel, "warp_1=", len("warp_"))
+    assert not panel._pins, "pinned a slider to part of a key"
+    assert panel._code_error.text(), "refused it and said nothing"
+
+
+def two_sliders_cannot_share_one_number():
+    host, panel = _numbers(FakeHost())
+    _pin_at(panel, "fDecay=0.960", len("fDecay="))
+    _pin_at(panel, "fDecay=0.960", len("fDecay=0."))
+    assert len(panel._pins) == 1, "pinned two sliders to the same number"
+
+
+def typing_under_the_sliders_lets_them_go():
+    """Every offset past the caret is wrong the moment somebody types, and
+    splicing on a guess corrupts the preset rather than editing it."""
+    host, panel = _numbers(FakeHost())
+    _pin_at(panel, "fDecay=0.960", len("fDecay="))
+    pin = panel._pins[0]
+    panel._code.document().setModified(True)          # somebody typed
+    before = panel._code.toPlainText()
+    panel._pin_moved(pin, 0)
+    app.processEvents()                               # the deferred clear
+    assert not panel._pins, "the sliders survived the text moving under them"
+    assert panel._code.toPlainText() == before, "spliced on stale offsets"
+
+
+def what_the_sliders_made_becomes_the_preset_the_other_tabs_work_from():
+    """The panel's one invariant: there is never a second version of the
+    preset that only one tab knows about. Without this the Tweak tab goes on
+    patching text the sliders have already replaced."""
+    host, panel = _numbers(FakeHost())
+    _pin_at(panel, "fDecay=0.960", len("fDecay="))
+    panel._pin_moved(panel._pins[0], panel.STEPS)
+    panel._apply_pins()
+    assert host.previewed[-1] == panel._code.toPlainText()
+    assert panel._base == panel._code.toPlainText()
+    assert panel.current_text() == panel._code.toPlainText()
+
+
+def a_tweak_slider_lets_the_number_sliders_go():
+    """It rebuilds the editor's text out of _base, which is not where the
+    pins are measuring from -- so leaving them live would splice into the
+    wrong characters on the next drag."""
+    host, panel = _numbers(FakeHost())
+    _pin_at(panel, "fDecay=0.960", len("fDecay="))
+    assert panel._pins
+    panel._values["fDecay"] = 0.1
+    panel._touched.add("fDecay")
+    panel._apply()
+    assert not panel._pins, "the number sliders outlived the text they sat in"
 
 
 def the_editor_opens_on_the_presets_own_text():

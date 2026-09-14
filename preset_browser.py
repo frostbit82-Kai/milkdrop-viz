@@ -25,7 +25,8 @@ from viz_common import (
     QComboBox, SPRITE_MOTIONS, SPRITE_BLENDS, MAX_SPRITES,
     QPlainTextEdit, QShortcut, QKeySequence, QFontDatabase,
     shift_preset_colours, add_per_frame_line, mashup_preset, QTextCursor,
-    MilkHighlighter,
+    MilkHighlighter, number_span_at, splice, format_like, slider_range,
+    number_label,
 )
 
 logger = logging.getLogger(__name__)
@@ -34,6 +35,22 @@ logger = logging.getLogger(__name__)
 def _stars(rating: int) -> str:
     r = max(0, min(10, int(rating)))
     return "★" * r + "☆" * (10 - r)
+
+
+class _Pin:
+    """One slider bound to one number in the editor, by character offset.
+
+    Offsets into the live text, not into a remembered copy of it: dragging a
+    slider changes the length of the text after it, so every pin past the one
+    that moved is shifted by the difference. That is what lets several sit
+    over one preset without any of them knowing about the others.
+    """
+    __slots__ = ("start", "end", "orig", "lo", "hi", "shown")
+
+    def __init__(self, start, end, orig, lo, hi):
+        self.start, self.end, self.orig = start, end, orig
+        self.lo, self.hi = lo, hi
+        self.shown = None                 # the label showing its value
 
 
 class TweakPanel(QWidget):
@@ -176,6 +193,39 @@ class TweakPanel(QWidget):
         tools.addWidget(btn_hue)
         code_lay.addLayout(tools)
 
+        # A slider on whatever number the cursor is in. The Tweak tab's ten
+        # named settings are a chosen subset of what one .milk file carries;
+        # this reaches the rest of them, and the constants inside the shaders,
+        # which no named list can cover.
+        pin_bar = QHBoxLayout()
+        pin_bar.setContentsMargins(0, 0, 0, 0)
+        pin_bar.setSpacing(6)
+        btn_pin = QPushButton("Slider for this number")
+        btn_pin.setToolTip(
+            "Put the cursor in any number above and press this. The slider "
+            "moves that number where it sits \u2014 shaders included.")
+        btn_pin.clicked.connect(self._pin_number)
+        pin_bar.addWidget(btn_pin)
+        self._pin_clear = QPushButton("Clear sliders")
+        self._pin_clear.setToolTip(
+            "Take the sliders away. What they already changed stays; Revert "
+            "is what puts the preset back.")
+        self._pin_clear.clicked.connect(self._clear_pins)
+        self._pin_clear.hide()
+        pin_bar.addWidget(self._pin_clear)
+        pin_bar.addStretch(1)
+        code_lay.addLayout(pin_bar)
+
+        #: Live sliders, in the order they were pinned.
+        self._pins = []
+        #: A pin moved a number the Tweak tab also shows, so its sliders are
+        #: standing in the wrong place until that tab is next built.
+        self._pins_dirty = False
+        self._pin_lay = QVBoxLayout()
+        self._pin_lay.setContentsMargins(0, 0, 0, 0)
+        self._pin_lay.setSpacing(2)
+        code_lay.addLayout(self._pin_lay)
+
         code_foot = QHBoxLayout()
         code_foot.setContentsMargins(0, 0, 0, 0)
         code_foot.setSpacing(6)
@@ -234,13 +284,16 @@ class TweakPanel(QWidget):
             "while you work. Same lock as the right-click menu and the key.")
         self._lock_btn.toggled.connect(self._lock_toggled)
         corner_lay.addWidget(self._lock_btn)
+        # 32 was not enough: the star and the sign clipped each other, which
+        # only a zoomed screenshot showed -- at normal size it read as one
+        # smudged glyph rather than as a wrong one.
         btn_rate_dn = QPushButton("\u2605\u2212")
-        btn_rate_dn.setFixedWidth(32)
+        btn_rate_dn.setFixedWidth(42)
         btn_rate_dn.setToolTip("Rate this visual down one star")
         btn_rate_dn.clicked.connect(lambda: self._rate(-1))
         corner_lay.addWidget(btn_rate_dn)
         btn_rate_up = QPushButton("\u2605+")
-        btn_rate_up.setFixedWidth(32)
+        btn_rate_up.setFixedWidth(42)
         btn_rate_up.setToolTip("Rate this visual up one star")
         btn_rate_up.clicked.connect(lambda: self._rate(+1))
         corner_lay.addWidget(btn_rate_up)
@@ -284,6 +337,11 @@ class TweakPanel(QWidget):
         self._spr_timer.setInterval(self.APPLY_MS)
         self._spr_timer.timeout.connect(self._sprite_flush)
 
+        self._pin_timer = QTimer(self)
+        self._pin_timer.setSingleShot(True)
+        self._pin_timer.setInterval(self.APPLY_MS)
+        self._pin_timer.timeout.connect(self._apply_pins)
+
         # Last: the sliders it builds are wired to the timer above.
         self._build_sprites()
 
@@ -302,6 +360,7 @@ class TweakPanel(QWidget):
 
     def reload(self):
         self._stale = False
+        self._clear_pins()          # a different preset, and different offsets
         try:
             self._base = self._host.preset_text()
         except Exception:
@@ -486,6 +545,13 @@ class TweakPanel(QWidget):
         preset_tab = index != self._spr_tab
         for w in self._foot:
             w.setVisible(preset_tab)
+        # A number slider may have moved something the Tweak tab also shows,
+        # which leaves that tab's slider standing in the wrong place. Rebuilt
+        # on arrival rather than on every drag step: building it recompiles
+        # nothing, but it does replace every widget in the tab.
+        if index == 0 and self._pins_dirty:
+            self._pins_dirty = False
+            self._rebuild_later(self._build_tweaks)
 
     def _build_sprites(self):
         _clear_layout(self._spr_lay)
@@ -683,6 +749,13 @@ class TweakPanel(QWidget):
         return patch_preset(self._base, moved) if moved else self._base
 
     def _apply(self):
+        if self._pins:
+            # This rebuilds the editor's text out of _base, which is not where
+            # the pins are measuring from. Their numbers survive -- _base was
+            # promoted the moment one moved -- but their offsets do not.
+            self._clear_pins()
+            self._note("The sliders on the numbers were let go \u2014 a Tweak "
+                       "slider rewrites the text they sit in.", bad=False)
         text = self.current_text()
         if not text:
             return
@@ -704,6 +777,7 @@ class TweakPanel(QWidget):
         text = self._code.toPlainText()
         if not text.strip():
             return
+        self._clear_pins()
         self._base = text
         self._values.clear()
         self._touched.clear()
@@ -820,6 +894,153 @@ class TweakPanel(QWidget):
         self._code.document().setModified(True)
         self._apply_code()
 
+    # ── a slider on any number in the code ─────────────────────────────
+
+    #: How many at once. Each is a row under the editor, and the editor keeps
+    #: a minimum height, so past this the browser window starts growing.
+    MAX_PINS = 6
+
+    def _pin_number(self):
+        """Put a slider on the number the cursor is in."""
+        if self._code.document().isModified():
+            self._note("Apply the edit first \u2014 a slider is pinned to "
+                       "where the number sits, and typing moves it.",
+                       bad=False)
+            return
+        if len(self._pins) >= self.MAX_PINS:
+            self._note(f"That is {self.MAX_PINS} sliders already. Clear them "
+                       "to pin another one.", bad=False)
+            return
+        text = self._code.toPlainText()
+        cur = self._code.textCursor()
+        # The start of a selection, not its end: somebody who double-clicked a
+        # number has selected it, and the position alone is then past it.
+        pos = cur.selectionStart() if cur.hasSelection() else cur.position()
+        span = number_span_at(text, pos)
+        if span is None:
+            self._note("Put the cursor in a number first \u2014 any number in "
+                       "the preset, the ones inside a shader included.",
+                       bad=False)
+            return
+        start, end = span
+        if any(start < p.end and p.start < end for p in self._pins):
+            self._note("There is already a slider on that number.", bad=False)
+            return
+        orig = text[start:end]
+        lo, hi = slider_range(float(orig))
+        pin = _Pin(start, end, orig, lo, hi)
+        self._pins.append(pin)
+        self._pin_lay.addLayout(
+            self._pin_row(pin, number_label(text, start, orig)))
+        self._pin_clear.show()
+        self._note("")
+
+    def _pin_row(self, pin, label):
+        row = QHBoxLayout()
+        row.setContentsMargins(0, 0, 0, 0)
+        row.setSpacing(6)
+
+        name = QLabel(label)
+        # Fixed, for the same reason the Tweak tab's names are: an Ignored
+        # label hands all its width to the slider and collapses to a letter.
+        name.setFixedWidth(120)
+        name.setStyleSheet("font-size:11px;")
+        name.setToolTip(f"{label}  (was {pin.orig})")
+        row.addWidget(name)
+
+        slider = QSlider(Qt.Orientation.Horizontal)
+        slider.setRange(0, self.STEPS)
+        value = float(pin.orig)
+        slider.setValue(int(round(
+            (value - pin.lo) / (pin.hi - pin.lo) * self.STEPS)))
+        slider.setMinimumWidth(60)
+        row.addWidget(slider, 1)
+
+        shown = QLabel(pin.orig)
+        shown.setFixedWidth(70)
+        shown.setStyleSheet("font-size:11px;")
+        row.addWidget(shown)
+        pin.shown = shown
+
+        slider.valueChanged.connect(lambda i, p=pin: self._pin_moved(p, i))
+        return row
+
+    def _pin_moved(self, pin, i):
+        """Rewrite that number where it sits, and shift every pin after it.
+
+        The editor's text is the only copy there is: the pins hold offsets
+        into it, so a change of length moves the ones beyond it.
+        """
+        if self._code.document().isModified():
+            # Somebody typed. Every offset past the caret is wrong now, and
+            # splicing on a guess corrupts the preset rather than editing it.
+            # Deferred: this is running inside the slider's own signal, and
+            # clearing the strip frees that slider under itself.
+            self._rebuild_later(self._clear_pins)
+            self._note("The sliders were let go \u2014 the text moved under "
+                       "them. Apply, then pin them again.", bad=False)
+            return
+        text = self._code.toPlainText()
+        value = pin.lo + (pin.hi - pin.lo) * i / self.STEPS
+        new = format_like(pin.orig, value)
+        text = splice(text, [(pin.start, pin.end, new)])
+        delta = len(new) - (pin.end - pin.start)
+        was_end = pin.end
+        pin.end = pin.start + len(new)
+        if delta:
+            for other in self._pins:
+                if other is not pin and other.start >= was_end:
+                    other.start += delta
+                    other.end += delta
+        if pin.shown is not None:
+            pin.shown.setText(new)
+        self._pins_dirty = True
+        self._set_code_text(text)
+        self._pin_timer.start()
+
+    def _set_code_text(self, text: str):
+        """Put text in the editor without it counting as somebody's typing.
+
+        The cursor and the scroll position go back where they were:
+        setPlainText sends the cursor to the end, which during a drag would
+        scroll the editor off the line being dragged on, every step.
+        """
+        cur = self._code.textCursor()
+        at = cur.position()
+        bar = self._code.verticalScrollBar()
+        where = bar.value()
+        self._code.setPlainText(text)
+        cur = self._code.textCursor()
+        cur.setPosition(min(at, len(text)))
+        self._code.setTextCursor(cur)
+        bar.setValue(where)
+        self._code.document().setModified(False)
+
+    def _apply_pins(self):
+        """Play what the sliders have made of it, debounced.
+
+        The text on screen becomes the preset the rest of the panel works
+        from -- the same invariant Apply keeps, and for the same reason: a
+        second version of the preset that only one tab knows about is how the
+        Tweak tab ends up re-patching text the Code tab already replaced. The
+        sliders are deliberately *not* rebuilt, because they are pinned to
+        offsets in this very text.
+        """
+        text = self._code.toPlainText()
+        if not text.strip():
+            return
+        self._base = text
+        self._values.clear()
+        self._touched.clear()
+        self._host.preview_preset(text)
+
+    def _clear_pins(self, _checked=False):
+        if not self._pins:
+            return
+        self._pins = []
+        _clear_layout(self._pin_lay)
+        self._pin_clear.hide()
+
     def _lock_toggled(self, on: bool):
         # Only when it actually differs: the button is also set from the host,
         # and a blind toggle there would unlock what it just read.
@@ -894,15 +1115,24 @@ class PresetPlaylistWindow(QWidget):
     #: letterboxed into it.
     ICON_SIZE = QSize(96, 54)
 
+    #: What the window opens at. Has to be at least the toolbar's minimum --
+    #: see the comment in __init__ for what happens when it is not.
+    WIDTH = 610
+
     def __init__(self, host, on_shuffle=None, parent=None):
         super().__init__(parent, Qt.WindowType.Window)
         self._host = host
         self._on_shuffle = on_shuffle      # callback to toggle visual shuffle
         self.setWindowTitle("Preset Browser")
-        # 380 was too narrow for the toolbar even before the tweak button was
-        # added -- every label was truncated to three or four characters at the
-        # default size. Measured against the eight buttons it now carries.
-        self.resize(470, 620)
+        # The toolbar's own minimum width is what decides this, not the list:
+        # ten buttons in one row, and Qt will not open a window narrower than
+        # the widest thing in it. 470 was written here and had already stopped
+        # being true -- the row needed 522 before this version and Qt was
+        # silently widening the window to fit, so the number in the source
+        # described nothing. Measured, not guessed, and test_browser_title
+        # pins it: an eleventh button fails a suite rather than quietly
+        # growing the window again.
+        self.resize(self.WIDTH, 620)
         # Built in viz_common so every themed surface shares one palette.
         self.setStyleSheet(browser_qss())
 

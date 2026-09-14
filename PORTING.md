@@ -1202,3 +1202,100 @@ worth building once at the end of them.
   `XID=` key on that print stays literal on every platform; the host parses it.
 - FPS `0` means uncapped in the UI, but projectM's internal timers need a real number,
   so a nominal value is passed to `projectm_set_fps` while the loop runs free.
+
+### The last of the tweaks — 2026-09-14
+
+Six things were scoped before building. Three are shipped; the rest are below.
+
+**The lock and the rating moved onto the tab row** of the preset editor, as a
+`setCornerWidget`, so they are on screen from every tab rather than only from
+the Code tab's footer. Icons, not words: four tabs and "Lock Visuals" do not
+both fit across the browser's width. The lock now follows `lock_changed`,
+because the key and the right-click menu move the same lock and a button that
+only ever heard about its own clicks was wrong for as long as the panel stayed
+open. The rating buttons needed `Renderer.request_rate`, which **accumulates**
+rather than latching — the render thread serves these once a frame at best,
+and these buttons get clicked in a row.
+
+**The browser list can turn its pictures off**, which fits about twice as many
+presets on screen. Off has to undo both halves: the icons already on the rows,
+*and* the stylesheet row height, which is what makes every row tall whether it
+carries a picture or not.
+
+**The picture can now be asked for.** The passive capture — five seconds on
+screen, once per preset, only when there is no file — was already there and is
+unchanged bar an `auto_thumbnails` switch. What is new is a snapshot that
+jumps all three of those gates, on a button and on `c`. A row with no
+thumbnail is cached as a *miss*, so `thumbnail_ready` carries the name back
+and invalidates it; without that a snapshot did not appear until the list was
+rebuilt.
+
+**A slider on any number in the Code tab.** Put the cursor in a number, press
+the button, and a slider appears bound to that exact offset — constants inside
+a shader included, which the Tweak tab's ten named settings cannot reach at
+all. Up to six at once. The text handling is four plain functions in
+`viz_common.py` rather than methods on the panel, because all of the
+difficulty is there and none of it needs a widget:
+
+- `number_span_at` — `dx=-0.005` is a negative number, the minus in `q1-1` is
+  an operator, `1.5e-3` is one number, and the `1` in `per_frame_1` is part of
+  a key. A slider on that last one would rewrite the key and silently drop the
+  equation on the line, so it returns None rather than guessing.
+- `splice` applies edits right to left, so no edit has to know that one after
+  it changed the length of the text beyond it.
+- `format_like` — `0.960` comes back as `0.960`, not `0.96` and not
+  `0.9599999999999999`. A preset is a text file somebody may read and diff.
+- `slider_range` is proportional to the value and centred on it, so the middle
+  of the slider is where the number started and a slider over `0.001` is as
+  usable as one over `120`. Two ceilings, both deliberate: nothing drags past
+  twice itself, and a negative number cannot be dragged positive.
+
+Dragging one slider shifts the offsets of every pin after it, which is what
+lets six sit over one preset without any of them tracking the others. Typing
+under them lets them go rather than splicing on stale offsets — deferred
+through `_rebuild_later`, because clearing the strip inside a slider's own
+signal frees that slider under itself, which is the crash CLAUDE.md already
+paid for once.
+
+**Twenty mutations, all caught** — but three of them only after the tests were
+fixed, and two defects were found by a screenshot that no test could see.
+
+Nothing exercised `request_rate` at all. The lock-button check had set the
+host's state *before* signalling it, which defeated the thing it was meant to
+prove. And the run loop could have accumulated ratings into a field nothing
+read: that one is pinned with `ast` over `Renderer.run`, the same trick
+`test_lock.py` uses on the auto-advance guard.
+
+The two the screenshot found:
+
+- **The slider labels were useless on the line that matters most.** Named by
+  the text before the number, two constants on one shader line came out as
+  ``…_1=`shader_body { ret`` and `…_body { ret = 0.5*rad ` — and the second
+  had picked up a value the first slider had already changed. They are named
+  by the setting where there is one and by `line 6: 0.5` where there is not.
+- **The browser's `resize(470, 620)` had stopped being true some buttons
+  ago.** The toolbar's own minimum was 522, Qt was silently widening the
+  window to fit, and the comment in the source claimed it had been measured.
+  Two more buttons took it to 602. `WIDTH` now carries the measured number and
+  `test_browser_title` fails if an eleventh button outgrows it. See CLAUDE.md.
+
+Also: four test GIFs arrived in `assets/`, which the spec copies **wholesale**
+into the frozen bundle — 34 MB of test material would have shipped in the
+installer. They live in a gitignored `testdata/` now.
+
+**Still to build, in this order:** GIF and video burnt into the preset through
+`projectm_opengl_burn_texture`, then dual-preset mode blended over itself.
+Both C entry points were checked against the shipped binaries rather than the
+headers — `projectm_opengl_burn_texture`, `projectm_opengl_render_frame_fbo`
+and `projectm_sprite_create` all export from `installer/vendor/linux/
+libprojectM-4.so.4` and from `installer/vendor/windows/projectM-4.dll`, so
+neither needs libprojectM rebuilt or the pin moved.
+
+**What is not possible, measured rather than assumed:** an animated texture
+*inside* a preset. libprojectM's texture extension list is hard-coded in
+`TextureManager.hpp` and has no `.gif` at all, textures are resolved once when
+a preset loads, and there is no API to hand a live texture id to a sampler the
+preset names. Burn-in is the way in, and it puts the picture into the preset's
+feedback buffer, where the warp and decay chew on it — a distinctive look, not
+a crisp sprite. A static GIF is a separate, much smaller job: decode the first
+frame on import and write it as PNG, which needs no libprojectM change.

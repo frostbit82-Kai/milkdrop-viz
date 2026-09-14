@@ -386,6 +386,18 @@ There is no display in an agent shell and SDL needs one, so:
   Correcting for it in the generated code as well squashed a 400x200 picture to
   630x160 on screen where 630x320 was right. `sy` is set equal to `sx` and left
   alone.
+- **Qt will not open a window narrower than the widest thing in it, so a
+  `resize()` below a toolbar's minimum is a number that describes nothing.**
+  The preset browser said `resize(470, 620)` with a comment claiming it had
+  been measured against the buttons it carried. It had stopped being true some
+  buttons ago: the row's own minimum was **522**, Qt was silently widening the
+  window to fit, and every button added since had widened it a little more
+  without anyone noticing, because the source still said 470 and nobody
+  measures a window that opens. Read it with
+  `layout().itemAt(1).minimumSize().width()` against a shown window, not from
+  the source. `PresetPlaylistWindow.WIDTH` now carries the measured number and
+  `test_browser_title` fails if a new button outgrows it.
+
 - **`uniformItemSizes` on a `QListWidget` measures once and never again.**
   Not on a size-hint change, not on `doItemsLayout`, not on clear-and-refill.
   The only thing that gets through is a stylesheet `min-height` on

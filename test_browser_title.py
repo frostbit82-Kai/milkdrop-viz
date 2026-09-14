@@ -134,7 +134,24 @@ def highlight_shows_stars_too():
     assert _stars(8) in win._title.text(), \
         f"_highlight produced a starless title: {win._title.text()!r}"
 
-for fn in (the_toolbar_does_not_move_for_a_long_name,
+def the_window_opens_at_least_as_wide_as_its_own_toolbar():
+    """Qt will not open a window narrower than the widest thing in it, so a
+    resize() below the toolbar's minimum is a number that describes nothing.
+    That is exactly what had happened: 470 was in the source while the row
+    needed 522, and every button added since had silently widened the window
+    a bit more. An eleventh one fails here instead."""
+    bar = win.layout().itemAt(1)
+    need = bar.minimumSize().width()
+    assert need <= win.WIDTH, (
+        f"the toolbar needs {need}px and the window opens at {win.WIDTH}px, "
+        f"so Qt will widen it to {need} and WIDTH is a lie")
+    # And not absurdly wide either: this window sits beside the visuals.
+    assert win.WIDTH <= need + 40, (
+        f"the window opens {win.WIDTH - need}px wider than anything needs")
+
+
+for fn in (the_window_opens_at_least_as_wide_as_its_own_toolbar,
+           the_toolbar_does_not_move_for_a_long_name,
            the_composed_line_actually_fits,
            the_title_stays_one_line,
            the_rating_survives_elision,

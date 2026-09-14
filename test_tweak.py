@@ -673,6 +673,81 @@ def a_library_without_the_callback_still_edits():
     assert pm.last_error == ""
 
 
+# ── a slider on any number, not just the named ten ────────────────────────
+
+
+def a_number_is_found_from_either_end_of_it_and_from_inside():
+    """Qt hands over a cursor position, not a token. Double-clicking selects
+    the number; clicking merely puts the caret somewhere in or beside it, and
+    both ends are places people click."""
+    line = "zoom=1.010"
+    for pos in range(5, 11):
+        assert v.number_span_at(line, pos) == (5, 10), \
+            f"missed the number from position {pos}"
+
+
+def a_leading_minus_is_part_of_the_number_and_a_subtraction_is_not():
+    """dx=-0.005 is a negative number. The minus in q1-1 is an operator, and
+    swallowing it turns dragging a slider into editing the expression."""
+    def at(text, pos):
+        sp = v.number_span_at(text, pos)
+        return text[sp[0]:sp[1]] if sp else None
+    assert at("dx=-0.005", 5) == "-0.005"
+    assert at("q1-1", 3) == "1", at("q1-1", 3)
+    assert at("ret=2*-3;", 7) == "-3", at("ret=2*-3;", 7)
+
+
+def the_digits_in_a_name_are_not_a_number():
+    """A slider on the 1 in per_frame_1 would rewrite the line's key and drop
+    the equation on it without a word."""
+    for text, pos in (("per_frame_1=q1=bass", 10), ("warp_2=`ret=0;", 5),
+                      ("ret=q1;", 5)):
+        assert v.number_span_at(text, pos) is None, \
+            f"{text!r} at {pos} was read as a number"
+
+
+def an_exponent_comes_along_only_when_digits_follow_it():
+    """`e` also starts half the variable names in a preset."""
+    def at(text, pos):
+        sp = v.number_span_at(text, pos)
+        return text[sp[0]:sp[1]] if sp else None
+    assert at("ret=1.5e-3;", 5) == "1.5e-3"
+    assert at("ret=2e4;", 5) == "2e4"
+    assert at("ret=2*echo;", 4) == "2", at("ret=2*echo;", 4)
+
+
+def edits_are_spliced_right_to_left_so_offsets_never_drift():
+    """Every offset is into the original text. Applying them left to right
+    would move each later edit by however much the earlier ones grew."""
+    assert v.splice("a=1 b=22", [(2, 3, "999"), (6, 8, "7")]) == "a=999 b=7"
+    # Order of the list must not matter.
+    assert v.splice("a=1 b=22", [(6, 8, "7"), (2, 3, "999")]) == "a=999 b=7"
+
+
+def a_changed_number_keeps_the_spelling_it_had():
+    """A preset is a text file somebody may read and diff. 0.960 coming back
+    as 0.9599999999999999 makes every edit noisier than it is."""
+    assert v.format_like("0.960", 0.5) == "0.500"
+    assert v.format_like("1.010", 1.01) == "1.010"
+    assert v.format_like("1.010", 1.0) == "1.000"
+    assert v.format_like("3", 4.2) == "4"
+    assert v.format_like("-0.005", -0.01) == "-0.010"
+    assert v.format_like("1.5e-3", 0.002) == "0.002"
+
+
+def a_sliders_range_is_proportional_and_centred_on_what_was_there():
+    """A fixed range would make a slider over 0.001 unusable and one over 120
+    pointless, and either way the original has to be reachable again."""
+    for value in (0.96, 12.0, 0.001, -0.005):
+        lo, hi = v.slider_range(value)
+        assert lo < hi, (value, lo, hi)
+        assert lo <= value <= hi, f"{value} is outside its own range"
+        assert abs((lo + hi) / 2 - value) < 1e-12, "not centred on the value"
+    # A zero has no proportion to be had, and still needs somewhere to go.
+    lo, hi = v.slider_range(0.0)
+    assert lo < 0 < hi, (lo, hi)
+
+
 for name, fn in list(globals().items()):
     if callable(fn) and not name.startswith(("_", "check")) \
             and getattr(fn, "__module__", None) == "__main__":

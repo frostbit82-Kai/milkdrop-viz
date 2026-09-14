@@ -2586,6 +2586,129 @@ def texture_overrides() -> list:
         return []
 
 
+# ─── numbers in preset code ──────────────────────────────────────────────────
+#
+# The Tweak tab moves ten named settings over ranges somebody chose. This is
+# the other half: a slider on any number anywhere in the preset, the constants
+# inside a shader included -- which a named list cannot reach at all.
+# Plain text functions, out here rather than in the panel, because all of the
+# difficulty is in the text handling and none of it needs a widget.
+
+#: Characters that continue a number. An exponent is handled separately: `e`
+#: also starts half the variable names in a preset.
+_NUM_BODY = "0123456789."
+
+#: A `-` belongs to the number only after one of these. `dx=-0.005` is a
+#: negative number; the one in `q1-1` is a subtraction, and swallowing it
+#: would turn dragging a slider into editing the expression.
+_NUM_SIGN_AFTER = "=,(:[<>+-*/ \t\n"
+
+
+def number_span_at(text: str, pos: int):
+    """(start, end) of the number at `pos`, or None if there is not one.
+
+    `pos` is a cursor position, not a token: somebody who double-clicked a
+    number gets a selection and somebody who merely clicked gets a caret, and
+    either end of a number is a place people click. Both ends are scanned.
+
+    None rather than a guess when the digits are part of a name --
+    `per_frame_1`, `q1`, `warp_2`. A slider on the 1 in `per_frame_1` would
+    rewrite the line's key and silently drop the equation on it.
+    """
+    n = len(text)
+    if not 0 <= pos <= n:
+        return None
+    start = pos
+    while start > 0 and text[start - 1] in _NUM_BODY:
+        start -= 1
+    end = pos
+    while end < n and text[end] in _NUM_BODY:
+        end += 1
+    if start == end:
+        return None
+    if start > 0 and (text[start - 1].isalpha() or text[start - 1] == "_"):
+        return None
+    if end < n and text[end] in "eE":
+        e = end + 1
+        if e < n and text[e] in "+-":
+            e += 1
+        if e < n and text[e].isdigit():
+            while e < n and text[e].isdigit():
+                e += 1
+            end = e
+    if end < n and (text[end].isalpha() or text[end] == "_"):
+        return None
+    if start > 0 and text[start - 1] == "-":
+        before = text[start - 2] if start >= 2 else "\n"
+        if before in _NUM_SIGN_AFTER:
+            start -= 1
+    try:
+        float(text[start:end])
+    except ValueError:
+        return None
+    return start, end
+
+
+def splice(text: str, edits) -> str:
+    """Apply (start, end, replacement) edits, every offset into `text` itself.
+
+    Right to left, so no edit has to know that one after it changed the length
+    of the text beyond it.
+    """
+    out = text
+    for start, end, repl in sorted(edits, key=lambda e: e[0], reverse=True):
+        out = out[:start] + repl + out[end:]
+    return out
+
+
+def format_like(original: str, value: float) -> str:
+    """`value` spelled the way `original` was.
+
+    A preset is a text file somebody may read, diff and pass on. Turning 0.960
+    into 0.96 -- or into 0.9599999999999999 -- makes every edit noisier than
+    it is; the Tweak tab refuses to rewrite lines nobody moved for the same
+    reason.
+    """
+    s = original.strip()
+    if "e" in s.lower():
+        return f"{value:g}"
+    if "." in s:
+        return f"{value:.{len(s.split('.', 1)[1])}f}"
+    return str(int(round(value)))
+
+
+def slider_range(value: float):
+    """A range to put a slider on, around a number that declares no bounds.
+
+    Proportional to the value, so a slider over 0.001 is as usable as one over
+    120, and centred on it, so whatever it was is always reachable again.
+
+    ponytail: nothing can be dragged past twice itself, and a negative number
+    cannot be dragged positive. Both are one keystroke in the editor and a
+    re-pin -- a range box per slider is a lot of widget for that.
+    """
+    span = abs(value) or 1.0
+    return value - span, value + span
+
+
+def number_label(text: str, start: int, orig: str) -> str:
+    """A short name for the slider on the number at `start`.
+
+    The setting's name where there is one: `fDecay=0.960` is the easy case and
+    the common one. A shader line has no name to take, and the text before a
+    constant there is neither short nor unique -- two constants on one line
+    share nearly all of it -- so those are named by where they are and what
+    they were. Measured the other way round first: labelled by that shared
+    lead, two sliders on one shader line were `\u2026_1=`shader_body { ret` and
+    `\u2026_body { ret = 0.5*rad ` and there was no telling them apart.
+    """
+    line_start = text.rfind("\n", 0, start) + 1
+    lead = text[line_start:start].strip()
+    if lead.endswith("=") and len(lead) <= 22 and "`" not in lead:
+        return lead[:-1]
+    return f"line {text.count(chr(10), 0, start) + 1}: {orig}"
+
+
 # ─── sprites ─────────────────────────────────────────────────────────────────
 # A picture laid over whatever preset is playing, moved by a few lines of
 # MilkDrop sprite code. libprojectM parses that code itself; all this end has
