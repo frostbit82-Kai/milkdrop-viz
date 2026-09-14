@@ -1299,3 +1299,70 @@ preset names. Burn-in is the way in, and it puts the picture into the preset's
 feedback buffer, where the warp and decay chew on it — a distinctive look, not
 a crisp sprite. A static GIF is a separate, much smaller job: decode the first
 frame on import and write it as PNG, which needs no libprojectM change.
+
+
+### Burning a picture into the preset — 2026-09-14
+
+GIF, animated WEBP and APNG through Qt's own reader, honouring each frame's
+own delay; video through ffmpeg on a thread of its own, paced with `-re`.
+Four controls in the Overlay tab: the file, its size, where it sits, and how
+hard it burns.
+
+Two things the rig found that reading the headers never would have.
+
+**`projectm_opengl_burn_texture`'s `left` and `top` are broken upstream.**
+CopyTexture's vertex shader does `vec4(position, 0.0, 1.0) * vertex_transformation`
+-- a row-vector multiply -- so with glm's column-major storage those two
+parameters land in `gl_Position.w` and come out as a projective shear rather
+than a move. Asking for a 173x173 patch 560px left of centre drew a trapezoid
+across half the screen, which reads as our arithmetic being wrong. `width`
+and `height` are on the diagonal and survive it, so the one call that behaves
+is `(0, 0, whole window)` and `burn_canvas` does the placing here. Measured
+before relying on it: the canvas's transparent surround **is** honoured, which
+is the only reason a full-window burn does not wipe the preset's feedback
+buffer every frame.
+
+**The texture is upside down** relative to a QImage -- a GL texture's first
+row is the bottom of the picture. The first run put the picture at the bottom
+of the window when it had been asked for at the top.
+
+And one correction to what was said when this was scoped: **an opaque burn-in
+is not smeared.** It paints over its own warped trail every frame and simply
+sits there, which is what a sprite already does better. The smear needs it
+partially transparent, so there is a Burn slider, defaulting to 0.25. That
+slider's effect could **not** be isolated on screen: both presets it was
+tested against hold their feedback buffer near-permanently, so 0.05 and 0.30
+measured 174 against 175 mean brightness -- which is also why the welcome
+preset's logo never faded out of any of those screenshots. It is tested
+deterministically at the canvas level instead; whether the look is right is a
+judgement to make live against real presets.
+
+Ten mutations, nine caught first time. The one that survived was a test that
+could not fail: `video_frame_size` was checked against a line with no
+size-shaped token in it at all, so dropping the "only read the `Video:` line"
+guard changed nothing. Now checked against a `title: 1920x1080 remux` in the
+metadata, which is exactly what that guard exists for.
+
+### Animated textures *inside* a preset — the earlier answer was wrong
+
+Scoping said this was impossible: libprojectM's texture extension list is
+hard-coded, textures resolve once from disk when a preset loads, and no API
+hands a sampler a live texture id. The first two are true. The third is not.
+
+`projectm_set_texture_load_event_callback` (4.2.0, and **exported by both
+shipped binaries** -- checked, no rebuild and no pin move) fires whenever a
+preset asks for a texture the manager does not have, and it takes either raw
+pixels **or an existing OpenGL texture id**. projectM wraps that id without
+taking ownership -- its own comment says so -- and caches the wrapper, so the
+preset samples *our* texture every frame it draws. Anything written into it
+with `glTexSubImage2D` between frames is live inside the preset.
+
+That is a genuinely different feature from burn-in: the preset's own shader
+samples the picture wherever it names it, at whatever scale and wrap mode the
+preset chose, rather than it being smeared into the feedback buffer. It also
+makes the extension list moot, because the filesystem is never consulted for
+a name the callback answers -- so `.gif`, `.webp`, `.tif`, `.svg` and
+anything else Qt reads come along for free, with no patch to libprojectM.
+
+Not built, not tried. Written down so the next session does not re-derive the
+impossibility.

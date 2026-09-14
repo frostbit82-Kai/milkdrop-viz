@@ -374,6 +374,35 @@ There is no display in an agent shell and SDL needs one, so:
   a space in it survives. Verified end to end from the built tarball: launch,
   install, uninstall.
 
+- **`projectm_opengl_burn_texture`'s `left` and `top` do not work at the
+  pinned commit, and the failure looks like a bug in our code.** CopyTexture's
+  vertex shader multiplies the wrong way round --
+  `gl_Position = vec4(position, 0.0, 1.0) * vertex_transformation` -- so with
+  glm's column-major storage `left/m_width` and `top/m_height` land in
+  `gl_Position.w` instead of the translation column. The result is a
+  projective shear: measured 14 Sep 2026, asking for a 173x173 patch 560px
+  left of centre drew a trapezoid across half the screen. `width` and
+  `height` are on the diagonal and survive it. So the only call this API gets
+  right is **(0, 0, whole window)**, and `burn_canvas` composites the picture
+  into a window-sized RGBA buffer here instead. Two things measured rather
+  than assumed while getting there: the surround's **alpha is honoured**,
+  which is what stops the burn wiping the preset's feedback buffer everywhere
+  it does not cover; and the texture is **upside down** relative to a QImage,
+  because a GL texture's first row is the bottom of the picture.
+
+- **An animated texture inside a preset IS possible, through
+  `projectm_set_texture_load_event_callback`** -- which contradicts the
+  obvious reading of the texture manager, and contradicts what was written
+  here first. The callback fires when a preset asks for a texture the manager
+  has not got, and it accepts **an existing GL texture id**, which projectM
+  wraps *without taking ownership* (`TextureManager.cpp`, "App-provided
+  textures are not owned by projectM") and caches. The preset then samples
+  our texture id every frame, so anything we write into that texture with
+  `glTexSubImage2D` is live inside the preset. It also sidesteps the
+  hard-coded extension list in `TextureManager.hpp` entirely, since the
+  filesystem is never consulted for a name the callback answers. Exported by
+  both shipped binaries; no patch and no pin move. Untried as of 14 Sep 2026.
+
 - **projectM's sprite blend modes do not do what their MilkDrop names say.**
   Mode 0 ("alpha") ignores the texture's alpha channel entirely and draws the
   whole rectangle; mode 4 ("colour key") is the only one that honours it —

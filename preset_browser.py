@@ -26,7 +26,7 @@ from viz_common import (
     QPlainTextEdit, QShortcut, QKeySequence, QFontDatabase,
     shift_preset_colours, add_per_frame_line, mashup_preset, QTextCursor,
     MilkHighlighter, number_span_at, splice, format_like, slider_range,
-    number_label,
+    number_label, BURN_EXTENSIONS, BURN_IMAGE_EXTENSIONS,
 )
 
 logger = logging.getLogger(__name__)
@@ -256,9 +256,17 @@ class TweakPanel(QWidget):
 
         # Tab 4 — pictures laid over the render, rather than inside a preset.
         self._spr_body = QWidget()
-        self._spr_lay = QVBoxLayout(self._spr_body)
-        self._spr_lay.setContentsMargins(4, 4, 4, 4)
+        _spr_outer = QVBoxLayout(self._spr_body)
+        _spr_outer.setContentsMargins(4, 4, 4, 4)
+        _spr_outer.setSpacing(4)
+        self._burn_lay = QVBoxLayout()
+        self._burn_lay.setContentsMargins(0, 0, 0, 0)
+        self._burn_lay.setSpacing(4)
+        _spr_outer.addLayout(self._burn_lay)
+        self._spr_lay = QVBoxLayout()
+        self._spr_lay.setContentsMargins(0, 0, 0, 0)
         self._spr_lay.setSpacing(4)
+        _spr_outer.addLayout(self._spr_lay)
         spr_scroll = QScrollArea()
         spr_scroll.setWidgetResizable(True)
         spr_scroll.setWidget(self._spr_body)
@@ -342,7 +350,8 @@ class TweakPanel(QWidget):
         self._pin_timer.setInterval(self.APPLY_MS)
         self._pin_timer.timeout.connect(self._apply_pins)
 
-        # Last: the sliders it builds are wired to the timer above.
+        # Last: the sliders both of these build are wired to the timers above.
+        self._build_burn()
         self._build_sprites()
 
     # ── loading ────────────────────────────────────────────────────────
@@ -552,6 +561,83 @@ class TweakPanel(QWidget):
         if index == 0 and self._pins_dirty:
             self._pins_dirty = False
             self._rebuild_later(self._build_tweaks)
+
+    # ── burn-in ────────────────────────────────────────────────────────
+
+    def _build_burn(self):
+        """The picture drawn *into* the preset, above the sprites that sit on
+        top of it. Same tab because both are "a picture of mine over the
+        visuals"; kept apart inside it because what happens to them could not
+        be more different."""
+        _clear_layout(self._burn_lay)
+        if not getattr(self._host, "can_burn", lambda: False)():
+            return
+        self._burn_lay.addWidget(_hint(
+            "Burn a GIF or a video into the preset itself, so the preset's "
+            "own warp and decay take hold of it. It comes out smeared and "
+            "moving with the visuals rather than sitting on top of them \u2014 "
+            "that is the effect, not a limitation."))
+
+        entry = self._host.burn_in()
+        row = QHBoxLayout()
+        row.setContentsMargins(0, 0, 0, 0)
+        row.setSpacing(6)
+        self._burn_name = QLabel(
+            os.path.basename(entry["path"]) or "Nothing burnt in")
+        self._burn_name.setStyleSheet("font-size:11px;")
+        self._burn_name.setToolTip(entry["path"])
+        self._burn_name.setSizePolicy(QSizePolicy.Policy.Ignored,
+                                      QSizePolicy.Policy.Fixed)
+        row.addWidget(self._burn_name, 1)
+        pick = QPushButton("Choose\u2026")
+        pick.clicked.connect(self._pick_burn)
+        row.addWidget(pick)
+        off = QPushButton("Off")
+        off.setEnabled(bool(entry["path"]))
+        off.clicked.connect(lambda: self._set_burn(path=""))
+        row.addWidget(off)
+        self._burn_lay.addLayout(row)
+
+        for field, label, tip in (
+                ("size",  "Size",    "How much of the height it covers"),
+                ("alpha", "Burn",    "Fully opaque and it just sits there, "
+                                     "like a sprite. Lower and the preset's "
+                                     "warp carries it away between frames, "
+                                     "which is the point of burning it in."),
+                ("x",     "Across",  "Left to right"),
+                ("y",     "Down",    "Top to bottom")):
+            sl = QSlider(Qt.Orientation.Horizontal)
+            sl.setRange(2 if field in ("size", "alpha") else 0, 100)
+            sl.setValue(int(round(entry[field] * 100)))
+            sl.setToolTip(tip)
+            # Read fresh every frame by the render thread, so there is nothing
+            # to debounce and nothing to reload: moving one is free.
+            sl.valueChanged.connect(
+                lambda v, f=field: self._set_burn(**{f: v / 100.0}))
+            self._burn_lay.addLayout(self._labelled(label, sl))
+
+        line = QFrame()
+        line.setFrameShape(QFrame.Shape.HLine)
+        self._burn_lay.addWidget(line)
+
+    def _pick_burn(self):
+        pats = " ".join("*" + e for e in BURN_EXTENSIONS)
+        path, _ = QFileDialog.getOpenFileName(
+            self, "Burn a picture into the preset", "",
+            f"Pictures and video ({pats})")
+        if path:
+            self._set_burn(path=path)
+
+    def _set_burn(self, **fields):
+        try:
+            self._host.set_burn_in(**fields)
+        except Exception:
+            return
+        if "path" in fields:
+            # The name and the Off button both change with it, and nothing
+            # else in the tab does -- so this rebuild is the burn-in group
+            # alone, not the sprite list under it.
+            self._rebuild_later(self._build_burn)
 
     def _build_sprites(self):
         _clear_layout(self._spr_lay)

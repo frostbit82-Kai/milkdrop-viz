@@ -1662,6 +1662,20 @@ class ProjectM4:
         except AttributeError:
             self.can_sprites = False
 
+        # Burn-in: a texture of ours drawn into the *preset's* framebuffer,
+        # so the preset's own warp and decay take hold of it. It is the only
+        # route a moving picture has into a preset at all -- libprojectM
+        # resolves a preset's named textures once, from disk, when the preset
+        # loads, and there is no API that hands a sampler a live texture id.
+        try:
+            C.projectm_opengl_burn_texture.restype  = None
+            C.projectm_opengl_burn_texture.argtypes = [
+                ctypes.c_void_p, ctypes.c_uint32,
+                ctypes.c_int, ctypes.c_int, ctypes.c_int, ctypes.c_int]
+            self.can_burn = True
+        except AttributeError:
+            self.can_burn = False
+
         # Whether a new preset inherits the last frame of the old one. The
         # inheritance is projectM's default and is usually what people want;
         # it also means a preset that starts dark takes a moment to shed the
@@ -1927,6 +1941,23 @@ class ProjectM4:
         except Exception as e:
             print(f"[projectm_wrapper] reset_textures failed: {e}", flush=True)
             return False
+
+    def burn_texture(self, texture: int, left: int, top: int,
+                     width: int, height: int):
+        """Draw a GL texture into the preset's framebuffer. Render thread.
+
+        Call it *before* render_frame: the warp reads the framebuffer it is
+        about to draw over, so burning first is what puts the picture through
+        this frame's warp rather than the next one's.
+        """
+        if not self._pm or not getattr(self, "can_burn", False):
+            return
+        try:
+            self._core.projectm_opengl_burn_texture(
+                self._pm, int(texture), int(left), int(top),
+                int(width), int(height))
+        except Exception as e:
+            print(f"[projectm_wrapper] burn_texture failed: {e}", flush=True)
 
     def set_sprites(self, definitions) -> int:
         """Replace every sprite with this list of definitions. Render thread.
@@ -2892,12 +2923,13 @@ pyqtSignal = Signal          # the shim modules beside this one still say this
 # it did when this was `from PyQt6.QtWidgets import ...`. The tuples are the
 # authoritative list of what this module and its shims use.
 for _mod, _names in (
-    (QtCore, ("Qt", "QObject", "QPoint", "QSize", "QTimer", "QEvent", "QThread",
-              "QUrl")),
+    (QtCore, ("Qt", "QObject", "QPoint", "QRect", "QSize", "QTimer", "QEvent",
+              "QThread", "QUrl")),
     (QtGui,  ("QKeySequence", "QFont", "QFontDatabase", "QShortcut",
               "QTextCursor", "QSyntaxHighlighter", "QTextCharFormat",
               "QCursor", "QAction", "QActionGroup",
-              "QIcon", "QImage", "QPixmap", "QColor", "QDesktopServices")),
+              "QIcon", "QImage", "QImageReader", "QPainter", "QPixmap",
+              "QColor", "QDesktopServices")),
     (QtWidgets, ("QApplication", "QMenu", "QDialog", "QFormLayout",
                  "QVBoxLayout", "QHBoxLayout", "QPushButton", "QLabel",
                  "QSpinBox", "QDoubleSpinBox", "QComboBox", "QDialogButtonBox",
@@ -6331,6 +6363,317 @@ def thumb_writer() -> "_ThumbWriter":
     return _THUMB_WRITER
 
 
+# ─── burn-in ─────────────────────────────────────────────────────────────────
+#
+# A picture of ours drawn into the *preset's* framebuffer every frame, so the
+# preset's own warp, decay and echo take hold of it. Not a sprite -- a sprite
+# sits on top, finished -- and not a texture the preset can name either:
+# libprojectM resolves a preset's textures once, from disk, when the preset
+# loads, its texture scanner does not accept .gif at all, and no API hands a
+# sampler a live texture id. Burn-in is the only way a moving picture gets
+# into a preset, which is why it comes out smeared rather than crisp. That is
+# the effect, not a shortcoming of it.
+
+#: Longest side of the burn-in texture. It is drawn into a framebuffer the
+#: size of the window at most, so anything bigger costs upload bandwidth every
+#: frame and buys nothing on screen.
+BURN_MAX_SIDE = 512
+
+#: What Qt reads itself, a frame at a time. Everything else goes to ffmpeg.
+BURN_IMAGE_EXTENSIONS = (".gif", ".webp", ".apng", ".png", ".jpg", ".jpeg",
+                         ".bmp")
+BURN_VIDEO_EXTENSIONS = (".mp4", ".webm", ".mkv", ".mov", ".avi", ".m4v",
+                         ".mpg", ".mpeg", ".wmv")
+BURN_EXTENSIONS = BURN_IMAGE_EXTENSIONS + BURN_VIDEO_EXTENSIONS
+
+
+def burn_fit(src_w, src_h, win_w, win_h, size, x, y):
+    """Where a src_w x src_h picture goes inside a win_w x win_h canvas.
+
+    A plain top-left (left, top, width, height) in pixels. `size` is the
+    fraction of the canvas height the picture covers, and `x`, `y` place its
+    centre as fractions of the canvas -- (0.5, 0.5) being the middle, y
+    counting down. Fractions rather than pixels so a setting keeps meaning the
+    same thing when the window is resized or goes fullscreen.
+
+    Note this is *not* what projectm_opengl_burn_texture takes. See
+    burn_canvas for why nothing but the whole window is ever passed to it.
+    """
+    if min(src_w, src_h, win_w, win_h) <= 0:
+        return (0, 0, 0, 0)
+    h = max(1, int(round(win_h * min(1.0, max(0.02, size)))))
+    w = max(1, int(round(h * src_w / src_h)))
+    return (int(round(win_w * x - w / 2.0)),
+            int(round(win_h * y - h / 2.0)), w, h)
+
+
+def burn_canvas(frame, win_w: int, win_h: int, rect, alpha=1.0) -> bytes:
+    """A window-sized RGBA buffer with `frame` drawn into `rect`, GL side up.
+
+    Why a whole canvas rather than telling projectM where to put the picture:
+    the `left` and `top` of projectm_opengl_burn_texture do not work at the
+    pinned commit. CopyTexture's vertex shader multiplies the other way round
+    -- `vec4(position, 0.0, 1.0) * vertex_transformation` -- so with glm's
+    column-major storage those two land in `gl_Position.w` and come out as a
+    projective shear instead of a move. Measured: asking for a 173x173 patch
+    560px left of centre drew a trapezoid across half the screen. The scale
+    survives it, being on the diagonal, so the one call that behaves is the
+    whole window at (0, 0) and the placing is done here.
+
+    The surround is transparent and projectM honours it -- measured too, and
+    it is what makes this work at all: an opaque canvas would wipe the
+    preset's feedback buffer every frame instead of adding to it.
+
+    Flipped bottom to top because a GL texture's first row is the bottom of
+    the picture and a QImage's is the top. Without it the picture is drawn
+    upside down in the window, which is precisely what the first run showed.
+
+    `alpha` is what makes this a burn-in rather than an overlay. Fully opaque,
+    each frame paints over the warped trail the last one left and the picture
+    just sits there crisply, which is what a sprite already does better.
+    Under 1 the preset's own feedback shows through and accumulates, so the
+    picture smears away with the warp between frames -- measured, and the
+    difference between the two is the whole feature.
+    """
+    canvas = QImage(int(win_w), int(win_h), QImage.Format.Format_RGBA8888)
+    canvas.fill(0)
+    painter = QPainter(canvas)
+    painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform, True)
+    painter.setOpacity(max(0.0, min(1.0, float(alpha))))
+    painter.drawImage(QRect(*rect), frame)
+    painter.end()
+    return _image_bytes(canvas.mirrored(False, True))
+
+
+def _image_bytes(img) -> bytes:
+    """A QImage's pixels, through whichever Qt binding is loaded.
+
+    PySide6 hands back a memoryview that knows its own length; PyQt6 hands
+    back a sip.voidptr that does not, and bytes() on that raises rather than
+    returning something short. One of the few places the two bindings differ
+    in a way the re-export table cannot paper over.
+    """
+    ptr = img.constBits()
+    try:
+        return bytes(ptr)
+    except TypeError:
+        ptr.setsize(img.sizeInBytes())
+        return bytes(ptr)
+
+
+def _rgba_frame(img):
+    """A QImage ready to be drawn into the canvas, scaled down if it is large.
+
+    RGBA8888 rather than RGB888 because a QImage pads every row to four bytes,
+    and an odd width in RGB then arrives sheared -- the same trap glReadPixels
+    has with GL_PACK_ALIGNMENT, seen from the other end.
+    """
+    side = max(img.width(), img.height())
+    if side > BURN_MAX_SIDE:
+        img = img.scaled(
+            max(1, img.width() * BURN_MAX_SIDE // side),
+            max(1, img.height() * BURN_MAX_SIDE // side),
+            Qt.AspectRatioMode.IgnoreAspectRatio,
+            Qt.TransformationMode.SmoothTransformation)
+    return img.convertToFormat(QImage.Format.Format_RGBA8888)
+
+
+class _ImageFrames:
+    """Frames out of an animated image, through Qt's own reader.
+
+    QImageReader walks a GIF or an animated WEBP one frame at a time and
+    reports each frame's own delay, which is what makes a GIF look right: the
+    delay is per frame in the format, not one rate for the file. Decoding is
+    cheap enough to do on the render thread -- a 480x480 GIF frame is LZW over
+    a palette -- which is why this is not a thread and the video one is.
+    """
+
+    def __init__(self, path: str):
+        self.path = path
+        self._reader = None
+        self._due = 0.0
+        self._open()
+
+    def _open(self):
+        try:
+            r = QImageReader(self.path)
+            r.setAutoTransform(True)
+            self._reader = r if r.canRead() else None
+        except Exception:
+            self._reader = None
+
+    def next(self, now: float):
+        """(w, h, RGBA bytes) when a new frame is due, else None."""
+        if self._reader is None or now < self._due:
+            return None
+        img = self._reader.read()
+        if img.isNull():
+            self._open()                  # the end of the animation; loop
+            if self._reader is None:
+                return None
+            img = self._reader.read()
+            if img.isNull():
+                self._reader = None       # not a picture at all
+                return None
+        delay = self._reader.nextImageDelay() / 1000.0
+        # A still reports no delay, so it is read once and then held for ever.
+        # Without that, a JPEG would be decoded sixty times a second to
+        # produce the same pixels.
+        self._due = (now + delay) if delay > 0 else float("inf")
+        return _rgba_frame(img)
+
+    def stop(self):
+        self._reader = None
+
+
+#: ffmpeg prints what it found before it complains about having no output
+#: file. Restricted to the Video: line because the banner is full of numbers.
+_VIDEO_SIZE = re.compile(r"\b(\d{2,5})x(\d{2,5})\b")
+
+
+def video_frame_size(text: str):
+    """(w, h) out of ffmpeg's own report of a file, or (0, 0).
+
+    From ffmpeg rather than ffprobe: ffprobe is a second binary and a frozen
+    build ships one, not two. Split from the call that produces the text so
+    the parsing can be tested against real ffmpeg output without a video file.
+    """
+    for line in (text or "").splitlines():
+        if "Video:" not in line:
+            continue
+        m = _VIDEO_SIZE.search(line)
+        if m:
+            return (int(m.group(1)), int(m.group(2)))
+    return (0, 0)
+
+
+def burn_scaled_size(w: int, h: int):
+    """`w` x `h` brought under BURN_MAX_SIDE, both sides even.
+
+    Even because every encoder ffmpeg might be asked to scale for wants it,
+    and an odd size is the kind of thing that works on one machine.
+    """
+    if w <= 0 or h <= 0:
+        return (0, 0)
+    side = max(w, h)
+    if side > BURN_MAX_SIDE:
+        w = w * BURN_MAX_SIDE // side
+        h = h * BURN_MAX_SIDE // side
+    return (max(2, w - (w % 2)), max(2, h - (h % 2)))
+
+
+class _VideoFrames(threading.Thread):
+    """Frames out of a video file, through ffmpeg, on a thread of its own.
+
+    Not on the render thread: a pipe read blocks, and a decoder that stalls
+    for a frame time is a frame the visualiser did not draw. One frame of
+    slack is kept and the newest wins; when the decoder is late the last frame
+    is simply used again, which for something being smeared through a preset's
+    warp nobody can see. `-re` paces ffmpeg at the file's own rate, without
+    which it decodes as fast as the pipe drains and burns a core to produce
+    frames that are thrown away.
+    """
+
+    def __init__(self, path: str):
+        super().__init__(daemon=True)
+        self.path = path
+        self.width = self.height = 0
+        self.error = ""
+        self._ffmpeg = find_ffmpeg()
+        self._proc = None
+        self._burn_on = True
+        self._burn_lock = threading.Lock()
+        self._burn_frame = None
+        if not self._ffmpeg:
+            self.error = ("ffmpeg was not found, and a video needs it. A GIF "
+                          "does not \u2014 that goes through Qt.")
+            return
+        try:
+            said = _subprocess.run(
+                [self._ffmpeg, "-hide_banner", "-i", path],
+                capture_output=True, text=True, timeout=30, env=child_env(),
+                creationflags=(_subprocess.CREATE_NO_WINDOW
+                               if sys.platform == "win32" else 0)).stderr
+        except Exception as e:
+            self.error = f"ffmpeg could not read that file: {e}"
+            return
+        w, h = burn_scaled_size(*video_frame_size(said))
+        if w <= 0:
+            self.error = "ffmpeg found no video in that file."
+            return
+        self.width, self.height = w, h
+        self.start()
+
+    def run(self):
+        need = self.width * self.height * 4
+        cmd = [self._ffmpeg, "-v", "error", "-re", "-stream_loop", "-1",
+               "-i", self.path, "-vf", f"scale={self.width}:{self.height}",
+               "-pix_fmt", "rgba", "-f", "rawvideo", "-"]
+        try:
+            self._proc = _subprocess.Popen(
+                cmd, stdout=_subprocess.PIPE, stderr=_subprocess.PIPE,
+                env=child_env(),
+                creationflags=(_subprocess.CREATE_NO_WINDOW
+                               if sys.platform == "win32" else 0))
+        except Exception as e:
+            self.error = f"could not start ffmpeg: {e}"
+            return
+        while self._burn_on:
+            buf = self._proc.stdout.read(need)
+            if len(buf) < need:
+                break
+            with self._burn_lock:
+                self._burn_frame = buf
+        # Always read a dead helper's stderr: the one line that says why is
+        # thrown away otherwise, which this project has already paid for once.
+        if self._burn_on:
+            try:
+                why = (self._proc.stderr.read() or b"").decode(
+                    "utf-8", "replace").strip()
+            except Exception:
+                why = ""
+            if why:
+                self.error = why.splitlines()[-1]
+                print(f"[burn] ffmpeg: {self.error}", flush=True)
+
+    def next(self, _now=0.0):
+        """The newest decoded frame, once. None when there is nothing new."""
+        with self._burn_lock:
+            buf, self._burn_frame = self._burn_frame, None
+        if buf is None:
+            return None
+        # copy() because QImage does not own that buffer and the next frame
+        # will overwrite the name holding it.
+        return QImage(buf, self.width, self.height,
+                      QImage.Format.Format_RGBA8888).copy()
+
+    def stop(self):
+        self._burn_on = False
+        proc, self._proc = self._proc, None
+        if proc is not None:
+            try:
+                proc.kill()
+            except Exception:
+                pass
+
+
+def burn_source(path: str):
+    """Something with .next(now) and .stop() for `path`, or None.
+
+    The extension decides, not the content: Qt would happily read the first
+    frame of some video containers and then report no animation at all, which
+    looks like a still picture rather than like a file we cannot play.
+    """
+    if not path or not os.path.isfile(path):
+        return None
+    ext = os.path.splitext(path)[1].lower()
+    if ext in BURN_IMAGE_EXTENSIONS:
+        return _ImageFrames(path)
+    if ext in BURN_VIDEO_EXTENSIONS:
+        return _VideoFrames(path)
+    return None
+
+
 # ─── idle pause ───────────────────────────────────────────────────────────────
 
 #: SHQueryUserNotificationState answers. Only two of them mean "somebody is
@@ -6536,7 +6879,12 @@ from sdl2 import (
 )
 from OpenGL.GL import (glViewport, glClear, GL_COLOR_BUFFER_BIT,
                        glReadPixels, glPixelStorei, GL_PACK_ALIGNMENT,
-                       GL_RGB, GL_UNSIGNED_BYTE)
+                       GL_RGB, GL_UNSIGNED_BYTE,
+                       glGenTextures, glDeleteTextures, glBindTexture,
+                       glTexImage2D, glTexSubImage2D, glTexParameteri,
+                       GL_TEXTURE_2D, GL_RGBA, GL_LINEAR, GL_CLAMP_TO_EDGE,
+                       GL_TEXTURE_MIN_FILTER, GL_TEXTURE_MAG_FILTER,
+                       GL_TEXTURE_WRAP_S, GL_TEXTURE_WRAP_T)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -6648,6 +6996,7 @@ class Renderer:
         self._req_sprites                = False  # rebuild the overlay list
         self._req_rate                   = 0      # stars to add, from the GUI
         self._req_snapshot               = False  # re-take the browser picture
+        self._req_burn                   = None   # a picture to burn in, "" off
         #: Frames left before an edit's error is read back. 0 = not editing,
         #: which is what keeps a 130,000-preset pack from toasting all night.
         self._edit_error_in              = 0
@@ -6703,6 +7052,16 @@ class Renderer:
         self._wp_box_moaned = False
         self._wp_gave_up = False
         self._thumb_done = True    # one attempt per preset; see _maybe_thumbnail
+        #: The picture burnt into the preset, and the GL texture holding its
+        #: current frame. Both belong to the render thread: the texture is
+        #: made in the GL context, and the decoder is stopped from the same
+        #: place it was started so a dead ffmpeg is never left behind.
+        self._burn_src   = None
+        self._burn_tex   = 0
+        self._burn_size  = (0, 0)   # what the texture currently holds
+        self._burn_image = None     # the last frame the decoder handed over
+        self._burn_want  = None     # canvas size and placement it was drawn at
+
         #: Set by the key or the browser's button. Taken on the render thread
         #: at the one point in the loop where the back buffer holds this
         #: frame, which is where _maybe_thumbnail already runs.
@@ -6886,6 +7245,13 @@ class Renderer:
         # every other sprite change already takes.
         if self.sprites():
             self._req_sprites = True
+        # And the same for the burnt-in picture, for the same reason: it is
+        # in the config, so it has to come back on its own. Without this the
+        # setting persisted, the panel showed the file, and nothing was ever
+        # burnt in until somebody chose it again -- which reads as the whole
+        # feature being broken rather than as one missing line.
+        if self.burn_in()["path"]:
+            self._req_burn = self.burn_in()["path"]
 
         # Before the library loads, so the first frame drawn is ours. projectM
         # draws its own "M" idle preset for as long as nothing else is
@@ -6987,6 +7353,42 @@ class Renderer:
         """
         with self._lock:
             self._req_rate += int(delta)
+
+    def burn_in(self) -> dict:
+        """What is being burnt into the preset. Qt thread.
+
+        Always four keys with sane values, because this is read straight into
+        widgets and a config somebody hand-edited is not worth a traceback.
+        """
+        e = self._cfg.get("burn_in") or {}
+        def num(key, default, lo, hi):
+            try:
+                return max(lo, min(hi, float(e.get(key, default))))
+            except (TypeError, ValueError):
+                return default
+        return {"path":  str(e.get("path", "") or ""),
+                "size":  num("size", 0.5, 0.02, 1.0),
+                "x":     num("x", 0.5, 0.0, 1.0),
+                "y":     num("y", 0.5, 0.0, 1.0),
+                "alpha": num("alpha", 0.25, 0.02, 1.0)}
+
+    def set_burn_in(self, **fields):
+        """Change the burnt-in picture, or stop it with path="". Qt thread.
+
+        Only a new `path` restarts the decoder; size and position are read
+        fresh every frame, so dragging them is free.
+        """
+        entry = self.burn_in()
+        entry.update({k: v for k, v in fields.items() if k in entry})
+        self._cfg["burn_in"] = entry
+        self._save_config(self._cfg)
+        if "path" in fields:
+            with self._lock:
+                self._req_burn = entry["path"]
+
+    def can_burn(self) -> bool:
+        """False on a libprojectM without the burn-in entry point."""
+        return bool(self._pm and getattr(self._pm, "can_burn", False))
 
     def request_snapshot(self):
         """Take the browser's picture of this preset again, now."""
@@ -7727,6 +8129,10 @@ class Renderer:
                 if self._req_snapshot:
                     self._req_snapshot = False
                     self._want_snapshot = True
+                if self._req_burn is not None:
+                    path = self._req_burn
+                    self._req_burn = None
+                    self._do_set_burn(path)
                 if self._req_preset_data is not None:
                     text = self._req_preset_data
                     self._req_preset_data = None
@@ -7790,6 +8196,10 @@ class Renderer:
 
             # ── Render ────────────────────────────────────────────────────
             t0 = _time.monotonic()
+            # Before the preset draws, not after: the warp reads the buffer it
+            # is about to draw over, so burning first is what puts the picture
+            # through this frame's warp rather than the next one's.
+            self._burn_this_frame()
             self._pm.render_frame()
             # Before the swap, always: glReadPixels reads the back buffer, and
             # after SDL_GL_SwapWindow that is last frame's content, not this
@@ -7827,6 +8237,10 @@ class Renderer:
         # zero-byte file that no player will open.
         if self._rec is not None:
             self._stop_recording()
+        # And before the context goes for the other reason: the burn-in's
+        # ffmpeg is a child process, and leaving it running leaves a decoder
+        # writing into a pipe nobody will ever read again.
+        self._do_set_burn("")
         self._audio.stop()
         if self._pm:
             self._pm.destroy()
@@ -8796,6 +9210,118 @@ class Renderer:
               flush=True)
         self._bridge.show_toast.emit(
             f"⏹  Saved {os.path.basename(rec.path)}{note}")
+
+    # ── Burn-in ───────────────────────────────────────────────────────────
+
+    def _do_set_burn(self, path: str):
+        """Start, change or stop the burnt-in picture. Render thread."""
+        if self._burn_src is not None:
+            self._burn_src.stop()
+            self._burn_src = None
+        self._burn_image, self._burn_want = None, None
+        if not path:
+            self._drop_burn_texture()
+            return
+        if not self.can_burn():
+            self._bridge.show_toast.emit(
+                "This build of projectM cannot burn a picture into a preset.")
+            return
+        src = burn_source(path)
+        if src is None:
+            self._bridge.show_toast.emit(
+                f"Nothing here can play {os.path.basename(path)}")
+            return
+        why = getattr(src, "error", "")
+        if why:
+            src.stop()
+            self._bridge.show_toast.emit(why)
+            return
+        self._burn_src = src
+        print(f"[burn] {os.path.basename(path)}", flush=True)
+
+    def _drop_burn_texture(self):
+        """Give the GL texture back. Render thread -- it is the only one that
+        may touch the context."""
+        if self._burn_tex:
+            try:
+                glDeleteTextures(1, [self._burn_tex])
+            except Exception:
+                pass
+        self._burn_tex, self._burn_size = 0, (0, 0)
+
+    def _upload_burn(self, w: int, h: int, buf: bytes):
+        """Put one RGBA frame in the burn-in texture. Render thread.
+
+        glTexSubImage2D while the size holds, because reallocating the whole
+        texture every frame is what makes a video burn-in cost more than the
+        preset it is being drawn into.
+        """
+        if self._burn_tex and self._burn_size == (w, h):
+            glBindTexture(GL_TEXTURE_2D, self._burn_tex)
+            glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, w, h,
+                            GL_RGBA, GL_UNSIGNED_BYTE, buf)
+        else:
+            self._drop_burn_texture()
+            self._burn_tex = int(glGenTextures(1))
+            glBindTexture(GL_TEXTURE_2D, self._burn_tex)
+            for pname, value in ((GL_TEXTURE_MIN_FILTER, GL_LINEAR),
+                                 (GL_TEXTURE_MAG_FILTER, GL_LINEAR),
+                                 (GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE),
+                                 (GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE)):
+                glTexParameteri(GL_TEXTURE_2D, pname, value)
+            glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, w, h, 0,
+                         GL_RGBA, GL_UNSIGNED_BYTE, buf)
+            self._burn_size = (w, h)
+        glBindTexture(GL_TEXTURE_2D, 0)
+
+    def _burn_this_frame(self):
+        """Draw the burnt-in picture into the preset. Render thread.
+
+        The canvas is rebuilt only when the decoder has a new frame or the
+        placement moved -- a GIF at 14fps against a 60fps render would
+        otherwise be composited four times for every frame it has. The burn
+        itself happens every frame regardless: the preset's warp takes the
+        picture away again immediately, so drawing it once in four would show
+        it flickering rather than sitting there.
+        """
+        if self._burn_src is None or not self._pm:
+            return
+        try:
+            w, h = ctypes.c_int(), ctypes.c_int()
+            sdl2.SDL_GL_GetDrawableSize(self._window,
+                                        ctypes.byref(w), ctypes.byref(h))
+            dw, dh = int(w.value), int(h.value)
+            if dw <= 0 or dh <= 0:
+                return
+            fresh = self._burn_src.next(_time.monotonic())
+            if fresh is not None:
+                self._burn_image = fresh
+            if self._burn_image is None:
+                return
+            e = self.burn_in()
+            want = (dw, dh, e["size"], e["x"], e["y"], e["alpha"])
+            if fresh is not None or want != self._burn_want:
+                rect = burn_fit(self._burn_image.width(),
+                                self._burn_image.height(),
+                                dw, dh, e["size"], e["x"], e["y"])
+                if want != self._burn_want:
+                    print(f"[burn] {self._burn_image.width()}x"
+                          f"{self._burn_image.height()} at {rect[0]},{rect[1]} "
+                          f"{rect[2]}x{rect[3]} of {dw}x{dh}", flush=True)
+                self._burn_want = want
+                self._upload_burn(
+                    dw, dh, burn_canvas(self._burn_image, dw, dh, rect,
+                                        e["alpha"]))
+            if self._burn_tex:
+                # (0, 0, whole window) is the only call this API gets right --
+                # see burn_canvas.
+                self._pm.burn_texture(self._burn_tex, 0, 0, dw, dh)
+        except Exception as why:
+            # One bad frame must not take the render thread down, and a
+            # message every frame is worse than none: stop, and say so once.
+            print(f"[burn] stopped: {why}", flush=True)
+            self._do_set_burn("")
+            self._bridge.show_toast.emit(f"Burn-in stopped: {why}")
 
     # ── Thumbnails ────────────────────────────────────────────────────────
 

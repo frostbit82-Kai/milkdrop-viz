@@ -95,6 +95,12 @@ DEFAULT_CONFIG = {
     # viz_common.MENU_ENTRIES. Hidden rather than shown, so an entry added in a
     # later version arrives visible instead of missing on an old config.
     "menu_hidden":          [],
+    # A picture burnt into the preset's own framebuffer, so the preset's warp
+    # and decay take hold of it: {path, size, x, y}. An empty path is off.
+    # `path` is an absolute file, not a copy in a data directory -- nothing
+    # but this app ever reads it, so there is nothing to copy it for.
+    "burn_in":              {"path": "", "size": 0.5, "x": 0.5, "y": 0.5,
+                             "alpha": 0.25},
     # Pictures laid over the render: [{image, motion, size, alpha, blend}].
     # `image` is a file stem under user_data_dir()/sprites.
     "sprites":              [],

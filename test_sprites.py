@@ -28,7 +28,10 @@ os.environ["LOCALAPPDATA"] = os.path.join(_TMP, "data")
 os.environ["XDG_CONFIG_HOME"] = os.path.join(_TMP, "config")
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
+import base64
+import inspect
 import viz_common as v                                # noqa: E402
+from viz_common import QImage                          # noqa: E402
 
 
 def check(name, fn):
@@ -261,6 +264,171 @@ def an_old_libprojectm_gets_an_explanation_rather_than_dead_controls():
     panel = TweakPanel(NoSprites())
     assert not hasattr(panel, "_spr_list") or panel._spr_list is None \
         or panel._spr_lay.count() <= 2
+
+
+
+
+# ── burn-in ───────────────────────────────────────────────────────────────
+#
+# The other kind of picture over the visuals: not laid on top like a sprite
+# but drawn into the preset's own framebuffer, where the warp and decay get
+# hold of it. The geometry is worth testing hardest, because the four numbers
+# projectM takes are not the rectangle their names suggest -- see burn_canvas.
+
+#: Two frames, 4x4, red then blue. Built here rather than read from a file so
+#: the suite needs nothing on disk, and animated rather than still because the
+#: per-frame delay is the whole reason the image path is not a plain load.
+TINY_GIF = base64.b64decode(
+    "R0lGODlhBAAEAPcfMQAAACQAAEgAAGwAAJAAALQAANgAAPwAAAAkACQkAEgkAGwkAJAk"
+    "ALQkANgkAPwkAABIACRIAEhIAGxIAJBIALRIANhIAPxIAABsACRsAEhsAGxsAJBsALRs"
+    "ANhsAPxsAACQACSQAEiQAGyQAJCQALSQANiQAPyQAAC0ACS0AEi0AGy0AJC0ALS0ANi0"
+    "APy0AADYACTYAEjYAGzYAJDYALTYANjYAPzYAAD8ACT8AEj8AGz8AJD8ALT8ANj8APz8"
+    "AAAAVSQAVUgAVWwAVZAAVbQAVdgAVfwAVQAkVSQkVUgkVWwkVZAkVbQkVdgkVfwkVQBI"
+    "VSRIVUhIVWxIVZBIVbRIVdhIVfxIVQBsVSRsVUhsVWxsVZBsVbRsVdhsVfxsVQCQVSSQ"
+    "VUiQVWyQVZCQVbSQVdiQVfyQVQC0VSS0VUi0VWy0VZC0VbS0Vdi0Vfy0VQDYVSTYVUjY"
+    "VWzYVZDYVbTYVdjYVfzYVQD8VST8VUj8VWz8VZD8VbT8Vdj8Vfz8VQAAqiQAqkgAqmwA"
+    "qpAAqrQAqtgAqvwAqgAkqiQkqkgkqmwkqpAkqrQkqtgkqvwkqgBIqiRIqkhIqmxIqpBI"
+    "qrRIqthIqvxIqgBsqiRsqkhsqmxsqpBsqrRsqthsqvxsqgCQqiSQqkiQqmyQqpCQqrSQ"
+    "qtiQqvyQqgC0qiS0qki0qmy0qpC0qrS0qti0qvy0qgDYqiTYqkjYqmzYqpDYqrTYqtjY"
+    "qvzYqgD8qiT8qkj8qmz8qpD8qrT8qtj8qvz8qgAA/yQA/0gA/2wA/5AA/7QA/9gA//wA"
+    "/wAk/yQk/0gk/2wk/5Ak/7Qk/9gk//wk/wBI/yRI/0hI/2xI/5BI/7RI/9hI//xI/wBs"
+    "/yRs/0hs/2xs/5Bs/7Rs/9hs//xs/wCQ/ySQ/0iQ/2yQ/5CQ/7SQ/9iQ//yQ/wC0/yS0"
+    "/0i0/2y0/5C0/7S0/9i0//y0/wDY/yTY/0jY/2zY/5DY/7TY/9jY//zY/wD8/yT8/0j8"
+    "/2z8/5D8/7T8/9j8//z8/yH/C05FVFNDQVBFMi4wAwEAAAAh+QQEMgAfACwAAAAABAAE"
+    "AAAICwAPCBxIUKCBgQEBACH5BAUyAAAALAAAAAAEAAQAAAgKAAEBG0iwoMGAAAA7")
+
+
+def a_burnt_in_picture_is_placed_as_a_plain_rectangle():
+    """burn_fit's own output is a top-left rect in pixels -- what goes to
+    projectM is (0, 0, whole window), which is the only call it gets right."""
+    # Centred, half the height, square source: a square in the middle.
+    left, top, w, h = v.burn_fit(400, 400, 800, 600, 0.5, 0.5, 0.5)
+    assert (w, h) == (300, 300), (w, h)
+    assert (left, top) == (250, 150), (left, top)
+    # The aspect is the source's, not the window's.
+    _l, _t, w, h = v.burn_fit(500, 281, 800, 600, 0.5, 0.5, 0.5)
+    assert h == 300 and abs(w / h - 500 / 281) < 0.01, (w, h)
+    # A corner, and a size that cannot be zero however small it is asked for.
+    left, top, w, h = v.burn_fit(100, 100, 800, 600, 0.0, 0.0, 0.0)
+    assert w >= 1 and h >= 1, (w, h)
+    assert left < 0 and top < 0, "a picture centred on the corner half hangs off"
+    # Nothing to place, and nothing to place it in.
+    assert v.burn_fit(0, 0, 800, 600, 0.5, 0.5, 0.5) == (0, 0, 0, 0)
+    assert v.burn_fit(100, 100, 0, 0, 0.5, 0.5, 0.5) == (0, 0, 0, 0)
+
+
+def the_canvas_puts_the_picture_where_it_was_asked_for_and_the_right_way_up():
+    """A GL texture's first row is the bottom of the picture and a QImage's is
+    the top, so the canvas is flipped on the way out. Without it the picture
+    is drawn upside down -- which is what the first run on real hardware
+    showed, and what no amount of reading the transform would have."""
+    frame = QImage(10, 10, QImage.Format.Format_RGBA8888)
+    frame.fill(0xFFFF0000)                       # opaque red
+    raw = v.burn_canvas(frame, 40, 20, (4, 2, 8, 6))
+    assert len(raw) == 40 * 20 * 4, len(raw)
+    out = QImage(raw, 40, 20, QImage.Format.Format_RGBA8888)
+    # Flipped: what was drawn at the top of the canvas is at the bottom here.
+    assert out.pixelColor(8, 20 - 4).alpha() > 200, "the picture is not there"
+    assert out.pixelColor(8, 4).alpha() == 0, "the picture was not flipped"
+    # And the surround is transparent, which is what stops the burn wiping
+    # the preset's feedback buffer everywhere it does not cover.
+    assert out.pixelColor(35, 10).alpha() == 0, "the surround is opaque"
+
+
+def the_burn_slider_actually_changes_how_much_is_painted():
+    """Fully opaque, each frame paints over the trail the last one left and
+    the picture just sits there, which is what a sprite already does. Under 1
+    the preset's feedback shows through and it smears with the warp."""
+    frame = QImage(10, 10, QImage.Format.Format_RGBA8888)
+    frame.fill(0xFFFFFFFF)
+    def alpha_at(a):
+        raw = v.burn_canvas(frame, 20, 20, (0, 0, 20, 20), a)
+        return QImage(raw, 20, 20,
+                      QImage.Format.Format_RGBA8888).pixelColor(10, 10).alpha()
+    full, half, none = alpha_at(1.0), alpha_at(0.5), alpha_at(0.0)
+    assert full > 240, full
+    assert 100 < half < 160, half
+    assert none == 0, none
+
+
+def a_large_picture_is_brought_down_to_a_size_worth_uploading():
+    """It is drawn into a framebuffer the size of the window at most, so a
+    4K frame every frame costs bandwidth and shows nothing extra."""
+    w, h = v.burn_scaled_size(3840, 2160)
+    assert max(w, h) == v.BURN_MAX_SIDE, (w, h)
+    assert abs(w / h - 3840 / 2160) < 0.02, (w, h)
+    assert w % 2 == 0 and h % 2 == 0, "ffmpeg wants both sides even"
+    # Small enough already: left alone but for the even rule.
+    assert v.burn_scaled_size(480, 480) == (480, 480)
+    assert v.burn_scaled_size(0, 0) == (0, 0)
+
+
+def a_videos_size_is_read_off_ffmpegs_own_report():
+    """ffprobe is a second binary and a frozen build ships one, not two."""
+    said = (
+        "Input #0, mov,mp4,m4a,3gp,3g2,mj2, from 'x.mp4':\n"
+        "  Duration: 00:00:10.00, start: 0.000000, bitrate: 1234 kb/s\n"
+        "  Stream #0:0(und): Video: h264 (High), yuv420p, 1920x1080 "
+        "[SAR 1:1 DAR 16:9], 30 fps, 30 tbr\n"
+        "  Stream #0:1(und): Audio: aac, 48000 Hz, stereo\n")
+    assert v.video_frame_size(said) == (1920, 1080)
+    # A size-shaped token on a line that is not the video stream must not be
+    # read as one -- a title, a comment or a filename can carry anything.
+    assert v.video_frame_size(
+        "  Metadata:\n    title: 1920x1080 remux\n"
+        "  Stream #0:0: Audio: aac, 48000 Hz\n") == (0, 0)
+    assert v.video_frame_size("Duration: 00:00:10.00, bitrate: 1234 kb/s") \
+        == (0, 0)
+    assert v.video_frame_size("") == (0, 0)
+
+
+def the_extension_decides_which_decoder_runs():
+    """Not the content: Qt will happily read the first frame of some video
+    containers and then report no animation, which looks like a still picture
+    rather than like a file we cannot play."""
+    gif = os.path.join(_TMP, "two.gif")
+    open(gif, "wb").write(TINY_GIF)
+    src = v.burn_source(gif)
+    assert type(src).__name__ == "_ImageFrames", type(src).__name__
+    src.stop()
+    assert v.burn_source(os.path.join(_TMP, "nope.gif")) is None
+    assert v.burn_source("") is None
+    odd = os.path.join(_TMP, "thing.txt")
+    open(odd, "w").write("not a picture")
+    assert v.burn_source(odd) is None, "tried to decode a text file"
+
+
+def an_animated_picture_is_read_a_frame_at_a_time_on_its_own_clock():
+    """Each frame carries its own delay in the format, which is what makes a
+    GIF look right. Asking again before the next one is due has to be free --
+    this runs on the render thread, sixty times a second."""
+    gif = os.path.join(_TMP, "clock.gif")
+    open(gif, "wb").write(TINY_GIF)
+    src = v.burn_source(gif)
+    first = src.next(0.0)
+    assert first is not None and first.width() == 4, first
+    assert src.next(0.0) is None, "handed over a frame before it was due"
+    second = src.next(1e6)
+    assert second is not None, "never advanced to the next frame"
+    src.stop()
+    assert src.next(1e6) is None, "kept decoding after being stopped"
+
+
+def the_burnt_in_picture_comes_back_when_the_app_does():
+    """It is in the config, so it has to start on its own. Without this the
+    setting persisted, the panel showed the file, and nothing was ever burnt
+    in until somebody chose it again -- which reads as the whole feature being
+    broken rather than as one missing line. The arming sits in a method that
+    needs a GL context, so the shipped source is read instead of run."""
+    body = inspect.getsource(v.Renderer._load_libraries) \
+        if hasattr(v.Renderer, "_load_libraries") else ""
+    if "_req_burn" not in body:
+        body = "".join(inspect.getsource(f) for f in
+                       (v.Renderer.run, v.Renderer.__init__)
+                       if "_req_burn" in inspect.getsource(f))
+    whole = inspect.getsource(v.Renderer)
+    assert 'self._req_burn = self.burn_in()["path"]' in whole, \
+        "nothing arms the burn-in from the config at startup"
 
 
 for name, fn in list(globals().items()):
