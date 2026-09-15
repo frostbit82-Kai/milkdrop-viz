@@ -5,8 +5,9 @@ Store dashboard, the site's product page, and anywhere else. Keep it in sync
 rather than rewriting per store.
 
 **The positioning, in one line:** projectM's own player is free, well reviewed
-and plays the same presets. It does not help you find the good ones, keep a
-clip of them, or put them on your desktop. That is what this sells.
+and plays the same presets. It does not help you find the good ones, change
+them, run two at once, keep a clip, or put them on your desktop. That is what
+this sells.
 
 ---
 
@@ -26,11 +27,12 @@ does, projectM's own Steam listing included.
 
 > Ten thousand MilkDrop presets, and maybe forty you actually like. Rate them
 > as they play, search them by name, sort by rating, delete the duds for good,
-> then shuffle only the ones you kept. Record a clip of the good ones or run
-> them as your wallpaper. A visualizer that reacts to whatever your PC is
+> then shuffle only the ones you kept. Open any preset's own code and change
+> it, or run two at once and watch them blend. Record a clip, or set it as live
+> wallpaper behind your icons. A visualizer that reacts to whatever your PC is
 > playing, with a library that gets better instead of bigger.
 
-*(371 characters.)*
+*(442 characters.)*
 
 ## Description  (10,000 char max)
 
@@ -40,7 +42,8 @@ does, projectM's own Steam listing included.
 >
 > BomsAI Visualizer is built around that problem. It plays MilkDrop presets,
 > reacting to whatever is coming out of your speakers, and it gives you the one
-> thing a ten-thousand-preset folder needs: a way to keep score.
+> thing a ten-thousand-preset folder needs: a way to keep score. Then it gives
+> you the thing the folder cannot — a way to change what is in it.
 >
 > **Rate as you watch.** Every preset takes a rating from 0 to 10, set with a
 > keypress while it is on screen. No stopping, no dialog, no tagging session.
@@ -67,16 +70,61 @@ does, projectM's own Steam listing included.
 > and its picture is kept, taken from the frame that was actually on screen,
 > and shown beside its name from then on. There is no two-hour batch render
 > over your whole folder; the pictures that appear are of the presets you sat
-> through, which are the ones you were going to look for again.
+> through, which are the ones you were going to look for again. See a better
+> frame later and one key retakes the picture from what is in front of you.
+>
+> **Run two at once.** One key puts a second preset on screen, screened into
+> the first. Both are reacting to the same music and both keep advancing on
+> their own, so what you are watching is a combination that has never existed
+> before and will not come round again. Tab swaps which of the two everything
+> else is adjusting — rate one, lock one, edit one, while the other carries on.
+> How strongly the second one shows through is a setting, and so is how hard it
+> is made to work.
+>
+> **Open the preset's own code.** Presets are text, and this shows you the
+> text: the whole preset, syntax-coloured, with find and replace. Put the cursor
+> in any number and it builds you a slider for that number — shader constants
+> included — so you can feel what it does instead of guessing and re-reading.
+> Mash up takes one preset's warp shader, or its composite shader, or its motion,
+> or its shapes and waves, and drops it into the one you are watching. Shift
+> colours turns every colour in it the same way round the hue wheel. Break a
+> shader and the compiler's own complaint appears in a line under the editor,
+> with the line number it choked on, instead of the preset quietly rendering
+> with that stage missing. Revert puts any of it back; Save as… keeps it.
+>
+> **Or just move ten sliders.** Every preset also opens in a panel of ten —
+> zoom, rotation, warp, drift, trails, brightness, echo, wave size. Move one and
+> the visual changes while you watch it. Save the result under a new name and it
+> joins the library as its own preset. The sliders a preset animates itself are
+> greyed out, so you are never fighting its own code.
+>
+> **Swap its pictures.** A preset that draws with a photograph can draw with
+> yours instead. Pick the texture, pick your file, and it is that preset now —
+> and your file does not have to hold still. A GIF, an animated WebP or a video
+> keeps playing *inside* the preset, warped and echoed by the preset's own maths
+> as it goes. The original pack is never touched.
+>
+> **Lay your own picture over it.** A logo, a photo, anything: it sits over the
+> visuals and stays there while the presets change underneath. Still, spinning,
+> drifting, or pulsing to the beat, with size and opacity you set. That one can
+> move too — GIF, WebP or video. Up to sixteen at once, and they are still there
+> next time you open the app.
+>
+> **Or burn it into the preset instead.** The same picture can go *under* the
+> visuals rather than over them, where the preset's own warp and decay take hold
+> of it and drag it about. It comes out smeared and moving with the music rather
+> than sitting on top of it, which is the effect and not a limitation.
 >
 > **Keep a clip.** One key starts recording what is on screen; another stops
 > it. MP4 for a video — with the sound that was playing over it — or a GIF for
-> something to post. The presets that made you stop and stare are now something
-> you can send to somebody.
+> something to post. ffmpeg is included, so there is nothing to install and
+> nothing to put on your PATH. The presets that made you stop and stare are now
+> something you can send to somebody.
 >
 > **Put it on your desktop.** Wallpaper mode draws the visuals on the Windows
 > desktop, behind your icons, reacting to whatever you are playing. A tray icon
-> keeps the menu and your ratings a click away.
+> keeps the menu and your ratings a click away, and it can start that way when
+> you log in.
 >
 > **It knows when to stop.** Nothing is playing, or a game is full-screen in
 > front of it? The visuals pause and give the machine back. Sound returns and
@@ -107,34 +155,20 @@ does, projectM's own Steam listing included.
 > the public repository it comes from, unpacks it, and points the app at it.
 > One button on a fresh install.
 >
-> **Yours, offline, permanently.** No account. No sign-in. No licence server,
-> no update check, no telemetry, no crash reporting. It has never sent anything
-> anywhere and it never will. Your ratings and settings are files on your own
-> disk. Buy it once and it keeps working with the internet unplugged.
->
-> **Change the one you nearly like.** Every preset opens in a panel of ten
-> sliders — zoom, rotation, warp, drift, trails, brightness, echo, wave size.
-> Move one and the visual changes while you watch it. Save the result under a
-> new name and it joins the library as its own preset. The sliders a preset
-> animates itself are greyed out, so you are never fighting its own code.
->
-> **Swap its pictures.** A preset that draws with a photograph can draw with
-> yours instead. Pick the texture, pick your file, and it is that preset now.
-> The original pack is never touched.
->
-> **Lay your own picture over it.** A logo, a photo, anything: it sits over the
-> visuals and stays there while the presets change underneath. Still, spinning,
-> drifting, or pulsing to the beat, with size and opacity you set. Up to
-> sixteen at once, and they are still there next time you open the app.
->
 > **Your ratings are the part you cannot download again.** Everything else here
 > can be reinstalled; hours of deciding what you like cannot. Back up ratings
 > and collections to a zip in one action, and restore them on another machine.
 >
-> **Made to be lived with.** Rebindable keys for everything. Dark and light
-> themes, or follow Windows. Borderless mode. Preset locking when one is too
-> good to let rotate away. Adjustable beat sensitivity, mesh quality and frame
-> rate for the machine you actually have.
+> **Made to be lived with.** Rebindable keys for everything, and a right-click
+> menu you can trim to the entries you actually use. Dark and light themes, or
+> follow Windows. Borderless, always-on-top and fullscreen. Preset locking that
+> stops the timer without taking next and previous away. Adjustable beat
+> sensitivity, mesh quality and frame rate for the machine you actually have.
+>
+> **Yours, offline, permanently.** No account. No sign-in. No licence server,
+> no update check, no telemetry, no crash reporting. It has never sent anything
+> anywhere and it never will. Your ratings and settings are files on your own
+> disk. Buy it once and it keeps working with the internet unplugged.
 >
 > **About the presets.** They are not included, deliberately. The presets and
 > textures are the work of hundreds of artists who released them under their
@@ -143,28 +177,33 @@ does, projectM's own Steam listing included.
 > put them, and reads them from a folder you choose. You get the same library
 > either way — it just arrives with the credit pointing in the right direction.
 
+*(7968 characters.)*
+
 ## Feature bullets  (Microsoft Store — up to 20, 200 char each)
 
 1. Rate any preset 0–10 with a single keypress while it plays
 2. Search ten thousand presets by name as you type
 3. Sort a ten-thousand-preset library by your own rating
 4. Rated shuffle — play only the presets you actually liked
-5. Name a collection — "chill", "party" — and play only what is in it
-6. Delete every 0-rated preset in one action and never see them again
+5. Delete every 0-rated preset in one action and never see them again
+6. Name a collection — "chill", "party" — and play only what is in it
 7. Thumbnails build themselves from the presets you watch — no batch render
-8. Record what is on screen to MP4 with sound, or to a GIF you can post
-9. Desktop wallpaper mode, behind your icons, with a tray icon for the menu
-10. Pauses itself when the sound stops or a full-screen app is in front
-11. Doubles as a Windows screen saver, set up by the installer
-12. Ten sliders change the visual on screen — zoom, rotation, trails, brightness
-13. Save a preset you have changed under a new name, as its own preset
-14. Swap the picture a preset draws with for one of your own
-15. Lay your own picture over the visuals — spinning, drifting, or on the beat
-16. Back up ratings and collections to a zip and restore them anywhere
-17. Pick which monitor fullscreen and wallpaper mode use
-18. Visualises system audio: any player, any game, any browser tab
-19. Full MilkDrop 2 texture support — the good presets look right
+8. Run two presets at once, screened into each other, both reacting to the music
+9. Open any preset's own code and edit it — with a slider built for any number in it
+10. Mash two presets together: one's shader, the other's motion, in a click
+11. Ten sliders change the visual while you watch — zoom, rotation, trails, brightness
+12. Save a preset you have changed under a new name, as its own preset
+13. Full MilkDrop 2 texture support — and textures that move: GIF, WebP, video
+14. Lay your own picture over the visuals — spinning, drifting, or on the beat
+15. Or burn a moving picture into the preset, where its own warp takes hold of it
+16. Record to MP4 with the sound that was playing, or to a GIF — ffmpeg is included
+17. Desktop wallpaper mode behind your icons, with a tray icon for the menu
+18. Pauses itself when the sound stops or a full-screen app is in front
+19. Visualises system audio: Spotify, YouTube, a game, a browser tab — nothing to route
 20. No account, no sign-in, no telemetry — works fully offline, forever
+
+What came out to make room: picking which monitor fullscreen uses, and the
+zip backup. Both are still in the description; neither is why anyone buys.
 
 ## Search terms  (7 max)
 
@@ -174,13 +213,21 @@ does, projectM's own Steam listing included.
 (`winamp` dropped for `live wallpaper` now that wallpaper mode ships — it is a
 far larger search term and the one Wallpaper Engine's audience uses.)
 
+Unchanged for 2.1 on purpose. Editing a preset and running two at once are the
+two best reasons to buy this, and neither is a thing anyone types into a store
+search box — nobody is looking for "preset editor" who is not already here.
+These seven are where the traffic is; the new features earn their keep in the
+description and in shot 2 and shot 4, which is where a browsing buyer meets
+them.
+
 ## System requirements
 
 - Windows 10 version 1809 or later, 64-bit
 - A GPU with OpenGL 3.3 support (any card from roughly 2012 onward)
 - 4 GB RAM
 - ~200 MB installed, plus whatever your preset and texture folders take
-- Recording needs ffmpeg — on PATH, or dropped into the application folder
+- Nothing else to install: ffmpeg ships inside the installer, so recording works
+  on a machine that has never heard of it
 - Presets and textures are downloaded separately — the app will fetch a pack
 
 ## Age rating questionnaire — answer honestly
@@ -202,33 +249,36 @@ no ads, no in-app purchases, no gambling.
 - EULA: paste `installer/licenses/EULA.txt` into the store's own field.
   Complete — section 12 names Wisconsin.
 
-## Not yet in this listing — 2.1
+## What version this listing is for
 
-**The version being submitted is 2.1.0**, not 2.0.0 — the three 2026-09-13
-changes below are features, so the minor moved. Anywhere the copy ends up
-naming a number, that is the number.
+**2.1.4.** Both packages are built, verified against the artifact rather than
+the tree, and carry that number inside: `BomsAIVisualizer-2.1.4-win64-setup.exe`
+and `BomsAIVisualizer-2.1.4-linux-x86_64.tar.gz`. Anywhere the copy ends up
+naming a number, that is the number. The EULA already says so, and both build
+scripts refuse to run if it does not.
 
-**Every word above the screenshot list is 1.x copy.** Name, short description,
-description, feature bullets and search terms were all written before section
-A, and none of them mentions the Preset Studio, editing a preset's own text,
-shader compile errors being reported, or *Always on top*. The screenshots
-below have been brought up to 2.0; the copy has not. Deliberate — it is being
-written last, so it is written once — but it must not go to submission this
-way, because the headline feature of the version being submitted is currently
-invisible in the listing.
+Everything above was 1.x copy until 2026-09-15 and is now current. What went
+in, and why each one was worth the words:
 
-Three more things landed on 2026-09-13 that the copy has never mentioned, and
-two of them answer questions a buyer would actually ask:
+- **Two visuals at once**, because it is the only thing here no other MilkDrop
+  player does at all, and it photographs well — it is shot 2.
+- **The preset's own code**, because it is the answer to "why not just use
+  projectM's free player", and it had been shipping since 2.0 while the listing
+  said nothing about it.
+- **Pictures that move** — as an overlay, burnt into the preset, or swapped in
+  as one of its textures. Three places, one mechanism, and MilkDrop reads seven
+  still formats and nothing else, so every one of them is something the format
+  cannot do on its own.
+- **ffmpeg is bundled**, so the recording bullet no longer asks a paying
+  customer to go and install something.
+- **Locking stops the timer without taking next and previous away**, and **the
+  right-click menu can be trimmed** — both folded into "Made to be lived with"
+  rather than given their own paragraph.
 
-- **Locking a visual keeps it, without taking the controls away.** The timer
-  stops; next, previous and random still work. The 1.x bullet just says "preset
-  locking when one is too good to lose".
-- **Desktop wallpaper mode now works on Wayland**, through XWayland — measured
-  on GNOME. The listing has never said which Linux sessions can host it, and
-  the Store build is Windows, so this is a line for the *site*, not for here.
-- **The right-click menu can be trimmed.** Every entry can be switched off from
-  Customize, which is worth a clause somewhere near the keyboard-shortcut
-  bullet.
+Deliberately still not in here, because this listing is the *Store* listing and
+the Store build is Windows: that wallpaper mode works on Linux under X11 and on
+Wayland through XWayland, measured on GNOME and Cinnamon. That belongs on the
+site's product page, which says it.
 
 ## Screenshots to capture  (Microsoft Store wants 1366×768 or larger, up to 10)
 
@@ -243,28 +293,59 @@ actually looks like. A name-sorted browser is a lottery.
 Shoot these in order — they tell the story in the order the description does:
 
 1. A genuinely good preset, full frame, mid-track. This is the thumbnail.
-2. The same, different preset, showing texture-heavy work rendering properly.
+2. **Two visuals at once**, full frame — two presets screened into each other.
+   No other MilkDrop player does this, and it is the one shot that cannot be
+   mistaken for the free one. The Windows half already exists on the site as
+   `bomsai-software/src/assets/apps/milkdrop-visualizer/win-dual.webp`; shoot a
+   fresh one at Store resolution rather than upscaling that.
 3. The browser sorted by rating — the top of the list, all high scores, with
    thumbnails filled in. The clearest single picture of what this app is for.
-4. **The Preset Studio** — the Code tab open on a preset with a real shader,
-   syntax-coloured, and the red line under the box after breaking one on
-   purpose. This is 2.0's headline and the thing projectM's own free player
-   cannot do; the Linux version of this shot is
-   `bomsai-software/src/assets/apps/milkdrop-visualizer/code-error.webp`.
-5. Your own picture laid over a preset — the overlay tab open beside it.
+4. **The Code tab** open on a preset with a real shader, syntax-coloured, with
+   a slider built for one of its numbers underneath. This is the answer to
+   "why not the free player", and the site's version of this shot is
+   `bomsai-software/src/assets/apps/milkdrop-visualizer/win-code-editor.webp`.
+5. The overlay tab: the burn-in controls at the top and a picture of your own
+   listed below, with the preset visible beside it. Two features in one frame —
+   `win-overlay-panel.webp` on the site is the same shot at window size.
 6. The tweak sliders, mid-change, on a preset that is visibly responding.
 7. The search box with a name typed and the list narrowed.
 8. The Collections menu open, showing named sets.
 9. Wallpaper mode: the desktop, icons over the visuals, tray icon visible.
 10. Get presets, mid-download, progress bar visible.
 
-Settings was cut when the Preset Studio went in: the Store takes ten, and a
-folder-picker is the least persuasive of the eleven. Get presets stayed
-because this app ships no presets, so where they come from is the first
-question a buyer has.
+Settings was cut when the editor went in, and the second full-frame preset went
+when two-at-once took its slot: the Store takes ten, a folder-picker is the
+least persuasive of them, and one beautiful preset makes the point that two
+beautiful presets make twice.
+
+Get presets stayed because this app ships no presets, so where they come from
+is the first question a buyer has.
 
 A short recorded clip is also the best possible store video — the app now makes
 one of itself.
+
+**`store/screenshots/` was emptied on 2026-09-15, and they are not coming
+back** — the directory is gitignored, so those six PNGs were never in a commit
+and deleting them was final. They were shot on 2026-09-06 and not one of them
+could have gone to a store, which is worth writing down because the next set
+can fail the same four ways:
+
+- **The dialog in `06-photosensitivity-warning.png` said "MilkDrop
+  Visualizer".** They were taken the day before the rename. A screenshot
+  carries the old product name into the listing whose naming section exists to
+  keep it out.
+- **`03-sorted-by-rating.png` was not sorted by rating.** Every visible row
+  read 5/10 — an untouched library, where the rating column means nothing —
+  and no thumbnails, in the one picture that was meant to prove the feature.
+- **The names on screen in it were `phat_Phenethylamine`, `cortex meat`,
+  `buxom xuxum sluxtxphuxnx` and "i am only here to die slowly in pain there is
+  great peace in this surrender"** — under an age-rating questionnaire that
+  answers "no profanity".
+- The browser in them predates the tab row, the lock and the two rating
+  buttons, so it is not the window this version opens at all.
+
+Nothing is lost that the 2.1.4 build cannot produce again in an evening, and
+the ten above are what to shoot.
 
 ## Pricing — decided
 
@@ -291,24 +372,25 @@ discount, and it burns the one sale event you get.
 
 ---
 
-## ffmpeg — a decision still to make
+## ffmpeg — decided, and shipped
 
-Recording shells out to ffmpeg. Right now the app looks for it beside the
-executable first and on PATH second, and says so in the menu when there is
-none. Asking a paying customer to install ffmpeg is the weakest thing in the
-product.
+**Bundled, LGPL, since 2026-09-08.** `installer/build_windows.ps1` fetches
+`ffmpeg-master-latest-win64-lgpl.zip` from BtbN's builds once and keeps it at
+`installer/vendor/windows/ffmpeg.exe`; the setup carries it, and the app finds
+it beside the executable before it ever looks at PATH. Recording works on a
+machine that has never heard of ffmpeg, which is nearly all of them.
 
-Bundling it is the fix, and the licence is the only real question. **Ship an
-LGPL build, never a GPL one.** The GPL builds are the ones that carry libx264,
-and shipping GPL code inside a paid product is an argument nobody needs to
-have. An LGPL Windows build has `h264_mf` — H.264 through Media Foundation,
-hardware accelerated — which is as good as libx264 for this. The app already
-asks ffmpeg what encoders it has and picks libx264, then h264_mf, then mpeg4,
-so an LGPL build works with no code change.
+**It must stay an LGPL build, and the check is not "read the filename".** The
+GPL builds are the ones carrying libx264, and shipping GPL code inside a paid
+product is an argument nobody needs to have. What is verified on the package
+itself is that the bundled binary reports `--disable-libx264` and no
+`--enable-gpl` — recorded against every Windows package in PORTING.md. An LGPL
+build has `h264_mf`, which is H.264 through Media Foundation and hardware
+accelerated, and the app asks ffmpeg what it has and picks libx264, then
+`h264_mf`, then mpeg4 — so the LGPL build needed no code change at all.
 
-Roughly 40–80 MB depending on the build. That is the whole cost.
-
----
+The cost was ~110 MB in the setup, and it bought the deletion of the weakest
+sentence in the product.
 
 ## Naming — settled 2026-09-07
 
