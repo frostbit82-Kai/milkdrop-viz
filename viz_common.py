@@ -4107,6 +4107,15 @@ class SettingsDialog(QDialog):
         # says 628x476 for a form that needs 810x838, so it opened narrower
         # than the rows (a horizontal scrollbar it never needs) and shorter
         # than the screen had room for.
+        #
+        # And activate the layout before asking, or the answer is stale: an
+        # unactivated QFormLayout reports 782 here where the settled figure is
+        # 786, so the dialog opened four pixels short of its own rows and came
+        # up with a vertical scroll bar down every row of a dialog that fits.
+        # Measured on Windows 2026-09-15 -- scroll range 0..4, and re-asking
+        # after show() gives the larger number. ensurePolished() does not do
+        # it; only activate() does.
+        layout.activate()
         need = form.minimumSizeHint()
         m = outer.contentsMargins()
         wide = need.width() + m.left() + m.right() + \
@@ -4299,7 +4308,12 @@ class KeymapDialog(QDialog):
         # Table
         self._table = QTableWidget(len(ACTION_LABELS), 3)
         self._table.setHorizontalHeaderLabels(["Action", "Key", "Notes"])
-        self._table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
+        # Action takes what it needs and no more; Notes takes everything left.
+        # Both were Stretch, which splits the leftover EVENLY -- so widening
+        # the dialog for the notes fed half of every pixel to a column of
+        # short labels that was already big enough, and the notes stayed cut.
+        self._table.horizontalHeader().setSectionResizeMode(
+            0, QHeaderView.ResizeMode.ResizeToContents)
         self._table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.Fixed)
         self._table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeMode.Stretch)
         self._table.setColumnWidth(1, 130)
@@ -4346,6 +4360,39 @@ class KeymapDialog(QDialog):
         btns.accepted.connect(self.accept)
         btns.rejected.connect(self.reject)
         layout.addWidget(btns)
+
+        # Open wide enough for the notes column. 560 was a guess, and columns
+        # 0 and 2 are Stretch, so it split what was left evenly and gave each
+        # of them 179px against the 237 and 359 they ask for -- every note in
+        # the table clipped mid-word, including the lock one, which is the
+        # only place the app says that next and previous still work while a
+        # preset is locked. Measured rather than guessed, in whatever font
+        # this is running in; the column hints answer before the window
+        # exists, so this can size the dialog rather than correct it after.
+        #
+        # `frameWidth()` appears FOUR times on purpose -- twice for the frame
+        # itself, and twice more for the same width spent a second time.
+        # `dialog_qss` styles `QAbstractItemView`, which a QTableWidget is, so
+        # the sheet's `padding: 4px 6px` lands on the table and `frameWidth()`
+        # reads 7 rather than the style's 2; Qt then subtracts that padding
+        # again when it hands the stretch column what is left, so the sections
+        # come to 14px less than the viewport they sit in. Measured:
+        # viewport 726, sections 712, on a table whose frame the sheet is the
+        # only thing setting. Without this the widest note is short by the
+        # width of its last word, which is the whole reason for the line.
+        #
+        # ponytail: no cap against the screen. Every string in this table is
+        # the app's own, the widest total is ~800px, and the Store's smallest
+        # accepted screenshot is 1366 wide. If these notes ever become user
+        # text or get translated, cap it the way SettingsDialog does.
+        m = layout.contentsMargins()
+        self.resize(
+            self._table.sizeHintForColumn(0) + self._table.columnWidth(1)
+            + self._table.sizeHintForColumn(2)
+            + self._table.verticalScrollBar().sizeHint().width()
+            + 4 * self._table.frameWidth() + m.left() + m.right(),
+            self.height(),
+        )
 
     def eventFilter(self, obj, event):
         if obj is self._table and event.type() == QEvent.Type.KeyPress:

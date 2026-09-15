@@ -193,6 +193,27 @@ def reset_to_defaults_puts_a_cleared_row_back():
     assert dlg.get_keymaps()["snapshot"] == v.DEFAULT_KEYMAPS["snapshot"]
 
 
+def the_dialog_opens_wide_enough_for_its_own_notes():
+    """It used to open at a flat 560px with both text columns set to Stretch,
+    which splits the leftover EVENLY -- so the Notes column got 179px against
+    the 359 it asks for and every note in the table was cut off mid-word,
+    including the lock one, the only place the app says that next and
+    previous still work while a preset is locked.
+
+    Pixel-free: both sides of the comparison are measured in whatever font is
+    running, so the same assertion holds in Segoe UI (359px) and under the
+    offscreen fallback (787px). What it pins is that no column is narrower
+    than the text in it."""
+    dlg = _dialog()
+    dlg.show()
+    v.QApplication.processEvents()
+    table = dlg._table
+    for col, what in ((0, "Action"), (2, "Notes")):
+        assert table.columnWidth(col) >= table.sizeHintForColumn(col), \
+            f"{what} column is {table.columnWidth(col)}px for text needing " \
+            f"{table.sizeHintForColumn(col)}px -- it will be elided"
+
+
 # ── The handler this is all about ────────────────────────────────────────
 
 def an_unbound_action_matches_no_key():

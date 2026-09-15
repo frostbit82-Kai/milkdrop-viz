@@ -88,6 +88,25 @@ def the_dialog_fits_on_a_short_screen():
     assert dlg.findChild(v.QDialogButtonBox) is not None, "no button box"
 
 
+def the_dialog_measures_a_settled_layout():
+    """It sizes itself off the form's minimum hint, and an unactivated
+    QFormLayout under-reports that -- so the dialog opened shorter than its
+    own rows and came up with a vertical scroll bar it did not need, down
+    every row of a dialog that fits.
+
+    Pixel-free like the check above: what is pinned is that the number the
+    dialog read is the number the layout settles on, whatever the font makes
+    that. Unfixed it was 782 against 786 in Segoe UI and 711 against 719
+    under the offscreen fallback -- different gaps, same bug."""
+    _, dlg = cfg_and_dialog()
+    form = dlg.findChild(v.QScrollArea).widget()
+    as_built = form.minimumSizeHint().height()
+    form.layout().activate()
+    assert as_built == form.minimumSizeHint().height(), \
+        f"the dialog sized itself off a stale layout: {as_built} against " \
+        f"{form.minimumSizeHint().height()}"
+
+
 def a_key_absent_from_the_old_config_counts_as_changed():
     cfg = dict(DEFAULT_CONFIG)
     cfg.pop("theme", None)
