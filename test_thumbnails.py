@@ -248,7 +248,14 @@ def _write_thumb(path):
         f"(directory exists: {os.path.isdir(os.path.dirname(path))})")
 
 
-def the_browser_shows_a_cached_thumbnail_and_skips_the_rest():
+def the_browser_shows_a_cached_thumbnail_and_holds_the_column_for_the_rest():
+    """Once one row has a picture, every row has to reserve the same width.
+
+    Qt indents a row that has an icon and draws one without flush against the
+    edge, so a list where most presets are unwatched -- which is every fresh
+    library -- had its names zig-zagging in and out by 96px. The unwatched
+    rows get a transparent pixmap of the same size instead of nothing.
+    """
     path = thumb_path(NAME)
     _write_thumb(path)
     win = PresetPlaylistWindow(host=BrowserHost())
@@ -258,10 +265,47 @@ def the_browser_shows_a_cached_thumbnail_and_skips_the_rest():
     win._load_visible_icons()
     assert not win._list.item(0).icon().isNull(), \
         "the watched preset got no thumbnail"
-    assert win._list.item(1).icon().isNull(), \
-        "an unwatched preset was given an icon from nowhere"
     assert win._list.iconSize() == win.ICON_SIZE, \
         "the icon column never opened up for the thumbnail"
+
+    blank = win._list.item(1).icon()
+    assert not blank.isNull(), \
+        "an unwatched row reserved nothing, so its name sits 96px left of the rest"
+    assert blank.cacheKey() == win._blank_icon().cacheKey(), \
+        "the unwatched row got a picture from somewhere instead of the blank"
+    # What the eye actually notices: both rows offer the view the same width.
+    assert (win._list.item(0).icon().actualSize(win.ICON_SIZE)
+            == blank.actualSize(win.ICON_SIZE)), \
+        "the blank is not the size of a real thumbnail, so the names still step"
+    win.close()
+
+def growing_the_window_gives_the_new_rows_their_pictures():
+    """Only a scroll and a rebuild used to ask for them.
+
+    Drag the browser's bottom edge down and the rows that appear were never
+    handed to _load_visible_icons, so they sat blank -- and once the blank
+    placeholder went in, their names sat 96px left of every row above them.
+    Seen in the rig, not in a test, which is why there is one now.
+    """
+    path = thumb_path(NAME)
+    _write_thumb(path)
+
+    class Many(BrowserHost):
+        entries = [(NAME, 9)] + [(f"unwatched {i}", 5) for i in range(40)]
+    win = PresetPlaylistWindow(host=Many())
+    win.resize(420, 140)          # a couple of rows
+    win.show()
+    app.processEvents()
+    win._load_visible_icons()
+    short = sum(1 for i in range(win._list.count())
+                if not win._list.item(i).icon().isNull())
+
+    win.resize(420, 900)          # the drag
+    app.processEvents()
+    tall = sum(1 for i in range(win._list.count())
+               if not win._list.item(i).icon().isNull())
+    assert tall > short, \
+        f"growing the window revealed rows with no icon at all ({short} then {tall})"
     win.close()
 
 def a_thumbnail_below_an_unwatched_row_is_not_squashed_into_it():
@@ -371,8 +415,9 @@ for fn in (a_thumbnail_path_is_stable_and_filesystem_safe,
            a_new_preset_re_arms_the_gate,
            the_automatic_picture_can_be_turned_off,
            a_snapshot_jumps_every_gate_the_automatic_one_waits_for,
-           the_browser_shows_a_cached_thumbnail_and_skips_the_rest,
+           the_browser_shows_a_cached_thumbnail_and_holds_the_column_for_the_rest,
            a_picture_that_arrives_after_the_row_was_read_still_appears,
+           growing_the_window_gives_the_new_rows_their_pictures,
            turning_the_pictures_off_gives_the_rows_their_height_back,
            an_empty_cache_leaves_no_gutter,
            a_thumbnail_below_an_unwatched_row_is_not_squashed_into_it):

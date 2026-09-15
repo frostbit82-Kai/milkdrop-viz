@@ -18,7 +18,7 @@ import random
 from viz_common import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QListWidget,
     QListWidgetItem, QPushButton, QAbstractItemView, QMessageBox, QSizePolicy,
-    QLineEdit, QTimer, QIcon, QSize, Qt, browser_qss, thumb_path,
+    QLineEdit, QTimer, QIcon, QPixmap, QSize, Qt, browser_qss, thumb_path,
     QSlider, QTabWidget, QScrollArea, QFileDialog, QInputDialog, QFrame,
     PRESET_TWEAKS, preset_scalar, preset_driven_keys, patch_preset,
     preset_textures, texture_override_path, theme_colour,
@@ -1364,10 +1364,15 @@ class PresetPlaylistWindow(QWidget):
         # down a list of ten thousand rows.
         self._list.setIconSize(QSize(0, 0))
         self._list.itemDoubleClicked.connect(self._on_activate)
-        #: Rows whose thumbnail has already been looked for. Rows scroll into
-        #: view far more often than they change, and a miss is as worth
-        #: remembering as a hit -- most presets have no thumbnail yet.
+        #: Rows that already carry their real thumbnail. Rows scroll into view
+        #: far more often than they change. A miss is deliberately NOT
+        #: remembered: the picture is taken the first time a preset stays on
+        #: screen, so a row scrolled past today has one tomorrow, and the cost
+        #: of looking again is one stat() per visible row.
         self._iconed = set()
+        #: Reserves the thumbnail column on rows that have no picture yet, so
+        #: the names line up. Built once, on first use.
+        self._blank = None
         #: Whether the list draws them at all. Read before the first refresh:
         #: _load_visible_icons is what would otherwise have already put a
         #: thumbnail on every visible row.
@@ -1472,6 +1477,10 @@ class PresetPlaylistWindow(QWidget):
     def resizeEvent(self, e):
         super().resizeEvent(e)
         self._render_title()      # the elision budget just changed
+        # Taller window, more rows on screen. Only a scroll and a rebuild
+        # asked for their pictures before, so rows revealed by a drag of the
+        # bottom edge stayed blank until something else moved the list.
+        self._load_visible_icons()
 
     def _apply_filter(self):
         """Hide the rows that do not match the search box.
@@ -1492,13 +1501,28 @@ class PresetPlaylistWindow(QWidget):
                             else f"Preset Browser — {shown} of {total}")
         self._load_visible_icons()      # a different set of rows is on screen
 
+    def _blank_icon(self) -> QIcon:
+        """An empty picture the size of a real one.
+
+        Once any row on screen carries a thumbnail, every row has to reserve
+        the same width or the names zig-zag: Qt indents a row with an icon and
+        draws one without flush against the edge, and on a fresh library most
+        rows have no picture yet. One transparent pixmap, shared by every such
+        row.
+        """
+        if self._blank is None:
+            pm = QPixmap(self.ICON_SIZE)
+            pm.fill(Qt.GlobalColor.transparent)
+            self._blank = QIcon(pm)
+        return self._blank
+
     def _load_visible_icons(self):
         """Give the rows on screen their thumbnails, once each.
 
         Building ten thousand QIcons up front costs seconds and most of them
         are never looked at, so they load as rows scroll into view. Presets
-        with no thumbnail yet simply have none: the cache fills in as they are
-        watched, which is the point of it.
+        with no thumbnail yet get the blank one above, which holds the column
+        open until the real picture is taken.
         """
         if not self._thumbs_on:
             return
@@ -1510,16 +1534,25 @@ class PresetPlaylistWindow(QWidget):
         if last < 0:
             last = self._list.count() - 1
         entries = getattr(self, "_entries", ())
+        raised = False
         for i in range(first, min(last + 2, self._list.count())):
             if i in self._iconed or i >= len(entries):
                 continue
-            self._iconed.add(i)
             path = thumb_path(entries[i][0])
             if os.path.isfile(path):
+                self._iconed.add(i)
                 self._list.item(i).setIcon(QIcon(path))
                 if self._list.iconSize().width() == 0:
                     self._list.setIconSize(self.ICON_SIZE)
                     self._make_room_for_icons()
+                    raised = True
+            elif self._list.iconSize().width():
+                self._list.item(i).setIcon(self._blank_icon())
+        if raised:
+            # The rows above the first thumbnail were passed over while there
+            # was no column to reserve. One more pass, and it cannot raise
+            # again, so this recurses exactly once.
+            self._load_visible_icons()
 
     def _make_room_for_icons(self):
         """Give the rows the height a thumbnail needs.
@@ -1548,6 +1581,7 @@ class PresetPlaylistWindow(QWidget):
         """
         self._thumbs_on = bool(on)
         self._iconed.clear()
+        self._blank = None
         if on:
             self._load_visible_icons()
         else:
