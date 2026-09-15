@@ -1717,3 +1717,121 @@ reads 2.1.3. The frozen archive was inflated (688 zlib streams) and carries
 `_release_elsewhere`, `has no key` and `is already` — the strings the keymap
 fix added — with two never-written control strings absent. The 2.1.2 tarball
 and its extracted tree were deleted; one package per directory.
+
+### Windows caught up with 2.1.3, and driving it found one more — 2026-09-15
+
+The two Linux commits (`9b62fff`, `b7033ed`) landed here clean: all
+twenty-five suites pass on Windows, and the keymap fix is verified against
+this machine's own state rather than only in a suite. This repo's
+`keymaps.json` has the exact collision Linux described — `toggle_hard_cuts`
+on "c", which `snapshot` defaults to — so a source run now prints
+`[config] snapshot has no key: c is already toggle_hard_cuts in keymaps.json`
+and `snapshot` comes up unbound, with no duplicate live binding left in the
+table. The installed build's `keymaps.json` (`%APPDATA%\BomsAIVisualizer`)
+has no collision and keeps all four later defaults — `toggle_on_top` "t",
+`snapshot` "c", `toggle_dual` "2", `swap_focus` TAB.
+
+**The two 2.1.3 packages were not the same application, and the version
+number hid it.** The Windows `2.1.3-win64-setup.exe` was built from
+`4d43d43`, which predates both of Linux's fixes; the Linux tarball of the
+same version was built from `9b62fff`, which contains them. Nothing about
+either artifact says so. It is rebuilt from the clean tree now, but the
+general point is worth keeping: **a version bump has to happen before the
+second platform builds, not after**, or the number stops identifying the
+code. That is why the fix below took 2.1.4 rather than a second 2.1.3.
+
+#### The preset browser can be lost for the session
+
+Found by driving the shipped build rather than by reading it, and it is not
+Windows-only — the semantics are Qt's — but it needs a real window manager,
+so no offscreen suite could have produced it.
+
+| What the user does | What happens |
+| --- | --- |
+| Minimise the preset browser with its own titlebar button | `vis=True min=True` — Qt still considers the widget shown |
+| Pick "Preset browser" from the right-click menu | The toggle reads `isVisible()` as True, calls `hide()`. Window leaves the taskbar: `vis=False min=True` |
+| Pick it again. And again. And again | `vis=False min=True` every time. It never comes back |
+
+`isVisible()` is True for a minimised window because minimised is a window
+*state*, not a visibility — and `show()` restores a window to the state it
+still holds, which is the minimised one. So the entry appears to do nothing
+for the rest of the session. `App._toggle_browser` now asks
+`isVisible() and not isMinimized()`, and un-minimises with `showNormal()`
+**only** on that branch: `showNormal()` clears maximised as well, and an
+ordinary hide/show must not un-maximise a window somebody maximised.
+
+**That fix on its own hung the application** — this half *is* Windows-only,
+so Linux needs the `main.py` change and gets the rest for free
+(`keep_dialogs_above_visuals` returns None off win32). The hang is the entry
+already in CLAUDE.md wearing a different hat: the browser is owned by the SDL
+window, whose pump is the render thread, so un-minimising it hands activation
+across threads exactly the way closing it does. Measured against a source
+run — `showNormal()` never returned. The instrumented line before it printed
+and the one after it did not; the renderer stopped logging at the same
+instant; the window sat at `0,1004 160x28`. A probe with the same sequence
+but an owner on the *calling* thread restores correctly every time, which is
+what places the blame.
+
+So `_OwnedByVisuals` now watches `WindowStateChange` too and hands the owner
+back the moment a window is minimised — immediately, not deferred, for the
+same reason its `Close` branch is not deferred. **And that still was not
+enough**: clearing the owner of a freshly minimised window makes Windows show
+it again, Qt delivers a `Show` with `isMinimized()` still true, and the
+`Show` branch owned it straight back one line later. Caught by tagging each
+ownership change with the branch that asked for it:
+
+```
+_set_owner(show)      own=True  -> 1573716
+WindowStateChange min=True
+_set_owner(state-min) own=False -> 0
+Show min=True                              <- Windows re-shows it
+_set_owner(show)      own=True  -> 1573716 <- and the disown is undone
+```
+
+The refusal therefore went into `_set_owner`'s own guard
+(`or w.isMinimized()`), where no future branch can get round it. Verified end
+to end on a source run: opened at `647,175 626x659`, minimised to `owner=0`,
+and the menu entry brought it back at `647,175 626x659` with the owner
+restored, painting, following the current preset — and the render thread went
+on advancing.
+
+`test_browser_toggle.py` is new: it pulls `App._toggle_browser` out of
+`main.py` and the `_set_owner` guard out of `viz_common.py` with `ast`, runs
+them against fakes with Qt's semantics — including the already-broken
+hidden-and-minimised state anyone who hit this under 2.1.3 is sitting in —
+and asserts the filter disowns on the way down. All four mutations of the fix
+are caught (the guard, the disown, the old condition, plain `show()`).
+Twenty-six suites now.
+
+#### The animated-media claims, checked on Windows
+
+The site lists moving textures and video, so each was put through the real
+app on this machine rather than taken from the suites:
+
+| Claim | How it was checked | Result |
+| --- | --- | --- |
+| A GIF as an overlay, spinning | `gif-7.gif` added through Add a picture…, Movement → Spinning | On screen, rotating, over the preset |
+| An **MP4** as an overlay | `testdata/vidtest.mp4`, Movement → Still, five grabs 1.2 s apart cropped to the countdown digit | Four distinct hashes and the fifth equal to the first — it plays *and* loops |
+| A GIF **burnt into** the preset | `gif-1.gif` chosen as the burn-in, then turned Off on the same preset | A/B: magenta-and-yellow flower with it on, black-and-white radial with it off. The preset's warp is taking up the picture, which is the effect |
+
+WebP and animated TIFF are still unchecked on Windows for want of a file;
+live textures inside a preset are covered by `test_live_textures` and were
+not driven by hand.
+
+#### The site's Windows screenshots
+
+`bomsaisoftware.com/software/milkdrop-visualizer/` pairs each Linux shot
+with a `win-` counterpart. Three had no Windows half at all — **dual**,
+**code-editor** and **overlay-animated**, which are exactly the 2.1
+features — and three more were taken on 8 Sep and no longer show the
+product: the context menu had no "Add a second visual", the overlay tab had
+no burn-in section, and Settings had no second-visual rows. All nine
+(those six plus tweak-panel, search and key-bindings, which had grown a
+toolbar button and four actions) were retaken from the frozen build and left
+in `C:\Projects\pics for site` under the site's own `win-` names.
+
+`win-collections` was left alone deliberately: its alt text says "before any
+collection has been made", which is a real first-run state and pairs
+usefully with the populated Linux one. `win-browser-by-rating` was left
+alone too — the existing shot has ratings and thumbnails from real use, and
+a scripted session can only produce a thinner one.

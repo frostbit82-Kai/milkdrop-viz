@@ -113,8 +113,8 @@ the only way to see why a frozen build failed.
 `recording` (needs ffmpeg and ffprobe), `clip_audio` (same), `thumbnails`,
 `screensaver`, `wallpaper`, `packs`, `settings_diff`, `shuffle`, `theme`,
 `idle_pause`, `collections`, `backup`, `tweak`, `sprites`, `code_editor`,
-`vsync`, `audio_import`, `lock`, `menu`, `live_textures`, `dual`, `keymaps`.
-All twenty-five must pass before a release.
+`vsync`, `audio_import`, `lock`, `menu`, `live_textures`, `dual`, `keymaps`,
+`browser_toggle`. All twenty-six must pass before a release.
 
 **Reviewing by mutation.** Break the shipped code one way at a time, run every
 suite, and a green suite is a gap in the tests rather than a pass. Script it,
@@ -131,6 +131,13 @@ that make the results lies:
 - **A mutation that yields a `SyntaxError`** fails every suite and proves
   nothing. So does one whose original text does not appear exactly once:
   report that as SKIPPED rather than silently doing nothing.
+- **On Windows a rig that reads and writes text mode rewrites every line
+  ending.** Python's default `newline=None` translates `\n` to `os.linesep` on
+  write, so restoring the original string in a `finally` hands back a file that
+  is byte-for-byte different: 377 lines of `main.py` turned CRLF that way on
+  15 Sep 2026. Git normalises it on commit so the diff still looks right, which
+  is exactly why it goes unnoticed. Read and write the file as **bytes**, or
+  pass `newline=""`.
 
 There is no display in an agent shell and SDL needs one, so:
 
@@ -473,6 +480,52 @@ There is no display in an agent shell and SDL needs one, so:
   **It reproduced 3/3 by hand and 0/20 scripted**, because it needs the render
   thread to be inside a slow frame at the instant of the close -- so do not
   read a run that did not hang as evidence the hazard is gone.
+
+- **A minimised window is still `isVisible()`, so a show/hide toggle throws it
+  away.** 2026-09-15, found by driving the shipped 2.1.3 build on Windows.
+  Minimised is a window *state*, not a visibility, so `QWidget.isVisible()`
+  answers True for a window sitting in the taskbar. `App._toggle_browser` read
+  that as "showing" and called `hide()`; the window then left the taskbar
+  **still carrying `WindowMinimized`**, and every later pick of the menu entry
+  called `show()`, which restores a window to the state it still holds -- the
+  minimised one. Measured: minimise the preset browser with its own titlebar
+  button, pick "Preset browser" three more times, and the window reads
+  `vis=False min=True` every time. The browser is gone for the rest of the
+  session and the menu entry appears to do nothing. Not Windows-only -- the
+  semantics are Qt's -- but only a real window manager can produce the state,
+  so no offscreen suite could have seen it. The toggle now asks
+  `isVisible() and not isMinimized()`, and un-minimises with `showNormal()`
+  **only** on that branch, because `showNormal()` clears maximised as well and
+  an ordinary hide/show must not un-maximise a window the user maximised.
+  `test_browser_toggle.py` runs the shipped method against a fake with Qt's
+  semantics, including the already-broken hidden-and-minimised state, which is
+  what anyone who hit this under 2.1.3 is sitting in. **Any other
+  show/hide toggle over a reused top-level window needs the same two lines.**
+
+  **And that fix on its own hung the application, because un-minimising an
+  owned window is as dangerous as closing one.** Same mechanism as the entry
+  above: the browser's owner is the SDL window, whose pump is the render
+  thread, and Windows hands activation back to the owner synchronously.
+  Measured -- with the owner still set, `showNormal()` **never returned**: the
+  Qt thread stopped inside it, the render thread stopped advancing presets,
+  and the window was left at the iconic placeholder rectangle (`0,1004
+  160x28`, a title bar and no content, still there seconds later). The same
+  sequence against a probe whose owner is on the *calling* thread restores
+  correctly every time, which is what puts the blame on the ownership rather
+  than on Qt. `_OwnedByVisuals` now also watches `WindowStateChange` and hands
+  the owner back the moment a window is minimised -- immediately, not
+  deferred, for the same reason the `Close` branch is not deferred.
+
+  **The disown alone is not enough either, and this is the part that looks
+  like nothing is happening.** Clearing the owner of a freshly minimised
+  window makes Windows show it again, so Qt delivers a **`Show` while
+  `isMinimized()` is still true** -- and the `Show` branch owned it straight
+  back, one line later, every time. The refusal therefore lives in
+  `_set_owner`'s own guard (`or w.isMinimized()`) rather than at the call
+  sites, so no future branch can reintroduce it. Read the ownership off the
+  live process (`GetWindowLongPtrW(hwnd, GWLP_HWNDPARENT)`) before believing
+  any of this; the sequence that settled it was one log line per own and
+  disown, tagged with which branch asked.
 
 - **A bare PyOpenGL call on a teardown path is a Windows-only crash.**
   PyOpenGL resolves an entry point on first use and raises

@@ -267,13 +267,35 @@ class App:
         if self._browser is None:
             from preset_browser import PresetPlaylistWindow
             self._browser = PresetPlaylistWindow(host=self._renderer)
-        if self._browser.isVisible():
+        # isVisible() is True for a MINIMISED window -- minimised is a window
+        # state, not a visibility -- so a minimised browser used to read as
+        # "showing" and get hide()den. It then left the taskbar still carrying
+        # WindowMinimized, and every later pick show()ed it straight back into
+        # that state, which puts nothing on screen. Measured on Windows
+        # 2026-09-15 by driving the shipped build: minimise the browser with
+        # its own button, pick "Preset browser" three more times, and the
+        # window reads vis=False min=True every time -- gone for the rest of
+        # the session, with the menu entry apparently doing nothing.
+        if self._browser.isVisible() and not self._browser.isMinimized():
             self._browser.hide()
         else:
             # The window is built once and reused, so a theme changed since
             # then would leave it in the old one.
             self._browser.setStyleSheet(browser_qss())
-            self._browser.show()
+            # showNormal() rather than show() for a minimised window: show()
+            # restores it to the state it still holds, and that is the
+            # minimised one. Only in that branch, so an ordinary hide/show
+            # leaves a window the user maximised maximised.
+            #
+            # On Windows the window has already given its native owner back by
+            # the time this runs -- _OwnedByVisuals drops it on the way down --
+            # because un-minimising an owned window hands activation to the
+            # owner's thread, which here is the render thread. With the owner
+            # still on, this call does not return.
+            if self._browser.isMinimized():
+                self._browser.showNormal()
+            else:
+                self._browser.show()
             self._browser.raise_()
             self._browser.activateWindow()
 

@@ -1261,8 +1261,14 @@ def get_preset_rating(ratings: dict, name: str) -> int:
 
 def set_preset_rating(ratings: dict, name: str, value: int) -> int:
     """Clamp to 0-10, return new value. Rating 0 = excluded from random."""
-    # ponytail: skip synchronous save here; ratings persisted on app exit instead.
-    # Avoids blocking GUI on every rating change (was causing stutter).
+    # ponytail: this touches the dict and nothing else -- the file write is the
+    # caller's, so a batch (delete-0*, reset-all) costs one write rather than
+    # one per preset. Every caller does write, straight away: _rate_current,
+    # reset_all_ratings and the browser's rating buttons all call
+    # _save_ratings on the next line, so a rating survives a force-quit.
+    # This used to say ratings were "persisted on app exit instead", which was
+    # never true of any caller and would have read as a licence to drop one of
+    # those saves.
     value = max(0, min(10, value))
     ratings[name] = value
     return value
@@ -3581,6 +3587,27 @@ class _OwnedByVisuals(QObject):
             return False
         if event.type() == QEvent.Type.Show:
             QTimer.singleShot(0, lambda w=obj: self._set_owner(w, True))
+        elif event.type() == QEvent.Type.WindowStateChange:
+            # Minimising is the other way an owned window has to talk to its
+            # owner's thread, and un-minimising one is as dangerous as closing
+            # it: Windows hands activation back to the owner synchronously,
+            # and the owner's pump is the render thread. Measured 15 Sep 2026
+            # with the owner left on -- `showNormal()` on the preset browser
+            # never returned. The Qt thread stopped inside it, the render
+            # thread stopped advancing presets, and the window was left at the
+            # iconic placeholder rectangle (0,1004 160x28: a title bar and no
+            # content). The same sequence against a probe whose owner is on
+            # the calling thread restores correctly, which is what places the
+            # blame on the ownership rather than on Qt.
+            #
+            # So the window gives the owner back on the way down, and takes it
+            # again on the way up -- deferred, for the same reason `Show` is.
+            # Nothing is lost while it is minimised: there are no visuals to
+            # be dropped behind.
+            if obj.isMinimized():
+                self._set_owner(obj, False)
+            else:
+                QTimer.singleShot(0, lambda w=obj: self._set_owner(w, True))
         elif event.type() == QEvent.Type.Close:
             # Straight away, NOT deferred: this has to happen while the window
             # is still up. Measured -- on accept() the order is
@@ -3609,14 +3636,20 @@ class _OwnedByVisuals(QObject):
         across two dumps ten seconds apart.
 
         Setting the owner is safe (it is one call on our own window, and the
-        owner's thread is not consulted); it is the *close* that is not. So
-        the relationship exists for exactly as long as it is useful -- while
-        the dialog is up and could be clicked behind the visuals -- and is
-        gone before the dangerous call.
+        owner's thread is not consulted); it is the calls that make Windows
+        *move activation* that are not, and there are two of them -- closing
+        an owned window and un-minimising one. So the relationship exists for
+        exactly as long as it is useful -- while the dialog is up and could be
+        clicked behind the visuals -- and is gone before either.
         """
         hwnd = getattr(self._host, "_native_handle", None)
-        if own and (not hwnd or not w.isVisible()):
-            return                 # no SDL window yet, or already dismissed
+        # A minimised window must not be owned, and the check belongs here
+        # rather than at each caller: clearing the owner of a window that has
+        # just been minimised makes Windows show it again, Qt reports a Show,
+        # and the Show branch owned it straight back. Measured 15 Sep 2026 --
+        # `Show min=True` one line after the disown, every time.
+        if own and (not hwnd or not w.isVisible() or w.isMinimized()):
+            return                 # no SDL window yet, minimised, or dismissed
         try:
             u = _ctypes.windll.user32
             u.SetWindowLongPtrW.restype  = _ctypes.c_void_p
