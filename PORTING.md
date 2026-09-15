@@ -1812,11 +1812,17 @@ app on this machine rather than taken from the suites:
 | --- | --- | --- |
 | A GIF as an overlay, spinning | `gif-7.gif` added through Add a picture…, Movement → Spinning | On screen, rotating, over the preset |
 | An **MP4** as an overlay | `testdata/vidtest.mp4`, Movement → Still, five grabs 1.2 s apart cropped to the countdown digit | Four distinct hashes and the fifth equal to the first — it plays *and* loops |
+| An animated **WebP** as an overlay | `gif-3.gif` re-encoded to `webp_anim` 500x281 with the bundled ffmpeg, five grabs 1.1 s apart cropped well inside the opaque overlay rectangle | Five distinct hashes |
 | A GIF **burnt into** the preset | `gif-1.gif` chosen as the burn-in, then turned Off on the same preset | A/B: magenta-and-yellow flower with it on, black-and-white radial with it off. The preset's warp is taking up the picture, which is the effect |
 
-WebP and animated TIFF are still unchecked on Windows for want of a file;
-live textures inside a preset are covered by `test_live_textures` and were
-not driven by hand.
+`.apng`, `.tif` and `.svg` are in `LIVE_IMAGE_EXTENSIONS` beside `.webp` and
+go through the same `QImageReader` path, which is the one now exercised, but
+none of the three was driven for want of a file. Live textures *inside* a
+preset are covered by `test_live_textures` and were not driven by hand
+either. The seven GIFs used here are the user's own, in `C:\Projects\gif
+images` — the texture pack's only animated files are a dodecahedron on an
+opaque white background, a 32px dark blob, and a static optical illusion, and
+the first of those puts a white box on screen that reads as a defect.
 
 #### The site's Windows screenshots
 
@@ -1835,3 +1841,21 @@ collection has been made", which is a real first-run state and pairs
 usefully with the populated Linux one. `win-browser-by-rating` was left
 alone too — the existing shot has ratings and thumbnails from real use, and
 a scripted session can only produce a thinner one.
+
+**`BomsAIVisualizer-2.1.4-win64-setup.exe`**, 78.4 MB, sha256
+`afe16d4c0f4ca5c654a16af0c0f689763bae6aa4036539db3554c52dc44eb9af`. Built
+from the clean tree at `f3d0d13`; `VERSION` in the portable tree reads 2.1.4
+and the bundled EULA agrees. The frozen exe was inflated (691 zlib streams)
+and carries `isMinimized`, `showNormal` and `WindowStateChange` — the fix
+adds no new string literals, so what is searched for is the attribute names,
+which marshal into the code objects' `co_names` — plus `has no key` and
+`_release_elsewhere` from Linux's keymap work, with two never-written control
+names absent. Smoke-tested from the portable tree: it renders (two grabs 1.5 s
+apart differ), the minimise round restores at `647,175 626x659` with the
+owner back, and the process is responding afterwards. The 2.1.3 exe and its
+extracted tree were deleted; one package per directory.
+
+**Still not verified: the Inno installer itself.** Running it trips UAC and
+there is no non-interactive elevation here, so what is checked is the payload
+through the portable tree, not a fresh install, its shortcuts, or the
+screensaver registration. Unchanged from every previous Windows package.
