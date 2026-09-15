@@ -1860,6 +1860,66 @@ there is no non-interactive elevation here, so what is checked is the payload
 through the portable tree, not a fresh install, its shortcuts, or the
 screensaver registration. Unchanged from every previous Windows package.
 
+### 2.1.5 — a polish pass found one a buyer could be stopped by — 2026-09-15
+
+Three fixes and a clean-up, none of them on Windows-only ground, so there is
+nothing to port: Windows needs a rebuild at this number and no code changes.
+
+- **The Settings dialog could not be made shorter than about 860px.** A
+  `QFormLayout` set straight on a `QDialog` makes the form's height the
+  window's minimum, and a window manager then refuses to shrink it — so on a
+  1366x768 laptop, the smallest screen the Microsoft Store accepts a
+  screenshot at, OK and Cancel sat below the bottom edge with the preset
+  folder a new install has to set inside the dialog they could not finish.
+  Rows in a `QScrollArea`, buttons outside it, and the window sized off the
+  form because a scroll area's own size hint ignores its widget. `84c2c7e`.
+- **Preset names in the browser stepped 96px left and right.** Qt indents a
+  row that carries an icon and draws one without it flush against the edge,
+  and most presets in a fresh library have no thumbnail yet. Rows without one
+  now hold a shared transparent pixmap. Two smaller things fell out of it: a
+  thumbnail taken after you scrolled past its row never appeared, and rows
+  revealed by dragging the window taller were never asked for pictures at all.
+  `394725b`.
+- **A recording that lost its sound said nothing.** `write_audio` swallowed
+  every wave error, so a full disk produced a silent clip with nothing in the
+  log. `79115fc`.
+- Dead bindings removed and the stale `store/demo.mp4` deleted. `192c70a`.
+
+All three were found by driving the shipped build under xfwm4 in Xephyr, not
+by reading code. CLAUDE.md carries what each one taught.
+
+**`BomsAIVisualizer-2.1.5-linux-x86_64.tar.gz`**, 86 MB, sha256
+`afc4fb5d80e50edc0f8e62a8024a3b22fc24efbcec42022347ffdb078a6885ec`. Built in
+`almalinux:9` from the clean tree at `79115fc`; highest glibc symbol required
+is **GLIBC_2.34**, unchanged. `VERSION` inside reads 2.1.5 and the bundled
+EULA agrees. The frozen archive was inflated (668 zlib streams out of the
+executable — the app's own modules are in the PKG appended to it, *not* in
+`_internal`, so a byte search of the unpacked directory finds nothing) and
+carries `_blank_icon`, `_screen_height`, `_load_visible_icons`,
+`setWidgetResizable` and the string `sound stopped`. Three never-written
+control names are absent, one of them `_fit_to_screen` — a method that existed
+in an intermediate draft of this same session's code and was renamed before
+the commit, so its absence proves the build is the final tree and not a stale
+one. The 2.1.4 tarball was deleted; one package per directory.
+
+**Run twice in stock `ubuntu:24.04`, and the container needs a display.** The
+2.1.4 entry above does not say so and it matters:
+
+- `--help` **exits 0** with the usage text and the `sounddevice unavailable`
+  line, on a container with only `libgl1 libglib2.0-0t64 libegl1`. Interpreter
+  up, bundle's libraries resolving.
+- A plain start is **still running when `timeout` kills it at 20 s — exit
+  124**, with nothing worse than the `sounddevice` line and the fontconfig
+  warning a bare container always gives. This one needs `libxcb-cursor0` and
+  `libxkbcommon-x11-0` on top, and the host's X socket passed in
+  (`--net=host -e DISPLAY=:0 -v /tmp/.X11-unix:/tmp/.X11-unix:ro` plus the
+  Xauthority). Without a display it aborts with **134** on `qt.qpa.xcb: could
+  not connect to display`, which reads exactly like a crash in the build and
+  is not one — an hour went into that today.
+
+Take the app's own status either way. A piped run reports the *last command in
+the pipe*.
+
 ### Linux caught up with 2.1.4 — 2026-09-15
 
 Nothing to port: `f3d0d13` fixed both halves of the minimised-browser bug in

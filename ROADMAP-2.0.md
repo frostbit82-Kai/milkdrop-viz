@@ -9,7 +9,8 @@ headline list is either already here or lives inside libprojectM's renderer,
 where we are not going.
 
 **VERSION is 2.0.0 as of 2026-09-09** — 2.1.0 as of 2026-09-13, for three
-features that arrived after a few days of using 2.0.0; see PORTING.md. The
+features that arrived after a few days of using 2.0.0, and **2.1.5 as of
+2026-09-15**; see PORTING.md for every number in between and what moved it. The
 gate for 2.0 was the whole of section A, and the highlighter was the last of
 it. The Inno Setup `AppId` GUID does not change
 with it — that GUID is what makes the installer an upgrade rather than a second
@@ -149,7 +150,19 @@ Last in the section because it is the only part with a parser in it.
 
 ---
 
-## B. Video as a source
+## B. Video as a source — **done**, `b186f9c` and `6cdfc41`
+
+Shipped in three places rather than one, all off the same decode: burnt into
+the preset (`projectm_opengl_burn_texture`, as planned below), laid over the
+render as a sprite, and answered for by name when a preset asks for a texture
+libprojectM's own scanner cannot read. GIF, animated WebP and video in all
+three. The per-frame upload cost that the plan below calls the whole risk did
+not bite — `LIVE_MAX_TEXTURES` caps how many run at once, and the frames are
+uploaded with `glTexSubImage2D` into a texture projectM is already holding
+rather than a new one each time. The rest of this section is the plan as it
+was written; CLAUDE.md has what was actually learned, including the
+`@warning` in projectM's public header that says the opposite of what the
+call does.
 
 `projectm_opengl_burn_texture` draws any GL texture onto the active preset's
 main texture — which is the motion feedback buffer, so the preset then warps and
@@ -216,6 +229,12 @@ Not features. Things believed to work that nobody has run.
 A1, then A2. Those two are the release. A3 and A4 are cheap once the editor is
 there; A5 only if the splitter's round-trip test comes out clean. C1 done.
 B after A, because it is the one item that can cost frame rate. C2 last, or never.
+
+**Everything on this page is done except two things**, as of 2026-09-15:
+
+- **C2, spanning multiple monitors.** Still "last, or never".
+- **D's microphone.** Needs a person and a headset; nothing here can stand in
+  for it.
 
 D's Bluetooth half is done. What is left of it needs a chair and a microphone.
 
