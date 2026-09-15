@@ -48,6 +48,12 @@ PrivilegesRequired=admin
 LicenseFile={#StageDir}\licenses\EULA.txt
 InfoAfterFile={#StageDir}\README.txt
 DisableProgramGroupPage=yes
+; Inno remembers the group from the previous install, so without this an
+; upgrade from before the 2026-09-07 rename goes on writing its shortcuts into
+; a Start Menu folder still called MilkDrop Visualizer. The install directory
+; is deliberately NOT moved the same way: UsePreviousAppDir stays on, because
+; a new directory would orphan the old one with the uninstaller inside it.
+UsePreviousGroup=no
 
 [Languages]
 Name: "english"; MessagesFile: "compiler:Default.isl"
@@ -55,6 +61,26 @@ Name: "english"; MessagesFile: "compiler:Default.isl"
 [Tasks]
 Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{cm:AdditionalIcons}"; Flags: unchecked
 Name: "screensaver"; Description: "Use {#AppName} as the Windows screen saver"; GroupDescription: "Optional:"; Flags: unchecked
+
+[InstallDelete]
+; What the rename left behind. The AppId never changes -- that is what makes an
+; upgrade replace the old install rather than sit beside it -- but Inno only
+; removes what it is installing now, under the names it is installing now, so
+; everything carrying the old name survives an upgrade untouched. Measured on
+; this machine, 2026-09-15: a dead 5.6 MB MilkDropVisualizer.exe beside the new
+; executable, and FOUR shortcuts in one Start Menu group, two of them for a
+; product that no longer exists and one of those pointing at that dead exe.
+;
+; This section runs before the new files are laid down, so the new group is
+; written afterwards and is not caught by its own clean-up.
+Type: files; Name: "{app}\app\MilkDropVisualizer.exe"
+Type: files; Name: "{app}\app\MilkDropVisualizer.scr"
+Type: files; Name: "{autoprograms}\MilkDrop Visualizer\MilkDrop Visualizer.lnk"
+Type: files; Name: "{autoprograms}\MilkDrop Visualizer\Uninstall MilkDrop Visualizer.lnk"
+Type: files; Name: "{autoprograms}\MilkDrop Visualizer\BomsAI Visualizer.lnk"
+Type: files; Name: "{autoprograms}\MilkDrop Visualizer\Uninstall BomsAI Visualizer.lnk"
+Type: dirifempty; Name: "{autoprograms}\MilkDrop Visualizer"
+Type: files; Name: "{autodesktop}\MilkDrop Visualizer.lnk"
 
 [Files]
 Source: "{#StageDir}\app\*"; DestDir: "{app}\app"; Flags: ignoreversion recursesubdirs createallsubdirs

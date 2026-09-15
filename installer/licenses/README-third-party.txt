@@ -24,9 +24,17 @@ FFmpeg — LGPL-3.0 (an LGPL build; no GPL components)
     https://git.ffmpeg.org/ffmpeg.git ; replacing ffmpeg.exe with your own
     LGPL build of the same version is a matter of swapping that file.
 
+PyAudioWPatch — Apache-2.0  (Windows only)
+    PyAudioWPatch-Apache-2.0.txt
+    The Windows capture backend: a fork of PyAudio carrying the WASAPI
+    loopback support PyAudio itself does not have. It brings its own build of
+    PortAudio with it, which is where PortAudio comes from on Windows —
+    sounddevice is the Linux route, not this one. Shipped as
+    _portaudiowpatch.pyd inside the application's _internal directory.
+
 SDL2 — zlib licence
 PyOpenGL — BSD
-PortAudio (via sounddevice) — MIT
+PortAudio — MIT  (via sounddevice on Linux, via PyAudioWPatch on Windows)
 NumPy — BSD
 
 Presets and textures are NOT part of this package. They are the work of

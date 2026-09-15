@@ -67,11 +67,15 @@ CONTROLS
     r                 random preset
     f  or  F11        fullscreen        (double-click also works)
     b                 borderless window
+    t                 keep the window above other windows
     F9                start / stop recording a clip
     escape            quit
     + / -             rate the current preset up or down
     x                 exclude this one (rate it 0) and move on
+    c                 snapshot this preset for the browser
     d                 desktop wallpaper mode on / off (X11 sessions)
+    2                 show a second preset over the first
+    tab               with two showing, adjust the other one
     h                 hard cuts on/off
     m                 shuffle the playlist order on / off
     scroll lock       lock the current preset

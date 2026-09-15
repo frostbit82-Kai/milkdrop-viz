@@ -38,9 +38,15 @@ CONTROLS
     r                 random preset
     f  or  F11        fullscreen        (double-click also works)
     b                 borderless window
+    t                 keep the window above other windows
     F9                start / stop recording a clip
     escape            quit
     + / -             rate the current preset up or down
+    x                 exclude this one (rate it 0) and move on
+    c                 snapshot this preset for the browser
+    d                 desktop wallpaper mode on / off
+    2                 show a second preset over the first
+    tab               with two showing, adjust the other one
     h                 hard cuts on/off
     m                 shuffle the playlist order on / off
     scroll lock       lock the current preset
@@ -63,12 +69,45 @@ second each is two hours, and the pictures worth having are of the presets you
 actually sat through. A fresh install has none and fills in as you use it.
 
 
+TWO AT ONCE
+-----------
+
+Press 2, or right-click -> Add a second visual, to run a second preset over
+the first. Tab switches which of the two everything else acts on -- next,
+previous, the browser, the rating -- so you can pick both independently, and
+Settings carries the strength of the blend and the quality the second one
+renders at. It costs a second full render, so the second is set to low quality
+by default.
+
+
+CHANGING A PRESET
+-----------------
+
+The panel button at the right of the preset browser's toolbar opens four tabs
+for the preset on screen:
+
+    Tweak       sliders over the preset's own numbers -- zoom, rotation,
+                warp, brightness. A slider is greyed when the preset's code
+                overwrites that value every frame, which about half of them do.
+    Code        the preset's text, with search and replace, a slider for any
+                number you select, a per-frame line you can add, a colour
+                shift, and a mash-up that takes another preset's shaders,
+                motion, or shapes and waves.
+    Textures    swap a picture the preset samples for one of your own.
+    Overlay     burn a GIF or a video into the preset so its own warp takes
+                hold of it, and lay your own pictures over the top.
+
+Nothing here writes to your library. Changes are live only until Save as...,
+which writes a new preset beside the original and leaves it alone; Revert puts
+the preset back the way it came.
+
+
 RECORDING
 ---------
 
 F9 starts and stops a recording; the right-click menu offers MP4 or GIF and a
-shortcut to the folder they land in. Clips are silent -- only the visuals are
-captured -- and are written to:
+shortcut to the folder they land in. An MP4 carries the sound that drove it,
+captured off the same output the visuals are reacting to. Clips are written to:
 
     %LOCALAPPDATA%\BomsAIVisualizer\clips
 
@@ -81,7 +120,9 @@ FULLSCREEN AND MULTIPLE MONITORS
 --------------------------------
 
 With more than one monitor connected, the right-click menu gains a Fullscreen
-display picker. "Follow the window" is the default and behaves as before.
+display picker. The default, "Follow the window", fills whichever monitor the
+window is on when you go fullscreen; naming one instead always uses that one,
+wherever the window happens to be.
 
 
 SCREEN SAVER
