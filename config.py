@@ -11,17 +11,12 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent))
 from viz_common import (
     APP_SLUG,
-    QUALITY_MESH,
-    DEFAULT_KEYMAPS,
     load_config_from,
     save_config_to,
     load_ratings_from,
     save_ratings_to,
     load_keymaps_from,
     save_keymaps_to,
-    get_preset_rating,
-    set_preset_rating,
-    is_excluded,
 )
 
 

@@ -26,7 +26,7 @@ from viz_common import (
     QPlainTextEdit, QShortcut, QKeySequence, QFontDatabase,
     shift_preset_colours, add_per_frame_line, mashup_preset, QTextCursor,
     MilkHighlighter, number_span_at, splice, format_like, slider_range,
-    number_label, BURN_EXTENSIONS, BURN_IMAGE_EXTENSIONS, PICTURE_EXTENSIONS,
+    number_label, BURN_EXTENSIONS, PICTURE_EXTENSIONS,
 )
 
 #: The file dialog filter for anything that can stand in as a picture. Wider

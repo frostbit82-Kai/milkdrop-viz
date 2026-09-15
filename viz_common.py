@@ -883,7 +883,7 @@ class AudioCapture:
         self._follow_thread.start()
 
     def _stop_follow(self):
-        evt, thread = self._follow_stop, self._follow_thread
+        evt = self._follow_stop
         self._follow_stop = self._follow_thread = None
         if evt:
             evt.set()
@@ -989,11 +989,6 @@ class AudioCapture:
             self.start()
 
 # ─── ipc_reader ───────────────────────────────────────────────────────────────
-
-import sys
-
-logger_ipc = logging.getLogger(__name__)
-
 
 class IPCReader(threading.Thread):
     def __init__(self, renderer):
@@ -7535,7 +7530,7 @@ from sdl2 import (
     SDL_GL_CONTEXT_MAJOR_VERSION,
     SDL_GL_CONTEXT_MINOR_VERSION,
 )
-from OpenGL.GL import (glViewport, glClear, GL_COLOR_BUFFER_BIT,
+from OpenGL.GL import (glViewport,
                        glReadPixels, glPixelStorei, GL_PACK_ALIGNMENT,
                        GL_RGB, GL_UNSIGNED_BYTE,
                        glGenTextures, glDeleteTextures, glBindTexture,

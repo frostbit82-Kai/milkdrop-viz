@@ -31,12 +31,10 @@ if sys.platform.startswith("linux"):
     os.environ.setdefault("SDL_VIDEODRIVER", "x11")
     os.environ.setdefault("PYSDL2_DLL_PATH", "/usr/lib/x86_64-linux-gnu")
 
-from viz_common import Renderer as _BaseRenderer, load_projectm, _build_key_lookup, _token_matches
+from viz_common import Renderer as _BaseRenderer, load_projectm
 
-# Import local config helpers so callers can do: from renderer import ...
 from config import (
-    BASE_DIR, QUALITY_MESH, save_config, save_ratings, save_keymaps,
-    set_preset_rating, get_preset_rating, is_excluded, load_keymaps,
+    BASE_DIR, save_config, save_ratings, save_keymaps,
     CONFIG_PATH, RATINGS_PATH, KEYMAPS_PATH,
 )
 

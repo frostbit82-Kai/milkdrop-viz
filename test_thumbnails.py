@@ -10,7 +10,6 @@ import os, sys, time, tempfile, shutil
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-import viz_common
 from viz_common import (QApplication, QImage, Renderer, _ThumbWriter,
                         thumb_path, thumbs_dir)
 from preset_browser import PresetPlaylistWindow
@@ -213,7 +212,6 @@ def a_snapshot_jumps_every_gate_the_automatic_one_waits_for():
 def a_new_preset_re_arms_the_gate():
     """_emit_current_preset is the hook; without it only the first preset in
     a session would ever be captured."""
-    src = Renderer._emit_current_preset.__doc__ or ""
     import inspect
     body = inspect.getsource(Renderer._emit_current_preset)
     assert "_thumb_done = False" in body, \

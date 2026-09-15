@@ -324,6 +324,18 @@ is the first question a buyer has.
 A short recorded clip is also the best possible store video — the app now makes
 one of itself.
 
+**`store/demo.mp4` went on 2026-09-15 too**, for a fifth reason on top of the
+four below: **it had no audio track at all.** 47 seconds of a music visualiser
+in silence is not a trailer for anything. It was recorded on 2026-09-06, the
+same day as the screenshots and the day before the rename, and it carried the
+same preset browser with the same crude names and the same all-5/10 column
+across a third of the frame, in a window that was not even maximised — black
+bars down the left and along the bottom, and the browser clipped off the right
+edge. Gitignored, so that deletion is final as well.
+
+Record the replacement **with sound**, from a maximised window, with the
+browser shut unless the shot is about the browser.
+
 **`store/screenshots/` was emptied on 2026-09-15, and they are not coming
 back** — the directory is gitignored, so those six PNGs were never in a commit
 and deleting them was final. They were shot on 2026-09-06 and not one of them

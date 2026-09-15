@@ -7,7 +7,7 @@ window is on — so choosing one means moving the window there first. That move
 is the logic worth checking.
 Run: QT_QPA_PLATFORM=offscreen python test_display_picker.py
 """
-import os, sys, ctypes
+import os, sys
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
