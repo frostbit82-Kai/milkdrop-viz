@@ -64,6 +64,30 @@ def the_snapshot_survives_the_caller_mutating_its_dict():
     assert dlg.changed_config() == {"preset_dir": "/tmp/other-presets"}
 
 
+def the_dialog_fits_on_a_short_screen():
+    """Twenty-one rows in a QFormLayout set straight on the dialog make their
+    own height a MINIMUM, and the window manager then refuses to shrink it.
+    At about 860px that put OK and Cancel off the bottom of a 1366x768
+    laptop, with the preset folder -- the first thing a new install has to
+    set -- inside the dialog they could not finish. The rows are in a scroll
+    area now.
+
+    Pixel-free on purpose: the offscreen plugin's fallback font is nothing
+    like the one this ships in, so the absolute numbers mean nothing. What is
+    pinned is the RATIO. Unfixed, the minimum hint and the natural hint were
+    the same number -- the form's own height was the floor. resize() is no
+    probe either: the offscreen plugin honours any size asked for, so it
+    passed on the broken build."""
+    _, dlg = cfg_and_dialog()
+    want = dlg.sizeHint().height()
+    floor = dlg.minimumSizeHint().height()
+    assert floor <= want // 2, \
+        f"the dialog cannot shrink: {floor}px floor against a {want}px form"
+    # And the buttons are still reachable: they live outside the scroll area,
+    # so they keep their own height whatever the rows do.
+    assert dlg.findChild(v.QDialogButtonBox) is not None, "no button box"
+
+
 def a_key_absent_from_the_old_config_counts_as_changed():
     cfg = dict(DEFAULT_CONFIG)
     cfg.pop("theme", None)

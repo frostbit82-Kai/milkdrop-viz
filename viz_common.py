@@ -3877,7 +3877,9 @@ class SettingsDialog(QDialog):
         self.setMinimumWidth(400)
         self.setStyleSheet(dialog_qss())
 
-        layout = QFormLayout(self)
+        # Not parented to the dialog: the rows go inside a scroll area at the
+        # end of __init__, and the buttons stay outside it. See there.
+        layout = QFormLayout()
         layout.setSpacing(10)
         layout.setContentsMargins(16, 16, 16, 16)
 
@@ -4068,10 +4070,20 @@ class SettingsDialog(QDialog):
         if wallpaper_support()[0]:
             layout.addRow("", self._autostart_wp)
 
-        # Buttons
-        sep = QFrame()
-        sep.setFrameShape(QFrame.Shape.HLine)
-        layout.addRow(sep)
+        # The rows scroll; the buttons do not.
+        #
+        # Twenty-one rows come to about 860px, and a QFormLayout set straight
+        # on the dialog makes that a MINIMUM -- the window manager then refuses
+        # to shrink it. On a 1366x768 laptop, which is most of the machines
+        # this is sold to, OK and Cancel were below the bottom of the screen
+        # and there was no way to reach them; the preset folder is the first
+        # thing a new install has to set, so that is not a corner case.
+        form = QWidget()
+        form.setLayout(layout)
+        scroll = QScrollArea()
+        scroll.setWidget(form)
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.Shape.NoFrame)
 
         btns = QDialogButtonBox(
             QDialogButtonBox.StandardButton.Ok |
@@ -4079,7 +4091,50 @@ class SettingsDialog(QDialog):
         )
         btns.accepted.connect(self.accept)
         btns.rejected.connect(self.reject)
-        layout.addRow(btns)
+
+        sep = QFrame()
+        sep.setFrameShape(QFrame.Shape.HLine)
+
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(0, 0, 16, 16)
+        outer.setSpacing(10)
+        outer.addWidget(scroll)
+        outer.addWidget(sep)
+        outer.addWidget(btns)
+
+        # Size it off the FORM, not off self.sizeHint(). A QScrollArea's own
+        # hint ignores how big its widget wants to be -- ask the dialog and it
+        # says 628x476 for a form that needs 810x838, so it opened narrower
+        # than the rows (a horizontal scrollbar it never needs) and shorter
+        # than the screen had room for.
+        need = form.minimumSizeHint()
+        m = outer.contentsMargins()
+        wide = need.width() + m.left() + m.right() + \
+            scroll.verticalScrollBar().sizeHint().width() + 2
+        tall = need.height() + m.top() + m.bottom() + outer.spacing() * 2 + \
+            sep.sizeHint().height() + btns.sizeHint().height()
+        # Not a resize: the rows genuinely cannot be drawn narrower, and
+        # letting the window manager squeeze them is what brings the
+        # horizontal scrollbar back.
+        self.setMinimumWidth(wide)
+        self.resize(wide, min(tall, max(320, self._screen_height() - 80)))
+
+    def _screen_height(self) -> int:
+        """Usable height of whatever screen this is opening on.
+
+        Falls back to the form's own height, so a headless run -- the test
+        suite -- caps at nothing rather than at zero.
+        """
+        for get in (lambda: self.screen().availableGeometry().height(),
+                    lambda: QApplication.primaryScreen()
+                    .availableGeometry().height()):
+            try:
+                h = get()
+                if h:
+                    return h
+            except Exception:
+                continue
+        return 1 << 20
 
     def _dir_row(self, layout, label: str, value: str, caption: str) -> QLineEdit:
         """A path field with a Browse button. Returns the field itself, so the

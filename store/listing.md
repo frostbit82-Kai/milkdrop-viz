@@ -87,10 +87,12 @@ does, projectM's own Steam listing included.
 > included — so you can feel what it does instead of guessing and re-reading.
 > Mash up takes one preset's warp shader, or its composite shader, or its motion,
 > or its shapes and waves, and drops it into the one you are watching. Shift
-> colours turns every colour in it the same way round the hue wheel. Break a
-> shader and the compiler's own complaint appears in a line under the editor,
-> with the line number it choked on, instead of the preset quietly rendering
-> with that stage missing. Revert puts any of it back; Save as… keeps it.
+> colours turns every colour in it the same way round the hue wheel. Break
+> something and the compiler's own complaint appears in a line under the
+> editor — with the line and column for an error in the preset's code, and
+> the stage it could not build for a broken shader — instead of the preset
+> going quiet and rendering without it. Revert puts any of it back;
+> Save as… keeps it.
 >
 > **Or just move ten sliders.** Every preset also opens in a panel of ten —
 > zoom, rotation, warp, drift, trails, brightness, echo, wave size. Move one and
@@ -177,7 +179,7 @@ does, projectM's own Steam listing included.
 > put them, and reads them from a folder you choose. You get the same library
 > either way — it just arrives with the credit pointing in the right direction.
 
-*(7968 characters.)*
+*(8045 characters.)*
 
 ## Feature bullets  (Microsoft Store — up to 20, 200 char each)
 
