@@ -1674,3 +1674,46 @@ inherits 2.1.3; nothing else about it is Windows-only.
 `installer/dist/`, which took the stale 2.0.0, 2.1.0 and 2.1.2 packages with
 it — the one-package-per-directory rule now holds on Windows by accident
 rather than by hand.
+
+### Linux caught up with 2.1.3, and two bugs fell out of driving it — 2026-09-14
+
+The app was driven in the Xephyr rig rather than read, for a sweep and for
+fresh site screenshots. Two defects came out of it that no suite had, and
+both were of the same shape: a feature quietly stops working and nothing says
+why.
+
+| Symptom on screen | What it actually was |
+| --- | --- |
+| Pressing the snapshot key toggled hard cuts | Two actions on "c". `load_keymaps_from` merges keymaps.json **over** DEFAULT_KEYMAPS, so an action added later can land on a key an older saved file already spent. The handler is one elif chain, so the earlier branch wins and the dialog still shows the later one as bound. |
+| The second visual disappeared, log said only `[dual] off` | One frame with a zero drawable size. `_blend.ready` answers false for `w <= 0` as well as for a blender that failed, and the caller treated both as failure and called `_do_set_dual(False)`, which is permanent. |
+
+The first was found by pressing a key and reading the log; the second by
+noticing that `[dual] off` had arrived **without** the `[dual] <why>` line
+that a real blender failure prints first. Both are fixed in `9b62fff`, with
+`test_keymaps` new (the collision rules, the dialog, a corrupt file, and the
+invariant that no two shipped defaults share a key) and `test_dual` extended.
+Twenty-five suites now.
+
+Two things the rig cannot tell you, recorded so they are not chased again:
+
+- **Under Xephyr there is no GPU.** Mesa falls back to llvmpipe, and two
+  projectM instances at *high* quality on a 1920x1080 window is 610% CPU and
+  well under a frame a second — the window goes black and stays bit-identical
+  for minutes while the log keeps advancing presets. That is not a hang and
+  not a bug; `dual_quality` defaults to low for exactly this reason. Read the
+  thread states (`/proc/<pid>/task/*/comm`) before believing a freeze.
+- **The repo's own `keymaps.json` is not the installed one.** A source
+  checkout reads the file beside the code; an installed build reads
+  `~/.config/BomsAIVisualizer/keymaps.json`. They have drifted, and the repo's
+  is the older. Which one is in front of you changes what the keys do.
+
+**`BomsAIVisualizer-2.1.3-linux-x86_64.tar.gz`**, 86 MB, sha256
+`e2bc3490bbf9672d6f45033cb117afaed12c4d1dd600c1d8d879809c51a239f2`.
+Built in the almalinux:9 container from the clean tree at `9b62fff`; highest
+glibc symbol required **GLIBC_2.34**. Verified against the artifact in a stock
+`ubuntu:24.04` with only `libgl1 libglib2.0-0t64 libegl1` installed: exit 0
+from `--help`, the `sounddevice unavailable` line printed, `VERSION` inside
+reads 2.1.3. The frozen archive was inflated (688 zlib streams) and carries
+`_release_elsewhere`, `has no key` and `is already` — the strings the keymap
+fix added — with two never-written control strings absent. The 2.1.2 tarball
+and its extracted tree were deleted; one package per directory.
