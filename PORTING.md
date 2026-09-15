@@ -1654,3 +1654,23 @@ were still loading; and a stand-in Qt harness reported the dialog unowned
 because an application event filter's deferred `singleShot(0)` had not run yet
 and because filters run in **reverse** install order. The real app answered
 both questions correctly and immediately. Test the app, not a model of it.
+
+**2.1.3, because the fix has to reach the machine that reported it.** The
+2.1.2 installer was built at 18:34 and the fix landed at 19:42, so the package
+on disk — and the copy installed from it — did not contain it. Proved against
+the artifact rather than the timestamps: the 2.1.2 executable carries the old
+`_own` and neither `_set_owner` nor `disown`, and the 2.1.3 one carries all
+three.
+
+The number moved rather than rebuilding 2.1.2 in place, because two different
+executables under one name is exactly what this file already records going
+wrong with the stale 2.0.0 installer — and the Inno `AppId` does not move, so
+the new package upgrades the installed one. `VERSION` is shared, so Linux
+inherits 2.1.3; nothing else about it is Windows-only.
+
+**`BomsAIVisualizer-2.1.3-win64-setup.exe`**, 78.4 MB, sha256
+`0e4c3dc6de28438b16d3f7ed95be42f68f0e324d0aa2de9d015f7f73ee0e96fe`. Both
+`VERSION` files and the licence read 2.1.3. Building it also emptied
+`installer/dist/`, which took the stale 2.0.0, 2.1.0 and 2.1.2 packages with
+it — the one-package-per-directory rule now holds on Windows by accident
+rather than by hand.
