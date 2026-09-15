@@ -1958,3 +1958,201 @@ in the pipe*, so `./BomsAIVisualizer ... | head` says 0 whatever the app did
 
 The Inno installer's Linux counterpart, `install.sh`, is not exercised either
 — what is checked is the payload, not the desktop entry or the uninstaller.
+
+### Windows caught up with 2.1.5, and a polish pass took it to 2.1.6 — 2026-09-15
+
+Pulled `d4a52d5`, ran the suites, then drove the source build for an afternoon
+looking for what a buyer would hit. Twenty-six suites pass here and
+`check_sync.py` skips — there is no Player clone on this machine, so the Linux
+side still owns keeping `Bomsai Player/visualizer/viz_common.py` in step, and
+this session changed `viz_common.py`, so **it has drifted again**.
+
+**Why 2.1.6 and not 2.1.5.** Linux has already built, verified and recorded a
+2.1.5 tarball. Two of the fixes below are in `viz_common.py`, which both
+platforms ship, so a Windows package called 2.1.5 would be *different code*
+under the same number — which is exactly what forced 2.1.4 a day ago, and the
+number is the cheap half of that trade. Linux needs a pull and a rebuild at
+2.1.6; there is nothing for it to port, only to rebuild.
+
+#### What Linux sent over, checked on Windows
+
+All four of Linux's 2.1.5 changes behave here:
+
+- **The Settings dialog shrinks.** Dragged to 413px tall under the real window
+  manager: the rows scroll and OK and Cancel stay put. The `QScrollArea`
+  rewrite needed nothing Windows-specific.
+- **The browser's names line up.** Verified against the real library, where
+  most rows have no thumbnail yet: the blank pixmap holds the column open, and
+  dragging the window taller fills in pictures for the rows that appear —
+  which is the `resizeEvent` half of `394725b`.
+- **A clip carries its sound.** Recorded nine seconds with a two-tone signal
+  playing: 188 frames, an AAC stream at 48 kHz, and a Goertzel over one second
+  of it reads 440 Hz strong, 660 Hz at half that, and nothing at two control
+  frequencies. The `write_audio` change reported nothing, which is what it is
+  supposed to do when there is nothing wrong.
+- Dead-binding removal: pyflakes over the tree here is clean apart from the one
+  deliberate `# noqa: F401` availability probe, same as Linux reports.
+
+#### What driving it found
+
+- **Settings opened four pixels short of its own rows**, so the dialog that
+  fits came up with a vertical scroll bar down every row of it, with a scroll
+  range of exactly 4. `form.minimumSizeHint()` is measured inside `__init__`,
+  where the `QFormLayout` has not been activated and answers 782 for a form
+  that settles at 786. `layout.activate()` first. `ensurePolished()` does not
+  do it; only `activate()` does, and that was measured rather than assumed.
+  The gap is font-sized — 8px under the offscreen fallback — so the suite pins
+  the *relationship* (what the dialog read equals what the layout settles on)
+  and not a pixel. Verified to fail with the fix taken back out.
+- **Every note in the Key bindings table was cut off mid-word**, including the
+  lock one, which is the only place the app says that next and previous still
+  work while a preset is locked. Two causes, both measured: the window opened
+  at a hard-coded 560px, and Action and Notes were both `Stretch`, which
+  splits the leftover evenly and so gave each 179px against the 237 and 359
+  they ask for. Action is `ResizeToContents` now and the width comes from
+  `sizeHintForColumn`, which answers before the window exists. The width adds
+  the frame **four** times rather than twice because `dialog_qss` styles
+  `QAbstractItemView` — a `QTableWidget` is one — so the sheet's
+  `padding: 4px 6px` makes `frameWidth()` read 7 where the style says 2, and
+  Qt then loses that padding again out of the stretch column: viewport 726,
+  sections 712, against a gap of 0 for a bare table under the same sheet.
+  Three mutations of the fix are each caught by `test_keymaps`.
+- **The shipped Windows README described a 1.x product.** It said in as many
+  words that clips are silent — the feature shipped in 2.0 and the Linux
+  README was updated for it, this one never was — and its controls list was
+  missing six keys (`t`, `x`, `c`, `d`, `2`, tab). Two of the things the store
+  listing sells, two visuals at once and the preset panel, were not mentioned
+  at all. Corrected, completed, and kept pure ASCII: Inno reads
+  `InfoAfterFile` as ANSI without a BOM, and the file had no non-ASCII
+  character in it before this.
+
+  **The Linux README's controls list is four keys short of the same thing**
+  (`t`, `c`, `2`, tab), and those four are in `DEFAULT_KEYMAPS` on both
+  platforms, so they were added there too. Normally that would not be touched
+  from here — changing a shipped file behind a package that has already been
+  built and recorded is how two builds end up with one number — but Linux has
+  to rebuild at 2.1.6 regardless, so there is nothing to invalidate. Revert it
+  if you would rather own that file yourself.
+- **The rename left debris that an upgrade never cleans up.** The AppId is
+  deliberately stable, so Inno replaces the install rather than sitting beside
+  it — but it only removes what it is installing now, under the names it is
+  installing now. Measured on this machine: a dead 5.6 MB
+  `MilkDropVisualizer.exe` beside the new executable, and four shortcuts in a
+  Start Menu group still called "MilkDrop Visualizer", two of them for a
+  product that no longer exists and one of those pointing at that dead exe.
+  `[InstallDelete]` removes them and `UsePreviousGroup=no` moves the group;
+  the install *directory* is deliberately left where it is, because a new one
+  would orphan the old with the uninstaller inside it. **Not verified** — the
+  installer needs a UAC click, which is the same gap every entry here records.
+- **PyAudioWPatch ships and was not named in the licence notice.** It is the
+  Windows capture backend — `_portaudiowpatch.pyd` is in the installed tree —
+  and it is **Apache-2.0**, whose section 4(a) asks for a copy of the licence
+  to travel with the distribution. Added as `PyAudioWPatch-Apache-2.0.txt`,
+  and the notice's PortAudio line corrected: on Windows PortAudio arrives
+  inside PyAudioWPatch, not via sounddevice. Left open on purpose, because it
+  is a decision about what to ship rather than a defect to fix quietly: the
+  notice names SDL2, PyOpenGL, PortAudio and NumPy without carrying their
+  texts, and Python's own PSF licence is not mentioned at all.
+
+#### One freeze, observed once, not explained
+
+The app froze while opening Settings from the right-click menu with the preset
+browser already open: `Responding` false, CPU flat at 477s across two samples,
+the render thread stopped advancing presets one change after the click, and no
+dialog ever reached the screen. It fits the owned-window family CLAUDE.md
+already carries two entries for — showing a window owned by the SDL window
+moves activation, and Windows moves activation on the owner's thread, which
+here is the render thread — and "another owned window already showing" would
+explain why it had not happened before.
+
+It did **not** reproduce in 20 scripted rounds of that exact sequence, and a
+second candidate cannot be ruled out from one occurrence: the driving harness
+calls `AttachThreadInput`, which Microsoft documents as able to hang the
+caller. Nothing was changed for it. Loosening the ownership to chase an
+unreproduced freeze at release time is how the dialogs end up behind the
+visuals again, and the fix for the two known triggers is measured and in.
+What is written down instead is how to catch the next one: run the app through
+`scratchpad/fh.py` and the dump names the line in both threads.
+
+A harness trap fell out of it and is in CLAUDE.md: `GetWindowTextW` is a
+`SendMessage`, so a window-listing helper that reads titles blocks forever on
+a hung app and reads as a broken script rather than a stuck program. Ask
+`(Get-Process ...).Responding` first.
+
+#### Also checked, no change needed
+
+Wallpaper mode still enters and leaves cleanly on 11 Pro 26200: the SDL window
+lands as a layered child of the Progman WorkerW at 0,0 1920x1080 with
+`WS_CLIPCHILDREN` set on the host, the desktop icons composite above it, the
+tray icon opens the same menu with "Leave wallpaper mode" in it, and the
+window comes back to 59,29 902x632 exactly where it left. The screen still
+cannot be photographed there — two grabs five seconds apart were
+byte-identical at mean brightness 0.9, and the user's own wallpaper read 9.2
+in the same rectangle the moment the mode was left — so *that it is covering
+the desktop* is measured and *that it is painting live* still needs an eye.
+
+Fullscreen sits at -2,-2 1924x1084 and the context menu draws over it.
+Borderless, always-on-top, two visuals, tab between them, the four browser
+tabs, Get Presets, Customize menu, About and every submenu were opened and
+read. The light theme is correct across the menu, the browser, the panel and
+all three dialogs; the greyed labels on preset-driven sliders are legible in
+both themes.
+
+Forty-two new thumbnails landed in the user's real
+`%LOCALAPPDATA%\BomsAIVisualizer\thumbs` while driving. Left there on purpose
+— they are pictures of their own presets and the app exists to collect them —
+but it is worth knowing that a source run on Windows writes to the same data
+directory a frozen one does, because `user_data_dir()` reads `LOCALAPPDATA`
+whatever `APPDATA` is pointed at.
+
+#### The verified 2.1.6 Windows package
+
+**`BomsAIVisualizer-2.1.6-win64-setup.exe`**, 78.4 MB (82,214,466 bytes),
+sha256 `4b92372b87e67318268be8bc4e0f4b7d0c5d41eafd5e092a149ccf70b5a4807d`.
+Built from the clean tree with the 2.1.5 installer deleted first — one package
+per directory, same rule as the Linux side.
+
+Checked, in this order:
+
+- **`VERSION` inside reads 2.1.6 and the bundled EULA agrees.** Both build
+  scripts refuse to run otherwise, so this is belt and braces, but the EULA
+  line is prose that nothing reads back and it has drifted before.
+- **The frozen executable carries the fixes.** 691 zlib streams inflated out
+  of the PYZ — the app's modules are one stream each inside the PKG appended
+  to the exe, so nothing greps it — and it holds `sizeHintForColumn`,
+  `ResizeToContents` and `activate` from this session, plus `_blank_icon`,
+  `_screen_height`, `setWidgetResizable` and the string `sound stopped` from
+  Linux's 2.1.5. These are attribute names rather than string literals,
+  because neither fix writes a new string. Three names that are nowhere in
+  this repo are the control, and none of them matched, which is what makes
+  the rest worth anything.
+- **`licenses/` carries the new `PyAudioWPatch-Apache-2.0.txt`**, and the
+  staged `README.txt` is the corrected one — the sound line, the six missing
+  keys and the two new sections are all in the package, not just the repo.
+- **The bundled ffmpeg is LGPL**: `--disable-libx264`, no `--enable-gpl`, read
+  off the binary in the package rather than trusted from the build log.
+- **The portable tree runs.** Started with `APPDATA` and `LOCALAPPDATA`
+  pointed at a scratch profile: alive and `Responding` after 100 seconds, a
+  window at 199,119 802x532 with a preset drawing in it. Key bindings opens at
+  800px with every note readable and shows `DEFAULT_KEYMAPS` (RIGHT / LEFT /
+  SPACE / r / h), which is what a fresh install gets; Settings opens with no
+  scroll bar. Both fixes are therefore verified in the artifact and not only
+  in source. The scratch profile collected twelve thumbnails, a config and the
+  AMD GL cache, and the user's own `%APPDATA%\BomsAIVisualizer` was still
+  dated before the session started — which is the check that the isolation
+  held, and the one that failed a session ago.
+
+**The Inno installer itself is still unverified**, as in every entry above:
+it needs a UAC prompt and there is no non-interactive elevation here. What is
+verified is the payload. That matters more than usual this time, because the
+`[InstallDelete]` and `UsePreviousGroup` changes only do anything *during* an
+install — the next person to run this on a machine that was upgraded from
+before the rename should check that `MilkDropVisualizer.exe` and the two dead
+shortcuts are gone and that the group is called "BomsAI Visualizer".
+
+Inno also prints a warning that predates this session and is worth knowing
+about: `PrivilegesRequired=admin` with `HKCU` writes in the script. The
+screensaver keys go to whichever user's hive the elevated installer runs as,
+which on a one-account machine is the right one and on a shared machine is
+not. Not changed here; it is a design decision about who the screensaver
+setting belongs to.

@@ -243,6 +243,28 @@ There is no display in an agent shell and SDL needs one, so:
   frame rate is mysteriously terrible, measure a bare swap loop before
   suspecting anything in this repo.
 
+- **A window-listing helper that reads titles takes the harness down with a
+  hung app.** `GetWindowTextW` is a `SendMessage` of `WM_GETTEXT`, so calling
+  it on a window whose thread has stopped pumping blocks **forever** — and
+  `Show-Wins` / `Get-Win` call it on every visible window, this app's
+  included. 15 Sep 2026 that turned a frozen app into a frozen PowerShell and
+  a two-minute tool timeout with no output at all, which reads like the script
+  being wrong rather than the app being stuck. Ask
+  `(Get-Process ...).Responding` first — it is a five-second
+  `SendMessageTimeout` and it answers — and only then go looking by title.
+  `Focus` is worse than a read: `AttachThreadInput` shares an input queue with
+  the app, and Microsoft's own documentation says that can hang the caller.
+
+- **A window-rectangle screen grab can come back stale, intermittently.**
+  15 Sep 2026: `CopyFromScreen` over a freshly shown dialog's rectangle
+  returned the *dark* theme twice for a dialog that was demonstrably light —
+  its stylesheet, its palette and `QWidget.grab()` all said `#f5f5f5`, and a
+  full-screen grab of the same window a minute later agreed with them. Two
+  runs with identical timing disagreed, so it is a race and not a procedure.
+  A wrong screenshot is the worst possible evidence here, because the whole
+  method is looking at pictures: when one shows something surprising, take a
+  second one — a full-screen grab and a crop — before believing it.
+
 - **Take the screenshot and look at it.** Driving the app for the site's pictures
   on 2026-09-08 found three defects that seventeen passing suites could not: the
   Backup menu read "Back up ratings _collections…" because Qt eats a lone `&` in
@@ -268,6 +290,17 @@ There is no display in an agent shell and SDL needs one, so:
   - **A scroll area only makes shrinking possible.** The window still opens at
     whatever it is told, so cap the opening height against
     `screen().availableGeometry()` as well.
+  - **And an unactivated layout under-reports what it needs**, so sizing off
+    it opens the window a few pixels short of its own rows and raises the very
+    scroll bar the numbers were computed to avoid. Found on Windows
+    15 Sep 2026: `form.minimumSizeHint()` answered 782 inside `__init__` and
+    786 once the window existed, and Settings opened with a vertical scroll
+    bar down every row whose whole range was **four pixels**. `layout.activate()`
+    before measuring is the fix; `ensurePolished()` is not — measured, it
+    changes nothing. The gap is font-sized, not constant (8px under the
+    offscreen fallback), so what `test_settings_diff` pins is that the number
+    the dialog read equals the number the layout settles on, which is the same
+    assertion in any font.
 
 - **`QT_QPA_PLATFORM=offscreen` honours any `resize()` you ask for**, so
   `resize(w, h); assert height() <= h` is not a probe for a minimum-size bug --
@@ -534,6 +567,32 @@ There is no display in an agent shell and SDL needs one, so:
   thread to be inside a slow frame at the instant of the close -- so do not
   read a run that did not hang as evidence the hazard is gone.
 
+  **A third sighting, 15 Sep 2026, and it is NOT settled.** Driving the source
+  build on Windows, the app froze while opening Settings from the right-click
+  menu with the preset browser already up: `Responding` false, CPU flat at
+  477s across two samples, the render thread stopped advancing presets one
+  change after the click, and no dialog ever appeared on screen. It fits this
+  family -- showing a window owned by the SDL window moves activation, and
+  Windows moves activation on the owner's thread, which is the render thread
+  -- and the precondition would be *another* owned window already showing,
+  which is why this was the first time it happened. But **it did not
+  reproduce in 20 scripted rounds** of exactly that sequence (browser open,
+  panel open, menu, Settings, theme combo, Cancel), and there is a second
+  candidate that cannot be ruled out from one occurrence: the driving harness
+  calls `AttachThreadInput`, which shares an input queue with the app and
+  which Microsoft documents as able to hang the caller. So this is recorded as
+  observed and unexplained, not as a known defect with a known fix -- and
+  nothing was changed on the strength of it, because loosening the ownership
+  at release time to chase an unreproduced freeze is how the dialogs end up
+  behind the visuals again. **Next time it happens it has to be caught under
+  faulthandler**, which is what settled the 2026-09-14 one: a six-line wrapper
+  that calls `faulthandler.enable(file=log)` and
+  `dump_traceback_later(10, repeat=True, exit=False, file=log)` and then
+  `runpy.run_path("main.py", run_name="__main__")`. It costs nothing while the
+  app is healthy and it names the line in every thread the moment it is not.
+  Keep a copy in the session scratchpad; rebuild it from this sentence if the
+  scratchpad has gone.
+
 - **A minimised window is still `isVisible()`, so a show/hide toggle throws it
   away.** 2026-09-15, found by driving the shipped 2.1.3 build on Windows.
   Minimised is a window *state*, not a visibility, so `QWidget.isVisible()`
@@ -634,6 +693,25 @@ There is no display in an agent shell and SDL needs one, so:
   `max(WIDTH, bar.minimumSize().width())`, which is right in any font, and
   what the suite pins is the **button count** -- the thing that was actually
   being watched, and the same number everywhere.
+
+- **Two `Stretch` columns split the leftover EVENLY, so widening a table for
+  the long column feeds half of every pixel to the short one.** The Key
+  bindings table had Action and Notes both stretching inside a window opened
+  at a flat 560px: each got 179px against the 237 and 359 they ask for, and
+  every note in the table was clipped mid-word — including the lock one, which
+  is the only place the app says that next and previous still work while a
+  preset is locked. Action is `ResizeToContents` now and the dialog is sized
+  from `sizeHintForColumn`, which answers correctly *before* the window
+  exists, so it can size rather than correct.
+
+  **And the sheet costs the stretch column its own padding, twice.**
+  `dialog_qss` styles `QAbstractItemView`, which a `QTableWidget` is, so
+  `padding: 4px 6px` lands on the table: `frameWidth()` reads **7** where the
+  style's own answer is 2, and the sections then come to `viewport - 14` —
+  measured 726 against 712, with a bare table under the same sheet giving a
+  gap of 0. That is why the width adds `4 * frameWidth()` and not two. The
+  suite pins `columnWidth(i) >= sizeHintForColumn(i)`, which is font-free:
+  359px in Segoe UI, 787 under the offscreen fallback, same assertion.
 
 - **`uniformItemSizes` on a `QListWidget` measures once and never again.**
   Not on a size-hint change, not on `doItemsLayout`, not on clear-and-refill.
