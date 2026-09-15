@@ -1129,16 +1129,48 @@ def save_ratings_to(ratings_path, ratings: dict):
 
 
 def load_keymaps_from(keymaps_path) -> dict:
-    """Load keymaps.json, merging over DEFAULT_KEYMAPS. Path-agnostic."""
+    """Load keymaps.json, merging over DEFAULT_KEYMAPS. Path-agnostic.
+
+    A default the saved file has already spent is dropped rather than kept.
+    The handler is one elif chain in a fixed order, so two actions on one key
+    do not tie -- whichever is tested first wins and the other is dead while
+    still reading as bound in the Key bindings dialog. That is exactly what a
+    new action does to an old customisation: `snapshot` arrived on "c" in
+    2.1, and a keymaps.json written before it exists may already have given
+    "c" to hard cuts -- as this repo's own does, which is how it was found.
+    Pressing "c" then toggles hard cuts and the snapshot key looks broken.
+
+    The saved file wins, because it is the one somebody chose. The new action
+    comes up unbound, which the dialog shows as unbound and offers a key for,
+    rather than bound to something it will never receive.
+    """
     from pathlib import Path
     km = dict(DEFAULT_KEYMAPS)
     p = Path(keymaps_path)
-    if p.exists():
-        try:
-            with open(p, encoding="utf-8-sig") as f:
-                km.update(json.load(f))
-        except Exception as e:
-            print(f"[config] Warning: could not load keymaps.json: {e}")
+    if not p.exists():
+        return km
+    try:
+        with open(p, encoding="utf-8-sig") as f:
+            saved = json.load(f)
+    except Exception as e:
+        print(f"[config] Warning: could not load keymaps.json: {e}")
+        return km
+    if not isinstance(saved, dict):
+        print("[config] Warning: keymaps.json is not a table of bindings")
+        return km
+    km.update(saved)
+    # Case-insensitively, because the tokens are matched that way. DBLCLICK
+    # is not a key and two actions can share it without either being lost.
+    taken = {str(v).upper(): a for a, v in saved.items()
+             if v and str(v).upper() != "DBLCLICK"}
+    for action, key in list(km.items()):
+        if action in saved or not key:
+            continue
+        owner = taken.get(str(key).upper())
+        if owner:
+            km[action] = ""
+            print(f"[config] {action} has no key: {key} is already "
+                  f"{owner} in keymaps.json")
     return km
 
 
@@ -4243,8 +4275,31 @@ class KeymapDialog(QDialog):
                     current.setText(key_str)
                     action = current.data(Qt.ItemDataRole.UserRole)
                     self._keymaps[action] = key_str
+                    self._release_elsewhere(action, key_str)
                     return True
         return super().eventFilter(obj, event)
+
+    def _release_elsewhere(self, action: str, key_str: str):
+        """Take `key_str` off every other action, in the table and the dict.
+
+        The key handler is one elif chain, so a key given to two actions only
+        ever reaches the earlier one -- and the row further down goes on
+        showing a key it will never receive, which is a worse answer than an
+        empty cell. The row just typed into keeps it; the other is cleared.
+        DBLCLICK is the exception: it is not a key and nothing dispatches on
+        it, so two actions may hold it.
+        """
+        if key_str.upper() == "DBLCLICK":
+            return
+        for row in range(self._table.rowCount()):
+            item = self._table.item(row, 1)
+            if item is None:
+                continue
+            other = item.data(Qt.ItemDataRole.UserRole)
+            if other == action or item.text().upper() != key_str.upper():
+                continue
+            item.setText("")
+            self._keymaps[other] = ""
 
     def _qt_key_to_token(self, qt_key: int, text: str) -> str:
         """Convert a Qt key code to the string token used in keymaps.json."""
@@ -10037,6 +10092,18 @@ class Renderer:
         """
         second = self._pms[1]
         dw, dh = self._drawable_size()
+        if second is not None and (dw <= 0 or dh <= 0):
+            # Nothing to draw into this frame -- the window is mid-way
+            # through a fullscreen change, or minimised. Skip the frame.
+            #
+            # It used to fall through to the line below, and that line is
+            # permanent: one frame that arrived with no size took the second
+            # visual down for the rest of the session, saying only
+            # "[dual] off" with no reason, which reads exactly like the user
+            # having turned it off. Seen for real in the rig on 14 Sep 2026,
+            # after a fullscreen toggle while a clip was recording -- and it
+            # is racy, so it did not happen on the next try.
+            return
         if (second is not None and self._blend is not None
                 and self._blend.ready(dw, dh)):
             # The burn-in goes into whichever visual is being adjusted,

@@ -182,6 +182,34 @@ def a_blender_that_cannot_be_built_falls_back_to_one_visual():
     assert r._pms[0].drawn == [("window",)], r._pms[0].drawn
 
 
+def a_frame_with_no_size_is_skipped_not_taken_as_a_failure():
+    """A window mid-way through a fullscreen change, or minimised, reports a
+    drawable of nothing. Falling through on that put the second visual down
+    for the rest of the session over one frame, and said only "[dual] off" --
+    which reads as the user having turned it off. Seen for real in the rig."""
+    r = renderer()
+    r._drawable_size = lambda: (0, 0)
+    asked = []
+    r._do_set_dual = lambda on: asked.append(on)
+    r._render_visuals()
+    assert asked == [], f"one sizeless frame ended dual mode: {asked}"
+    assert r._pms[0].drawn == [], r._pms[0].drawn
+    assert r._blend.drawn == [], r._blend.drawn
+    # And the next frame, once the window has a size again, draws both.
+    r._drawable_size = lambda: (800, 600)
+    r._render_visuals()
+    assert r._pms[1].drawn == [("fbo", 101)], r._pms[1].drawn
+
+
+def one_visual_still_draws_when_the_window_has_no_size():
+    """The skip is only for the two-visual path: with one visual there is no
+    second instance to take down, and the old behaviour is what it was."""
+    r = renderer(second=False)
+    r._drawable_size = lambda: (0, 0)
+    r._render_visuals()
+    assert r._pms[0].drawn == [("window",)], r._pms[0].drawn
+
+
 def the_burn_in_goes_into_the_visual_being_adjusted():
     """Matching every other control. Burning it into both would double it,
     and into the wrong one would put it where nobody asked."""

@@ -113,8 +113,8 @@ the only way to see why a frozen build failed.
 `recording` (needs ffmpeg and ffprobe), `clip_audio` (same), `thumbnails`,
 `screensaver`, `wallpaper`, `packs`, `settings_diff`, `shuffle`, `theme`,
 `idle_pause`, `collections`, `backup`, `tweak`, `sprites`, `code_editor`,
-`vsync`, `audio_import`, `lock`, `menu`, `live_textures`, `dual`. All
-twenty-four must pass before a release.
+`vsync`, `audio_import`, `lock`, `menu`, `live_textures`, `dual`, `keymaps`.
+All twenty-five must pass before a release.
 
 **Reviewing by mutation.** Break the shipped code one way at a time, run every
 suite, and a green suite is a gap in the tests rather than a pass. Script it,
@@ -1294,5 +1294,31 @@ There is no display in an agent shell and SDL needs one, so:
   behind a monitor and `is_alive()` still says True, because parec stays up and
   reconnects to a source of the same name when it returns. Liveness is not audio
   — test with a tone and a peak, never with a process check.
+
+- **A new action's default key can be dead on arrival, because a saved
+  keymaps.json shadows it and the handler is one elif chain.** `snapshot`
+  arrived on "c" in 2.1; this repo's own keymaps.json had already given "c" to
+  hard cuts, and `load_keymaps_from` merges the file *over* the defaults — so
+  both actions held "c", the earlier branch won, and the snapshot key looked
+  broken while the Key bindings dialog went on showing it as bound. Found by
+  pressing "c" in the rig and reading `[renderer] Hard cuts: OFF` in the log.
+  The loader now drops a default the file has already spent (saying so on
+  stdout) and `KeymapDialog` clears the other row when a key is typed into
+  one. `test_keymaps` covers both, plus the invariant that no two entries in
+  DEFAULT_KEYMAPS share a key in the first place. Note the two are *separate*
+  files: a source checkout reads `keymaps.json` beside the code, an installed
+  build reads the one under `~/.config/BomsAIVisualizer` — they drift, and the
+  repo's is the older of the two.
+- **One frame that arrives with no drawable size used to end dual mode for the
+  session.** `_render_visuals` fell through to `_do_set_dual(False)` whenever
+  `_blend.ready(w, h)` was false, and `ready` answers false for `w <= 0` as
+  well as for a blender that failed — so a window mid-way through a fullscreen
+  change, or minimised, took the second visual down permanently and printed
+  only `[dual] off`, which reads exactly like the user having turned it off.
+  Seen in the rig on 14 Sep 2026 after a fullscreen toggle while a clip was
+  recording, and it is racy: the next three attempts did not reproduce it. The
+  sizeless frame is now skipped. **The distinguishing evidence is the missing
+  reason line** — a real failure prints `[dual] <why>` first, so `[dual] off`
+  on its own was never the user.
 
 See PORTING.md for port status and the Windows setup recipe.
