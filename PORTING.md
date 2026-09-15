@@ -1859,3 +1859,42 @@ extracted tree were deleted; one package per directory.
 there is no non-interactive elevation here, so what is checked is the payload
 through the portable tree, not a fresh install, its shortcuts, or the
 screensaver registration. Unchanged from every previous Windows package.
+
+### Linux caught up with 2.1.4 — 2026-09-15
+
+Nothing to port: `f3d0d13` fixed both halves of the minimised-browser bug in
+one commit, and the Qt half of it (`isVisible()` is true for a minimised
+window) is not Windows-specific. Twenty-six suites pass here, `check_sync.py`
+is clean, and the Player has the same `viz_common.py` at `b9cb9f3`.
+
+**`BomsAIVisualizer-2.1.4-linux-x86_64.tar.gz`**, 86 MB, sha256
+`0560f2df3ef3c0e71cd72dda5ea61f63bf0351a464917513fdac07756500ca12`. Built in
+`almalinux:9` from the clean tree at `3d6e8b7`; highest glibc symbol required
+is **GLIBC_2.34**, which is the oldest system it will start on. `VERSION`
+inside reads 2.1.4 and the bundled EULA agrees. The frozen archive was
+inflated (688 zlib streams) and carries `isMinimized`, `showNormal` and
+`WindowStateChange` — attribute names, not string literals, because the fix
+writes no new strings — plus `has no key` and `_release_elsewhere` from the
+keymap work, with two never-written control names absent, which is what makes
+the probe worth anything. The 2.1.3 tarball and both extracted trees were
+deleted; one package per directory.
+
+Run in stock `ubuntu:24.04` with only `libgl1 libglib2.0-0t64 libegl1`
+installed, twice, because the two runs answer different questions:
+
+- `--help` **exits 0** with the usage text and the `sounddevice unavailable`
+  line. That proves the bundle's libraries resolve and the interpreter comes
+  up, and it is the check every previous entry here records.
+- A plain start is **still running when `timeout` kills it at 20 s — exit
+  124**, with nothing worse than the `sounddevice` line and the fontconfig
+  warning a bare container always gives. `--help` short-circuits before the
+  window, so on its own it would not notice a build that dies while opening
+  one. 124 is the number being read, not merely "not a crash": it only
+  happens if the process was alive at the end of the window.
+
+Take the app's own status either way. A piped run reports the *last command
+in the pipe*, so `./BomsAIVisualizer ... | head` says 0 whatever the app did
+— the first attempt at this check was written that way and had to be redone.
+
+The Inno installer's Linux counterpart, `install.sh`, is not exercised either
+— what is checked is the payload, not the desktop entry or the uninstaller.
