@@ -116,6 +116,22 @@ the only way to see why a frozen build failed.
 `vsync`, `audio_import`, `lock`, `menu`, `live_textures`, `dual`, `keymaps`,
 `browser_toggle`. All twenty-six must pass before a release.
 
+**Driving the shipped build, not the source.** A source checkout ignores
+`XDG_CONFIG_HOME` (`config.py:_base_dir` keeps state beside the code unless
+`sys.frozen`), but the *frozen* build honours it -- so inflating the tarball
+into the scratchpad and pointing `XDG_CONFIG_HOME` and `XDG_DATA_HOME` there
+drives the real artifact without going anywhere near the repo's config.json or
+the user's `~/.config`. That is how 15 Sep 2026's pass was run. Seed the
+config it writes on first run rather than clicking through Settings.
+
+**Under Xephyr, a Qt window that stops repainting is usually starvation, not a
+hang.** llvmpipe has no GPU behind it, so one *high*-quality visual at
+1600x950 already costs about 600% CPU and the render thread starves the Qt
+main thread: the preset browser froze showing stale framebuffer garbage while
+the app went on logging preset changes. `quality: low`, `fps: 30` and a small
+mesh make the rig usable for UI work. The same number with two visuals at
+1920x1080 is recorded above as "not a hang" -- it is the same cause.
+
 **Reviewing by mutation.** Break the shipped code one way at a time, run every
 suite, and a green suite is a gap in the tests rather than a pass. Script it,
 restore in a `finally`, and print with `flush` -- a redirected python buffers,
@@ -235,6 +251,43 @@ There is no display in an agent shell and SDL needs one, so:
   of them is visible from the source, and all three were on screen the whole time.
 
 ## Traps already paid for
+
+- **A `QFormLayout` set straight on a `QDialog` makes the form's height the
+  window's MINIMUM, and a window manager then refuses to shrink it.** Twenty-one
+  rows of Settings came to about 860px, which is taller than a 1366x768 laptop
+  screen -- the smallest the Microsoft Store itself accepts a screenshot at --
+  so OK and Cancel were below the bottom edge with no way to reach them, and
+  the preset folder a new install has to set was inside that dialog. Found on
+  15 Sep 2026 by opening it under xfwm4 and dragging the bottom edge up: it
+  would not move. The rows go in a `QScrollArea` and the buttons stay outside
+  it. Two things that are not obvious once you do that:
+  - **A `QScrollArea`'s own size hint ignores how big its widget wants to be.**
+    Asking the dialog gave 628x476 for a form needing 810x838, so it opened
+    narrower than the rows and raised a horizontal scrollbar it never needed.
+    Size the window off `form.minimumSizeHint()`, not off `self.sizeHint()`.
+  - **A scroll area only makes shrinking possible.** The window still opens at
+    whatever it is told, so cap the opening height against
+    `screen().availableGeometry()` as well.
+
+- **`QT_QPA_PLATFORM=offscreen` honours any `resize()` you ask for**, so
+  `resize(w, h); assert height() <= h` is not a probe for a minimum-size bug --
+  it passes on the broken build. Compare `minimumSizeHint().height()` against
+  `sizeHint().height()` instead: equal means the layout is the floor. Ratios
+  travel, pixels do not -- the offscreen fallback font is nothing like the
+  shipping one (see the browser toolbar note under Testing).
+
+- **Qt indents a list row that carries an icon and draws one without it flush
+  against the edge.** Most presets in a fresh library have no thumbnail, so
+  once any row on screen had a picture the names stepped in and out by 96px
+  down the whole list. Rows with no picture get a shared transparent pixmap of
+  `ICON_SIZE`; one pixmap, not ten thousand. The row *height* half of this was
+  fixed a week earlier and read as the whole problem.
+
+- **A lazy loader driven by the scroll bar is not driven by a resize.**
+  `_load_visible_icons` was wired to `valueChanged` and to a rebuild, so
+  dragging the browser's bottom edge down revealed rows that never asked for
+  their thumbnails at all. Anything that fills "the rows on screen" needs
+  `resizeEvent` too.
 
 - **SDL drops a position or size request that matches what it already
   believes, so a window the *window manager* moved cannot be put back through
@@ -1361,7 +1414,17 @@ There is no display in an agent shell and SDL needs one, so:
   DEFAULT_KEYMAPS share a key in the first place. Note the two are *separate*
   files: a source checkout reads `keymaps.json` beside the code, an installed
   build reads the one under `~/.config/BomsAIVisualizer` — they drift, and the
-  repo's is the older of the two.
+  repo's is the older of the two. **Re-checked 15 Sep 2026 against the user's
+  real `~/.config/BomsAIVisualizer/keymaps.json`**, which gives "c" to hard
+  cuts and has no `snapshot` entry at all: the loader prints `[config] snapshot
+  has no key: c is already toggle_hard_cuts in keymaps.json` and hands back
+  `snapshot: ""`. Working as intended. What is *not* reconciled is a file that
+  names the same key twice **explicitly** — both rows then show it, and the
+  later one is dead. That is hand-edit only (typing into the dialog clears the
+  other row), so it is left alone deliberately: blanking one would need the
+  elif chain's order, which is not the table's order, and guessing wrong is
+  worse than showing both. A fixture with both keys written out is how this was
+  briefly mistaken for a live bug.
 - **One frame that arrives with no drawable size used to end dual mode for the
   session.** `_render_visuals` fell through to `_do_set_dual(False)` whenever
   `_blend.ready(w, h)` was false, and `ready` answers false for `w <= 0` as

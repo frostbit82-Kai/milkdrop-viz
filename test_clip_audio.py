@@ -167,6 +167,34 @@ def a_wild_ratio_is_ignored_rather_than_applied():
     assert _scaler(31, 30, 0.1) == 1.0
 
 
+def a_failed_audio_write_says_so_and_stops(capsys=None):
+    """A clip with no sound and nothing in the log to explain it.
+
+    write_audio swallowed every wave error, so a full disk -- the realistic
+    one -- produced a silent clip that looked like the feature not working.
+    It now drops the sound once, loudly, instead of failing on every chunk
+    for the rest of the recording.
+    """
+    import io, contextlib
+
+    class Doomed:
+        def writeframes(self, _pcm):
+            raise OSError(28, "No space left on device")
+
+    r = _Recorder.__new__(_Recorder)
+    r._wav = Doomed()
+    r._wav_lock = __import__("threading").Lock()
+    buf = io.StringIO()
+    with contextlib.redirect_stdout(buf):
+        r.write_audio(np.zeros((CHUNK, 2), dtype="float32"))
+        r.write_audio(np.zeros((CHUNK, 2), dtype="float32"))
+    out = buf.getvalue()
+    assert r._wav is None, "kept the broken wave file and will fail every chunk"
+    assert out.count("[record]") == 1, \
+        f"said it {out.count('[record]')} times instead of once:\n{out}"
+    assert "No space left" in out, f"did not say why:\n{out}"
+
+
 def too_few_frames_to_measure_is_not_a_division_by_zero():
     assert _scaler(1, 30, 1.0) == 1.0
     assert _scaler(0, 30, 1.0) == 1.0

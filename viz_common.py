@@ -5904,11 +5904,21 @@ class _Recorder(threading.Thread):
                 return
             try:
                 w.writeframes(pcm)
-            except Exception:
-                pass
+            except Exception as e:
+                # Give up on the sound rather than retry every chunk: the
+                # realistic failure is a full disk, which fails the same way
+                # next time, and the clip is silent either way. What this cost
+                # before was a silent clip with nothing in the log to say why
+                # -- and sound is half of what the clip is for.
+                self._wav = None
+                print(f"[record] sound stopped: {e}", flush=True)
 
     def _close_wav(self) -> int:
-        """Close the WAV and return how many sample frames it holds."""
+        """Close the WAV and return how many sample frames it holds.
+
+        Zero means the mux leaves the sound out, so a failure here is a silent
+        clip. Say so.
+        """
         with self._wav_lock:
             w, self._wav = self._wav, None
         if w is None:
@@ -5917,7 +5927,8 @@ class _Recorder(threading.Thread):
             n = w.getnframes()
             w.close()
             return n
-        except Exception:
+        except Exception as e:
+            print(f"[record] no sound in the clip: {e}", flush=True)
             return 0
 
     def _timestamp_scale(self) -> float:

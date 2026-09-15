@@ -253,11 +253,18 @@ no ads, no in-app purchases, no gambling.
 
 ## What version this listing is for
 
-**2.1.4.** Both packages are built, verified against the artifact rather than
-the tree, and carry that number inside: `BomsAIVisualizer-2.1.4-win64-setup.exe`
-and `BomsAIVisualizer-2.1.4-linux-x86_64.tar.gz`. Anywhere the copy ends up
-naming a number, that is the number. The EULA already says so, and both build
-scripts refuse to run if it does not.
+**2.1.5.** Anywhere the copy ends up naming a number, that is the number. The
+EULA says so, and both build scripts refuse to run if it does not.
+
+2.1.5 rather than shipping 2.1.4 because a polish pass on 2026-09-15 found
+something a buyer could be stopped by: **the Settings dialog could not be made
+shorter than about 860px**, which is taller than a 1366×768 laptop screen — the
+smallest size the Store itself accepts a screenshot at — so OK and Cancel were
+off the bottom, with the preset folder a new install has to set inside the
+dialog they could not finish. Two smaller things went in with it: preset names
+in the browser list stepped 96px left and right depending on whether that
+preset had a thumbnail yet, and a recording that lost its sound mid-clip said
+nothing about it.
 
 Everything above was 1.x copy until 2026-09-15 and is now current. What went
 in, and why each one was worth the words:
@@ -358,7 +365,7 @@ can fail the same four ways:
 - The browser in them predates the tab row, the lock and the two rating
   buttons, so it is not the window this version opens at all.
 
-Nothing is lost that the 2.1.4 build cannot produce again in an evening, and
+Nothing is lost that the 2.1.5 build cannot produce again in an evening, and
 the ten above are what to shoot.
 
 ## Pricing — decided
