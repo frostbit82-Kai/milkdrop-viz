@@ -450,6 +450,30 @@ There is no display in an agent shell and SDL needs one, so:
   wrapper around our id, so deleting one is a sampler reading a texture that
   is not there.
 
+- **A dialog owned by the SDL window can hang the whole application, because
+  that window's message pump is the render thread.** 2026-09-14, reported from
+  a real install as "went to change preset duration, app froze, had to
+  force-close". It is not preset duration and not the Settings dialog: it is
+  *closing any owned window*. `keep_dialogs_above_visuals` sets
+  `GWLP_HWNDPARENT` to the SDL window, and closing an owned window makes
+  Windows transfer activation to the owner **synchronously, on the owner's
+  thread**. The render thread only pumps between frames -- the rest of the
+  time it is inside `projectm_opengl_render_frame`, which on an unlucky preset
+  is a long time, and the driver call it is inside can in turn wait on the
+  window state the Qt thread now holds. Circular wait, no log, no traceback.
+  Caught with `faulthandler.dump_traceback_later(10, repeat=True)`: main
+  thread in `QDialog.accept`, render thread in `render_frame`, **identical
+  across two dumps ten seconds apart**. Confirmed the ownership is genuinely
+  cross-thread by reading it off a live process -- SDL window on thread A,
+  dialog on thread B, dialog's `GWLP_HWNDPARENT` = the SDL window.
+  `_OwnedByVisuals` now clears the owner on `QEvent.Type.Close`, which is
+  measured to arrive **while the native window is still visible** (the order
+  on accept is ActivationChange, Close, WindowDeactivate, then Hide, and Hide
+  is already too late). Setting an owner is safe; closing one is not.
+  **It reproduced 3/3 by hand and 0/20 scripted**, because it needs the render
+  thread to be inside a slow frame at the instant of the close -- so do not
+  read a run that did not hang as evidence the hazard is gone.
+
 - **A bare PyOpenGL call on a teardown path is a Windows-only crash.**
   PyOpenGL resolves an entry point on first use and raises
   `NullFunctionError` when it cannot -- and "cannot" includes having no

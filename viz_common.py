@@ -3543,16 +3543,47 @@ class _OwnedByVisuals(QObject):
     _OWNABLE = (int(Qt.WindowType.Window), int(Qt.WindowType.Dialog))
 
     def eventFilter(self, obj, event):
-        if (event.type() == QEvent.Type.Show
-                and isinstance(obj, QWidget) and obj.isWindow()
+        if not (isinstance(obj, QWidget) and obj.isWindow()
                 and (int(obj.windowFlags()) & int(Qt.WindowType.WindowType_Mask))
                     in self._OWNABLE):
-            QTimer.singleShot(0, lambda w=obj: self._own(w))
+            return False
+        if event.type() == QEvent.Type.Show:
+            QTimer.singleShot(0, lambda w=obj: self._set_owner(w, True))
+        elif event.type() == QEvent.Type.Close:
+            # Straight away, NOT deferred: this has to happen while the window
+            # is still up. Measured -- on accept() the order is
+            # ActivationChange, Close, WindowDeactivate, Hide, and only the
+            # first three arrive while the native window is still visible.
+            # See _set_owner for why closing an owned window is dangerous here.
+            self._set_owner(obj, False)
         return False
 
-    def _own(self, w):
+    def _set_owner(self, w, own: bool):
+        """Own `w` to the visualiser, or hand it back.
+
+        **The owner is cleared before the window closes, and that is not
+        tidying up.** The visualiser's window belongs to the render thread --
+        SDL created it there -- so an owned dialog on the Qt thread has an
+        owner whose message pump is somebody else's. Closing such a window
+        makes Windows transfer activation to the owner *synchronously, on the
+        owner's thread*, and the render thread only pumps between frames: it
+        is inside `projectm_opengl_render_frame` the rest of the time, which
+        on an unlucky preset is a long time, and the driver call it is inside
+        can in turn be waiting on the window state the Qt thread is now
+        holding. That is a circular wait, and it hangs the whole application
+        with no log and no traceback -- reported from a real install on
+        2026-09-14, and caught with faulthandler: main thread parked in
+        QDialog.accept, render thread parked in render_frame, unchanged
+        across two dumps ten seconds apart.
+
+        Setting the owner is safe (it is one call on our own window, and the
+        owner's thread is not consulted); it is the *close* that is not. So
+        the relationship exists for exactly as long as it is useful -- while
+        the dialog is up and could be clicked behind the visuals -- and is
+        gone before the dangerous call.
+        """
         hwnd = getattr(self._host, "_native_handle", None)
-        if not hwnd or not w.isVisible():
+        if own and (not hwnd or not w.isVisible()):
             return                 # no SDL window yet, or already dismissed
         try:
             u = _ctypes.windll.user32
@@ -3561,9 +3592,10 @@ class _OwnedByVisuals(QObject):
                                             _ctypes.c_void_p]
             u.SetWindowLongPtrW(_ctypes.c_void_p(int(w.winId())),
                                 self._GWLP_HWNDPARENT,
-                                _ctypes.c_void_p(int(hwnd)))
+                                _ctypes.c_void_p(int(hwnd) if own else 0))
         except Exception as e:
-            print(f"[ui] could not own {type(w).__name__}"
+            verb = "own" if own else "disown"
+            print(f"[ui] could not {verb} {type(w).__name__}"
                   f" to the visualiser: {e}", flush=True)
 
 

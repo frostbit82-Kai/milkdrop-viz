@@ -1586,3 +1586,71 @@ from `4dc8258`, now five commits behind; that is Linux's to rebuild.
 Not done: the Inno installer itself. Running it trips UAC and there is no
 non-interactive elevation here, so a fresh install, the shortcuts and the
 screensaver registration stay unverified — the payload is not.
+
+
+### The freeze on closing a dialog — 2026-09-14
+
+Reported from the installed 2.1.2 build: *"went to change preset duration, app
+froze, had to force-close"*. It is neither preset duration nor the Settings
+dialog. **Closing any window the visualiser owns can deadlock the
+application**, and it has been able to since `keep_dialogs_above_visuals` was
+written — this is not a 2.1.2 regression.
+
+**What was measured, in order.**
+
+1. Reproduced from source. `BOMSAI_FPS=1` stopped printing the moment OK was
+   clicked and never resumed: the render thread was gone, not slow.
+2. Narrowed by one variable at a time — it hangs with **nothing changed** in
+   the dialog, and opening the dialog is fine. It is the close.
+3. `faulthandler.dump_traceback_later(10, repeat=True, exit=False)` gave two
+   dumps ten seconds apart that are **identical**:
+   - main thread in `SettingsDialog.accept` → `super().accept()`
+   - render thread in `viz_common.py:2097`, `projectm_opengl_render_frame`
+4. The ownership was then read off a live process rather than inferred:
+
+   ```
+   SDL window   hwnd 1901934  — thread 6924
+   Settings     hwnd 3146818  — thread 6760
+   Settings GWLP_HWNDPARENT = 1901934
+   ```
+
+   A window on one thread, owned by a window on another.
+
+**The mechanism.** Windows keeps an owned window above its owner, and when an
+owned window closes it transfers activation to the owner — synchronously, on
+the *owner's* thread. That thread is the render thread, which pumps only
+between frames; the rest of the time it is inside projectM. The driver call it
+is inside can itself wait on window state the Qt thread is holding, and then
+neither side moves. Nothing is logged because nothing failed.
+
+**The fix.** `_OwnedByVisuals` now clears `GWLP_HWNDPARENT` on
+`QEvent.Type.Close` as well as setting it on `Show`. Which event to use was
+measured, not guessed — on `accept()` the order is ActivationChange, **Close**,
+WindowDeactivate, Hide, and only the first three arrive while the native window
+is still visible, so `Hide` (the obvious choice) is already too late. Setting
+an owner is safe: it is one call on our own window and the owner's thread is
+never consulted. It is only the close that is dangerous, so the relationship
+now lasts exactly as long as it is useful.
+
+**What is verified, and what is not.** Verified on the real app: the dialog is
+still owned by the visualiser while it is up (`GWLP_HWNDPARENT` reads back as
+the SDL window), a click on the visuals still leaves the dialog on top — which
+is the whole reason the filter exists — and twenty-four suites pass.
+
+**Not verified: that the hang is gone.** It reproduced 3/3 by hand and then
+**0/20 scripted** — quick, with a fifteen-second dwell, with the value actually
+changed, under load, from source and from the installed build. It needs the
+render thread to be inside a slow frame at the instant of the close, which
+depends on which preset happens to be up. So the fix removes the mechanism that
+the stacks show, and nobody should read a run that did not hang as proof.
+If it ever recurs, the first move is the faulthandler wrapper again: a build
+with `MILKDROP_CONSOLE=1` plus `dump_traceback_later(10, repeat=True)` names
+the two parked threads in one shot.
+
+Two probes that lied on the way past, both mine rather than the app's: a
+liveness check that hashed the window bitmap called a **fresh install
+"static"** because the welcome preset is a still picture and 11,223 presets
+were still loading; and a stand-in Qt harness reported the dialog unowned
+because an application event filter's deferred `singleShot(0)` had not run yet
+and because filters run in **reverse** install order. The real app answered
+both questions correctly and immediately. Test the app, not a model of it.
