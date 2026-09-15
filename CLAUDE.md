@@ -72,6 +72,23 @@ through PyInstaller and Inno Setup 6, plus the portable tree beside it.
 `-SkipInstaller` stops after freezing. Inno Setup installs per-user under winget,
 so the script looks in `%LOCALAPPDATA%\Programs` as well as Program Files.
 
+**To check what an install actually did, diff the installed tree against the
+portable tree the same build produced** -- relative path and size, both ways.
+The only difference should be Inno's own `unins000.exe` and `unins000.dat`.
+Everything else it can tell you is a corollary, and this catches the one thing
+nothing else does: **a file in the install that is not in the package is left
+over from an older version.** Inno removes only what it is installing now,
+under the names it is installing now, so a DLL or a licence text that stops
+shipping survives every upgrade for the life of the machine. 15 Sep 2026 that
+found `glew32.dll` and `GLEW-LICENSE.txt` still sitting in a 2.1.6 install,
+dropped when the projectM pin moved off GLEW weeks earlier. `[InstallDelete]`
+therefore clears `_internal` and `licenses` **wholesale** rather than naming
+files: both directories are entirely ours, so anything in them the package
+does not carry is by definition stale, and naming things only catches the ones
+somebody remembered. The install needs a UAC click and there is no
+non-interactive elevation on this box, so this check is one thing an agent
+cannot do alone -- ask.
+
 **The version lives in `VERSION` and nowhere else, bar one guarded line.**
 Both build scripts read that file. `installer/licenses/EULA.txt` also names the
 version, in prose, and nothing reads it back — so both scripts refuse to build

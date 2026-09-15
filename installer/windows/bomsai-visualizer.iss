@@ -73,6 +73,19 @@ Name: "screensaver"; Description: "Use {#AppName} as the Windows screen saver"; 
 ;
 ; This section runs before the new files are laid down, so the new group is
 ; written afterwards and is not caught by its own clean-up.
+;
+; `_internal` and `licenses` are cleared WHOLESALE rather than by name,
+; because naming things only catches the ones somebody remembered. Both
+; directories are entirely ours -- PyInstaller owns one and the build script
+; fills the other -- so anything in them that the package no longer carries is
+; by definition left over. Found by diffing an install against the portable
+; tree it came from, 15 Sep 2026: `glew32.dll` (506 KB) and
+; `GLEW-LICENSE.txt` were both still there at 2.1.6, dropped when the projectM
+; pin moved off GLEW and carried by every upgrade since. That is also the way
+; to check this section ever did anything -- the two trees should differ by
+; the uninstaller and nothing else.
+Type: filesandordirs; Name: "{app}\app\_internal"
+Type: filesandordirs; Name: "{app}\licenses"
 Type: files; Name: "{app}\app\MilkDropVisualizer.exe"
 Type: files; Name: "{app}\app\MilkDropVisualizer.scr"
 Type: files; Name: "{autoprograms}\MilkDrop Visualizer\MilkDrop Visualizer.lnk"

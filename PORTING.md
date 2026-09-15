@@ -2107,8 +2107,8 @@ whatever `APPDATA` is pointed at.
 
 #### The verified 2.1.6 Windows package
 
-**`BomsAIVisualizer-2.1.6-win64-setup.exe`**, 78.4 MB (82,214,466 bytes),
-sha256 `4b92372b87e67318268be8bc4e0f4b7d0c5d41eafd5e092a149ccf70b5a4807d`.
+**`BomsAIVisualizer-2.1.6-win64-setup.exe`**, 78.4 MB (82,217,716 bytes),
+sha256 `ccb9bc9794ae211103bf97f62a299513a217ef6c82a8e84b07cdfa66ac3339db`.
 Built from the clean tree with the 2.1.5 installer deleted first — one package
 per directory, same rule as the Linux side.
 
@@ -2142,13 +2142,60 @@ Checked, in this order:
   dated before the session started — which is the check that the isolation
   held, and the one that failed a session ago.
 
-**The Inno installer itself is still unverified**, as in every entry above:
-it needs a UAC prompt and there is no non-interactive elevation here. What is
-verified is the payload. That matters more than usual this time, because the
-`[InstallDelete]` and `UsePreviousGroup` changes only do anything *during* an
-install — the next person to run this on a machine that was upgraded from
-before the rename should check that `MilkDropVisualizer.exe` and the two dead
-shortcuts are gone and that the group is called "BomsAI Visualizer".
+#### The installer is verified now — 2026-09-15, and it took one click
+
+Every entry above this one says the Inno installer is unverified because it
+needs a UAC prompt and there is no non-interactive elevation here. Adam ran it
+by hand and accepted the prompt, so this is the first entry that can say what
+an install actually does.
+
+**How to check one, in the order worth doing it:**
+
+1. **Diff the installed tree against the portable tree the same build
+   produced.** This is the whole check, and everything else is a detail: walk
+   both, compare relative path and size, and the only difference should be
+   Inno's own `unins000.exe` and `unins000.dat`. A file in the install that is
+   not in the package is **left over from an older version** — Inno removes
+   only what it is installing now, under the names it is installing now.
+2. The Start Menu group: its *name*, and the target of every `.lnk` in it.
+3. The Add/Remove Programs entry — `DisplayName`, `DisplayVersion`,
+   `Publisher`, `InstallLocation` — out of
+   `HKLM\...\CurrentVersion\Uninstall\*`.
+4. `HKCU\Control Panel\Desktop\SCRNSAVE.EXE`, if the screensaver task was
+   ticked.
+5. Start it from the Start Menu shortcut, not from the folder.
+
+**What the 2.1.6 install came back with.** 270 package files, all 270
+installed, no size difference on any of them. `MilkDropVisualizer.exe` gone.
+The "MilkDrop Visualizer" Start Menu group gone entirely — `dirifempty` took
+the folder once its four shortcuts were cleared — and a "BomsAI Visualizer"
+group in its place holding exactly two, both pointing where they should.
+Add/Remove reads BomsAI Visualizer 2.1.6, BomsAI Software. The screensaver
+value still points at `BomsAIVisualizer.scr`. So `[InstallDelete]` and
+`UsePreviousGroup=no` both did what they were written to do.
+
+**And step 1 found two more.** The install carried `app/_internal/glew32.dll`
+(506 KB) and `licenses/GLEW-LICENSE.txt`, neither of which is in the package.
+GLEW was dropped when the projectM pin moved — the entry in CLAUDE.md about
+`_init_glew()` becoming a startup failure is the same event — and every
+upgrade since has carried both files forward. Nothing loads the DLL any more,
+so it is dead weight rather than a hazard, but a licences folder naming a
+component that does not ship is the kind of thing that folder exists to get
+right.
+
+Fixed by clearing `_internal` and `licenses` **wholesale** in
+`[InstallDelete]` rather than by naming the two files. Both directories are
+entirely ours — PyInstaller owns one, the build script fills the other — so
+anything in them the package no longer carries is by definition left over,
+and naming things only ever catches the ones somebody remembered. The
+installer was rebuilt with that in; the exe recorded above was superseded
+before it went anywhere, and its sha is the one in this entry.
+
+The install directory is still `C:\Program Files\MilkDrop Visualizer`, which
+is cosmetic and deliberate: `UsePreviousAppDir` stays on, because a new
+directory would orphan the old one with the uninstaller inside it. A clean
+uninstall and reinstall is what moves it, and that is Adam's call rather than
+something an upgrade should do behind him.
 
 Inno also prints a warning that predates this session and is worth knowing
 about: `PrivilegesRequired=admin` with `HKCU` writes in the script. The
