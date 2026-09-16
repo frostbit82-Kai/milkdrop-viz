@@ -72,6 +72,17 @@ through PyInstaller and Inno Setup 6, plus the portable tree beside it.
 `-SkipInstaller` stops after freezing. Inno Setup installs per-user under winget,
 so the script looks in `%LOCALAPPDATA%\Programs` as well as Program Files.
 
+**A "must be absent" control in the package probe cannot be a word the code
+talks about.** The probe inflates the PYZ out of the frozen exe and looks for
+names the new work introduced, with two or three never-written names as the
+control -- if those "match" too, it is matching noise. 16 Sep 2026 the control
+was `SHQueryUserNotificationState`, the API that release had just *removed*,
+and it was found: the name survives in the docstring explaining why it went,
+and docstrings compile into the bytecode. A control has to be a name that
+appears nowhere in the repo at all, comments and prose included; `grep -rn`
+for it before trusting the run. The removal itself is checked by grepping the
+source for the call, which is the right tool for that question anyway.
+
 **To check what an install actually did, diff the installed tree against the
 portable tree the same build produced** -- relative path and size, both ways.
 The only difference should be Inno's own `unins000.exe` and `unins000.dat`.
@@ -433,6 +444,44 @@ There is no display in an agent shell and SDL needs one, so:
   falls back to `_fit_to_wallpaper` when the *size* changed and the GL viewport
   and projectM need telling too. The general rule: SDL is the right way to ask
   for a change, and the wrong way to undo somebody else's.
+
+- **`SHQueryUserNotificationState` sees YOUR OWN full-screen window, so a
+  wallpaper asking it "is another app full-screen?" pauses itself for ever.**
+  Reported 16 Sep 2026 as *"displays a static box, can't interact any
+  further"* and it is the worst kind of bug: the app is healthy, the tray menu
+  opens, nothing is in the log, and it looks completely dead. In wallpaper
+  mode the visualiser is by definition a full-screen OpenGL window covering
+  the display, so the shell answers `QUNS_RUNNING_D3D_FULL_SCREEN` about *us*
+  — measured, state **3** with the wallpaper up and state **5**
+  (ACCEPTS_NOTIFICATIONS) with the app shut. `should_idle` pauses for a
+  full-screen app **whatever the silence is**, so the visuals parked within
+  one 2-second poll of the mode starting and no amount of music brought them
+  back. The API cannot answer this question here and has been dropped: ask
+  what is actually in front instead — `GetForegroundWindow`, its pid against
+  ours, its class against the shell's, its rectangle against its monitor's.
+  A wallpaper is a child of WorkerW and never takes focus, so the foreground
+  window can never be the one that trips it.
+
+  **And the QUNS constants were off by one, which is why it read as
+  plausible.** The real values are `NOT_PRESENT` 1, `BUSY` 2,
+  `RUNNING_D3D_FULL_SCREEN` 3, `PRESENTATION_MODE` 4; the code had BUSY at 1,
+  so it was treating NOT_PRESENT (locked, screensaver, fast user switch) as
+  busy and missing PRESENTATION_MODE entirely, while its "presentation mode"
+  value of 3 happened to land on the real D3D-fullscreen one. Every constant
+  in a ctypes shim is worth reading off the SDK header once.
+
+- **A paused wallpaper shows whatever was on the buffer when the loop
+  stopped, so the frame it parks on has to be one drawn since the last
+  resize.** On Windows the visualiser is a layered child of WorkerW and DWM
+  only recomposites it when it swaps — so with no swap, the desktop keeps the
+  last frame for as long as the room is quiet. Entering wallpaper mode
+  *resizes* the window, and parking on that same pass left the frame from the
+  old windowed size sitting in a corner of the desktop: the "static box"
+  above. `_check_idle` therefore returns False on the pass that goes idle —
+  draw one more, then park — and `_set_wallpaper_mode` restarts the silence
+  clock on the way in, so the mode gets its whole window rather than
+  inheriting one that expired during startup on a machine nobody has played
+  anything on.
 
 - **Everything below the idle-pause `continue` in the render loop stops for as
   long as the desktop is quiet, which for a wallpaper is nearly always.** The

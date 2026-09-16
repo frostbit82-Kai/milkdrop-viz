@@ -2468,3 +2468,124 @@ switches now do on every toggle. Arbitrary rather than wrong.
 this build changes it. The check that proved it is in the entry above: diff
 the installed tree against the portable tree, and expect Inno's `unins000`
 pair and nothing else.
+
+### Desktop wallpaper mode paused itself — 2.1.9, 2026-09-16
+
+Reported against the 2.1.8 install, an hour after it went on: *"Tried desktop
+mode, app stops working once enabled... displays a static box, can't interact
+any further, using Task Manager to close afterwards."*
+
+Nothing had crashed. No `Application Error`, no bugcheck, no minidump, the
+machine up six hours, and the app's own config untouched since 8 September —
+worth writing down because the WER log *did* carry four `BlueScreen` entries
+from that morning, with empty fault buckets and no reboot behind them. Stale
+WER records are not a blue screen; check for a BugCheck event and an uptime
+before reading anything into one.
+
+#### What it was
+
+`fullscreen_app_running()` asked `SHQueryUserNotificationState`, which answers
+"is this machine busy" — and in wallpaper mode the thing making it busy is
+**us**. A full-screen OpenGL window covering the display reads back as
+`QUNS_RUNNING_D3D_FULL_SCREEN`. Measured both ways: state **3** with the
+wallpaper up, state **5** (ACCEPTS_NOTIFICATIONS) with the app shut.
+`should_idle` pauses for a full-screen app *whatever the silence is*, so
+within one 2-second poll of the mode starting the render loop parked, and no
+amount of music brought it back. The visuals had drawn one frame; the preset
+never advanced past the first.
+
+That it looked like a **box** rather than a still picture is the second half.
+The visualiser is a layered child of WorkerW and DWM only recomposites it when
+it swaps, so with the loop parked the desktop keeps whatever was on the buffer
+— and entering wallpaper mode resizes the window, so what stayed there was the
+frame from the old 1280x720 window, in the corner where that window had been.
+
+And the constants were off by one, which is why the call read as plausible:
+the real values are `NOT_PRESENT` 1, `BUSY` 2, `RUNNING_D3D_FULL_SCREEN` 3,
+`PRESENTATION_MODE` 4, and the code had BUSY at 1. So it treated NOT_PRESENT
+as busy and missed PRESENTATION_MODE, while its own "presentation mode" value
+of 3 happened to land on the real D3D-fullscreen one.
+
+#### Three changes
+
+- **`fullscreen_app_running` asks what is actually in front.**
+  `GetForegroundWindow`, its pid against ours, its class against the shell's,
+  its rectangle against its monitor's. A wallpaper is a child of WorkerW and
+  never takes focus, so the foreground window can never be the one that trips
+  it. The decision is `foreign_fullscreen`, a plain function beside
+  `should_idle` for the same reason that one is: policy, and the loop it
+  serves needs a display.
+- **The pass that goes idle still draws.** `_check_idle` returns False the
+  first time round, so whatever gets parked was drawn since the resize.
+- **Entering wallpaper mode restarts the silence clock**, so the mode gets its
+  whole twenty seconds instead of inheriting one that ran out during startup
+  on a machine nobody has played anything on. Without it the feature looks
+  broken by the act of asking for it, even with the other two fixed.
+
+#### Verified
+
+Reproduced first, with the reporter's own config copied into the repo: within
+5 seconds of pressing `d`, `[idle] paused`, the preset stuck on the first one,
+and the desktop showing a 1280x720 rectangle of stale visuals. With the fixes
+in, the same run holds no `[idle] paused` at all over 64 seconds of a quiet
+room, and the preset advances.
+
+The screen still cannot be photographed in this mode — that trap is already
+written up — so the proof is **a clip recorded from the tray menu while the
+wallpaper was up: 1920x1080, 255 frames, 8.5 seconds.** Full screen, live,
+and at the size the old code could never reach. The tray menu opening at all
+is the other half of the report answered: the app was never unresponsive, and
+"can't interact any further" is what a desktop window is — it takes no input
+by design, and the tray icon, which Windows 11 hides in the chevron flyout, is
+the only way in. Worth considering whether the toast on the way in says that
+loudly enough.
+
+Five mutations of the three fixes are each caught by `test_idle_pause`, scored
+on the exit code. Three new checks name the bug: our own wallpaper is not
+another app, the desktop is not either, and the frame that goes idle is still
+drawn. The one that cannot run without a window — the silence-clock restart —
+is pinned structurally with `ast`, which is the same tool the auto-advance
+guard is pinned with.
+
+**2.1.9** because 2.1.8 is installed on the reporter's machine and these are
+three more changes to `viz_common.py`. Linux is still to rebuild; it should
+come straight to 2.1.9 rather than stopping at 2.1.8, and the fix matters
+there too — the API is Windows-only, but the parked-frame and silence-clock
+halves are not.
+
+#### The verified 2.1.9 Windows package
+
+**`BomsAIVisualizer-2.1.9-win64-setup.exe`**, 78.4 MB (82,233,667 bytes),
+sha256 `af4a8d16ff0b967167d34add971537c7d4dc1b0256c2addba40edf5900df1081`.
+Built from the settled tree with 2.1.8 deleted first; `VERSION` inside reads
+2.1.9 and the bundled EULA agrees.
+
+691 zlib streams inflated, carrying `foreign_fullscreen`, `_SHELL_CLASSES`,
+`_MONITORINFO`, `GetForegroundWindow` from this pass and `_clear_window` and
+`_req_win2` from 2.1.8.
+
+**The first control was wrong and the probe caught nothing because of it.**
+`SHQueryUserNotificationState` — the API this release removes — was set as a
+must-be-absent control and was found in the package: the name survives in the
+docstring that explains why it went, and docstrings compile into the
+bytecode. Controls have to be names that appear nowhere in the repo at all,
+prose included. Rerun with three of those and the package is clean; that the
+*call* is gone was settled by grepping the source for `WinDLL("shell32")`,
+which is the right tool for that question and reads zero.
+
+**Run on the reporter's own config**, copied into an isolated profile
+untouched, on the frozen build: alive and responding 105 seconds after start,
+then `d`, then forty seconds of desktop mode in a quiet room — still alive,
+still responding, window at 0,0 1920x1080 parented into a WorkerW. On 2.1.8
+that same run parked within five seconds and never came back.
+
+Be precise about where each half was proved. The **frozen** build gives
+structure and liveness. The proof that it is *drawing*, at the right size, is
+from the **source** run: a clip recorded from the tray menu while the
+wallpaper was up came back 1920x1080, 255 frames, 8.5 seconds. The tray icon
+would not take a click on the later frozen attempt — the Windows 11 chevron
+flyout did not open under the pointer — so that clip was not repeated on the
+artifact. The code is identical and the probe says so, but the sentence "the
+shipped build was seen drawing" is not one this entry gets to make.
+
+The installer is the verified one from 2.1.6 and nothing here touches it.
