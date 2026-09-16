@@ -1639,6 +1639,16 @@ There is no display in an agent shell and SDL needs one, so:
   empty, which reads as "the app drew nothing". Nested Xephyr is the only way
   to see the UI: `Xephyr :7 -screen 1280x820 -ac -noreset`, `xfwm4` inside it,
   then grab `:7`.
+- **`ffmpeg -f x11grab` takes its offset as `+X,Y`, not `+X+Y`, and silently
+  grabs from 0,0 when you get it wrong.** No warning, no error, and the image
+  that comes back is a perfectly good screenshot of the wrong rectangle --
+  which reads as the window being in the wrong place rather than the grab
+  being. 16 Sep 2026 that produced two "the crop offset is still wrong"
+  rounds on a dialog that was exactly where xwininfo said it was. The robust
+  move is to skip the offset entirely: grab the **whole screen**, then crop
+  the PNG with `-vf "crop=W:H:X:Y"`, whose argument order is unambiguous and
+  which fails loudly. Take the rectangle from `xwininfo -id <frame>` rather
+  than by eye.
 - **`xdotool type` swallows newlines.** A multi-line string typed into a
   `QPlainTextEdit` arrives as one line, which for a `.milk` file means a preset
   that parses into nothing and reports no error. Send each line separately with
