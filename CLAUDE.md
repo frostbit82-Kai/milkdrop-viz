@@ -374,6 +374,25 @@ There is no display in an agent shell and SDL needs one, so:
   method is looking at pictures: when one shows something surprising, take a
   second one — a full-screen grab and a crop — before believing it.
 
+- **A Qt app in the Xephyr rig ignores `DISPLAY` while `WAYLAND_DISPLAY` is
+  set.** 16 Sep 2026: `DISPLAY=:7 python shoot_keys.py` reported
+  `platform: wayland` and put the dialog on the *host* desktop, in front of the
+  user. `xwininfo -root -tree` on `:7` showed only Qt's 10x10 helper window, so
+  it reads as "the dialog never mapped" rather than "the dialog is on the wrong
+  screen". Force it: `QT_QPA_PLATFORM=xcb`. Print `app.platformName()` in any
+  rig script -- it answers in one line what the window tree cannot.
+
+- **A dialog can be shot without the app behind it.** `KeymapDialog` and the
+  other dialogs take their data and their stylesheet and nothing else, so a
+  six-line script plus `set_app_theme` gives the real dialog in the real font
+  with no GL, no projectM, no audio and no llvmpipe. Point `XDG_CONFIG_HOME` at
+  a scratch directory and the values in it are the shipped defaults rather than
+  whatever this machine has been rebound to -- which is what made the previous
+  key-bindings shot disagree with the guide's own table.
+
+- **Grab with `-draw_mouse 0`.** The pointer sat over a notes cell in the first
+  frame and had to be reshot.
+
 - **Take the screenshot and look at it.** Driving the app for the site's pictures
   on 2026-09-08 found three defects that seventeen passing suites could not: the
   Backup menu read "Back up ratings _collections…" because Qt eats a lone `&` in
