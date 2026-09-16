@@ -74,7 +74,9 @@ CONTROLS
     x                 exclude this one (rate it 0) and move on
     c                 snapshot this preset for the browser
     d                 desktop wallpaper mode on / off (X11 sessions)
-    2                 show a second preset over the first
+    1                 visual 1 on / off
+    2                 visual 2 on / off
+    [  /  ]           crossfade towards visual 1 / visual 2
     tab               with two showing, adjust the other one
     h                 hard cuts on/off
     m                 shuffle the playlist order on / off

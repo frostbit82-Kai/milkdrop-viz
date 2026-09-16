@@ -45,7 +45,9 @@ CONTROLS
     x                 exclude this one (rate it 0) and move on
     c                 snapshot this preset for the browser
     d                 desktop wallpaper mode on / off
-    2                 show a second preset over the first
+    1                 visual 1 on / off
+    2                 visual 2 on / off
+    [  /  ]           crossfade towards visual 1 / visual 2
     tab               with two showing, adjust the other one
     h                 hard cuts on/off
     m                 shuffle the playlist order on / off
@@ -72,12 +74,25 @@ actually sat through. A fresh install has none and fills in as you use it.
 TWO AT ONCE
 -----------
 
-Press 2, or right-click -> Add a second visual, to run a second preset over
-the first. Tab switches which of the two everything else acts on -- next,
-previous, the browser, the rating -- so you can pick both independently, and
-Settings carries the strength of the blend and the quality the second one
-renders at. It costs a second full render, so the second is set to low quality
-by default.
+The right-click menu has a switch for each of the two visuals and a
+crossfader under them. One of the two is always on -- both off is a black
+window -- so whichever is left alone greys out.
+
+The fader runs from visual 1 alone, through both of them mixed, to visual 2
+alone; "[" and "]" move it a step at a time. A visual the fader has taken all
+the way out is not drawn at all, so parking it at one end costs no more than
+running one visual.
+
+Tab switches which of the two everything else acts on -- next, previous, the
+browser, the rating -- so you can pick a preset for each independently. The
+Quality row in Settings follows the same choice, and visual 2 starts on Low,
+because the pair costs about twice one of them.
+
+With more than one monitor, right-click -> Send visual to gives either visual
+a screen of its own instead of sharing one window. The fader stops mixing
+when they are apart -- there is nothing to mix -- and each monitor shows its
+visual whole. The picture is letterboxed rather than stretched, so it matches
+the shape of the main window; make that window fullscreen and the bars go.
 
 
 CHANGING A PRESET
