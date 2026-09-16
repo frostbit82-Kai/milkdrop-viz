@@ -10634,6 +10634,13 @@ class Renderer:
             x = None if split else (
                 1.0 if not self._v1_on else dual_crossfade(self._cfg))
             for i, pm in enumerate(self._pms):
+                # A visual whose switch is off is not drawn, whether or not
+                # the fader is what is carrying the "off". Without this line
+                # the split case below draws visual 1 into this window at
+                # full strength while its own switch says it is off -- each
+                # half is covered on its own and the pair was not.
+                if i == 0 and not self._v1_on:
+                    continue
                 # Don't draw what the crossfader has faded out. The shader
                 # multiplies that end by zero, so its target is not sampled
                 # and a stale frame in it cannot show -- which makes parking
@@ -10659,7 +10666,17 @@ class Renderer:
                 # caller reads THIS window's back buffer for the recording
                 # and for thumbnails, so it has to be the one left drawn.
                 self._draw_second_window()
-                self._blend.draw(dw, dh, 0.0)
+                if self._v1_on:
+                    self._blend.draw(dw, dh, 0.0)
+                else:
+                    # Visual 1 switched off with visual 2 away on its own
+                    # monitor leaves this window nothing to show, and
+                    # `draw(0.0)` is "visual 1 alone" -- the one thing the
+                    # switch says must not be on screen. Black instead, and
+                    # black is also what the recorder and the thumbnail then
+                    # read, which is the honest answer to "record what this
+                    # window is showing".
+                    self._clear_window(dw, dh)
             else:
                 self._blend.draw(dw, dh, x)
             return
@@ -10695,6 +10712,21 @@ class Renderer:
             return
         if on:
             self._start_dual()
+            if self.dual_on():
+                # Back on the monitor it was sent to. `visual2_display` is a
+                # setting like the switches beside it, and `_stop_dual` drops
+                # the window without clearing it, so without this the *menu*
+                # is what lies: it ticks the monitor out of config, and both
+                # a switch off and on again and every launch after using the
+                # feature showed visual 2 as being on a screen it was not on.
+                #
+                # Queued rather than done here: the loop drains `_req_win2`
+                # straight after the request that got us here, and by then
+                # `run` has enumerated the monitors that `_do_set_window2`
+                # reads. -1 costs nothing -- it is the early return there --
+                # and a monitor that has since been unplugged says so and
+                # falls back to the one window.
+                self._req_win2 = int(self._cfg.get("visual2_display", -1))
         else:
             self._stop_dual()
         self._cfg["dual_enabled"] = self.dual_on()
@@ -11137,6 +11169,25 @@ class Renderer:
                 _SWP_NOZORDER | _SWP_NOACTIVATE)
         except Exception as e:
             print(f"[renderer] could not overhang the display: {e}", flush=True)
+
+    def _clear_window(self, w: int, h: int):
+        """Black, on the main window. Render thread.
+
+        For the one state that has nothing to draw: visual 1 switched off
+        while visual 2 is away on a monitor of its own. Guarded the way
+        `_stop_dual` is, and for two reasons: PyOpenGL raises
+        `NullFunctionError` rather than no-opping when it cannot resolve an
+        entry point, which is the Windows-only half; and this is the only
+        raw GL call `_render_visuals` makes -- everything else goes through
+        the blender, which the suite replaces with a stand-in -- so without
+        it no offscreen test could reach this branch at all.
+        """
+        if not bool(glBindFramebuffer):
+            return
+        glBindFramebuffer(GL_FRAMEBUFFER, 0)
+        glViewport(0, 0, w, h)
+        glClearColor(0.0, 0.0, 0.0, 1.0)
+        glClear(GL_COLOR_BUFFER_BIT)
 
     def _draw_second_window(self):
         """Visual 2 alone, in its own window. Render thread.

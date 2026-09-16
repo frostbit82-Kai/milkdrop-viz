@@ -235,6 +235,32 @@ def a_window_each_draws_both_visuals_whatever_the_fader_says():
     assert r._blend.drawn[-1][2] == 0.0, r._blend.drawn
 
 
+def visual_one_switched_off_is_not_drawn_on_the_monitor_it_left_behind():
+    """The two checks above are each right on their own and the pair was not.
+
+    A screen each means the main window shows visual 1 -- `draw(0.0)` -- and
+    it did that whether or not visual 1's own switch was on, so switching it
+    off with visual 2 away on another monitor left visual 1 on screen at full
+    strength with the tick beside it saying "off". This window has nothing to
+    show in that state, and black is also the honest thing for the recorder
+    and the thumbnail to read out of it."""
+    r = renderer(cfg={"dual_crossfade": 0.5})
+    r._v1_on = False
+    r._window2 = object()
+    drew, cleared = [], []
+    r._draw_second_window = lambda: drew.append(True)
+    r._clear_window = lambda w, h: cleared.append((w, h))
+    r._render_visuals()
+    assert drew == [True], "the second window was not drawn"
+    assert r._pms[1].drawn == [("fbo", 101)], r._pms[1].drawn
+    assert r._pms[0].drawn == [], \
+        f"visual 1 was rendered with its switch off: {r._pms[0].drawn}"
+    assert r._blend.drawn == [], \
+        f"visual 1 was put on the main window with its switch off: " \
+        f"{r._blend.drawn}"
+    assert cleared, "the main window was left showing the last frame"
+
+
 def a_blender_that_cannot_be_built_falls_back_to_one_visual():
     """A black window is the worst possible answer to a driver that will not
     compile the shader."""
@@ -350,6 +376,41 @@ def turning_it_off_says_so_and_remembers():
     r._do_set_dual(False)
     assert r._cfg["dual_enabled"] is False
     assert r._bridge.dual_changed.sent == [False]
+
+
+def the_second_visuals_monitor_comes_back_with_it():
+    """`visual2_display` is a setting like the two switches beside it, and
+    `_stop_dual` drops the window without clearing it -- so the menu, which
+    ticks the monitor straight out of config, claimed visual 2 was on a
+    screen it was not on. Reachable twice over: switch it off and on again,
+    and every launch after the feature has been used once."""
+    r = renderer(second=False, cfg={"visual2_display": 1})
+
+    def start():
+        r._pms[1] = FakePM("b")
+        r._blend = FakeBlend(True)
+
+    r._start_dual = start
+    r._req_win2 = None
+    r._do_set_dual(True)
+    assert r._req_win2 == 1, \
+        f"the monitor was not asked for again: {r._req_win2!r}"
+
+
+def a_second_visual_with_no_monitor_behind_it_asks_for_nothing():
+    """-1 is the early return in `_do_set_window2`, so queueing it costs
+    nothing -- but queue the *stored* value, not a blank, or the case above
+    never fires."""
+    r = renderer(second=False)
+
+    def start():
+        r._pms[1] = FakePM("b")
+        r._blend = FakeBlend(True)
+
+    r._start_dual = start
+    r._req_win2 = None
+    r._do_set_dual(True)
+    assert r._req_win2 == -1, r._req_win2
 
 
 def a_build_that_cannot_render_to_a_framebuffer_declines():
