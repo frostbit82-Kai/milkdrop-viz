@@ -13,7 +13,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import viz_common
 from viz_common import (QApplication, Renderer, pick_workerw,
-                        pick_desktop_host)
+                        pick_desktop_host, wallpaper_box)
 
 TWO = [(0, "DP-1", 0, 0, 1920, 1080), (1, "HDMI-2", 1920, 0, 3840, 2160)]
 #: A monitor above and to the left of the primary — the virtual desktop then
@@ -368,7 +368,7 @@ def an_empty_list_deletes_the_property():
 
 def _x11_run(on, displays=TWO, cfg=None):
     """_set_x11_wallpaper against a fake Xlib and a fake SDL."""
-    r = bare(cfg or {"fullscreen_display": 0}, displays)
+    r = bare(cfg or {"wallpaper_display": 0}, displays)
     r._native_handle, r._x11_display = 0x2000001, 1
     r._wallpaper = not on
     if not on:
@@ -551,7 +551,7 @@ def a_window_manager_that_refuses_to_restack_is_given_up_on_quickly():
 def a_desktop_that_keeps_the_icons_below_says_so():
     """The visuals are up either way; only the stacking failed. A silent
     success there looks exactly like the feature working."""
-    r = bare({"fullscreen_display": 0}, TWO)
+    r = bare({"wallpaper_display": 0}, TWO)
     r._native_handle, r._x11_display = APP_WIN, 1
     lib = FakeXlib(); lib.reraises = 999; lib.stack = [ICONS, APP_WIN]
     real_x11, real_tree = viz_common._libx11, viz_common._x11_query_tree
@@ -583,7 +583,7 @@ def _box(rect, fixes=0):
 
     Returns (renderer, moves, fits) -- what it decided to put back.
     """
-    r = bare({"fullscreen_display": 0}, TWO)
+    r = bare({"wallpaper_display": 0}, TWO)
     r._wallpaper = True
     r._wp_fixes = fixes
     r._native_handle, r._x11_display = APP_WIN, 1
@@ -674,7 +674,7 @@ def the_geometry_cannot_stop_the_stacking_hold():
     """They share a timer but not a fate. The stacking hold backs off for a
     minute when it throws, and a window that cannot be measured is not a
     reason to stop keeping it under the icons for the next sixty seconds."""
-    r = bare({"fullscreen_display": 0}, TWO)
+    r = bare({"wallpaper_display": 0}, TWO)
     r._wallpaper = True
     r._native_handle, r._x11_display = APP_WIN, 1
     lib = FakeXlib()
@@ -735,7 +735,7 @@ def _hold(clients, wallpaper=True, hold_at=0.0, now=1000.0):
 
     Returns (renderer, lib) so a test can look at what went on the wire.
     """
-    r = bare({"fullscreen_display": 0}, TWO)
+    r = bare({"wallpaper_display": 0}, TWO)
     r._wallpaper = wallpaper
     r._wp_hold_at = hold_at
     r._native_handle, r._x11_display = APP_WIN, 1
@@ -792,7 +792,7 @@ def the_check_is_throttled_rather_than_run_every_frame():
     assert r._wp_hold_at == 999.5, "the clock was reset by a skipped pass"
 
 def a_failure_backs_off_instead_of_repeating_every_two_seconds():
-    r = bare({"fullscreen_display": 0}, TWO)
+    r = bare({"wallpaper_display": 0}, TWO)
     r._wallpaper = True
     r._wp_hold_at = 0.0
     r._native_handle, r._x11_display = APP_WIN, 1
@@ -869,7 +869,7 @@ def asking_for_the_mode_it_is_already_in_does_nothing():
 
 
 def a_chosen_monitor_is_the_one_filled():
-    r = bare({"fullscreen_display": 1})
+    r = bare({"wallpaper_display": 1})
     fake = FakeSDL()
     with faked_sdl(fake):
         r._fit_to_wallpaper()
@@ -879,7 +879,7 @@ def a_chosen_monitor_is_the_one_filled():
     assert r._borderless is True
 
 def with_no_choice_it_spans_every_monitor():
-    r = bare({"fullscreen_display": -1})
+    r = bare({"wallpaper_display": -1})
     fake = FakeSDL()
     with faked_sdl(fake):
         r._fit_to_wallpaper()
@@ -889,7 +889,7 @@ def with_no_choice_it_spans_every_monitor():
 def positions_are_relative_to_the_virtual_desktop_origin():
     """WorkerW starts at the top-left of the virtual desktop, which is not
     (0, 0) when a monitor sits above or left of the primary one."""
-    r = bare({"fullscreen_display": 0}, displays=OFFSET)
+    r = bare({"wallpaper_display": 0}, displays=OFFSET)
     fake = FakeSDL()
     with faked_sdl(fake):
         r._fit_to_wallpaper()
@@ -897,6 +897,66 @@ def positions_are_relative_to_the_virtual_desktop_origin():
     # (-1280, -200), so inside WorkerW the primary begins at (1280, 200)
     assert fake.pos == (1280, 200), fake.pos
     assert fake.size == (1920, 1080), fake.size
+
+
+def the_window_overhangs_the_monitor_it_covers():
+    """A window whose rectangle is exactly a monitor's is handed the display
+    by DWM, which then composites nothing over it: no icons, no taskbar, no
+    widgets, not even other windows. Reported 16 Sep 2026 as "it starts out
+    fullscreen, and a click puts it behind the icons", and measured both ways
+    round through the Desktop Duplication API -- the only capture on Windows
+    that sees what is really on screen. Two pixels past every edge is the
+    whole fix; the desktop window clips them, so the same pixels are covered.
+    """
+    assert wallpaper_box(TWO, 0, 2) == (-2, -2, 1924, 1084)
+    assert wallpaper_box(TWO, 0) == (0, 0, 1920, 1080)
+
+
+def the_overhang_is_measured_from_the_monitor_and_not_the_desktop():
+    """The second monitor starts 1920 across a desktop 5760 wide, so a
+    wallpaper on it overhangs from there and not from the desktop's edge."""
+    assert wallpaper_box(TWO, 1, 2) == (1918, -2, 3844, 2164)
+
+
+def the_way_in_asks_for_the_overhang_and_the_x11_hold_does_not():
+    """Structural, because nothing offscreen can see a compositor. Asking for
+    it on X11 would be a window two pixels off the screen, a window manager
+    clamping it back, and _hold_wallpaper_box correcting it, for ever."""
+    entry = inspect.getsource(Renderer._set_wallpaper_mode)
+    assert "_wallpaper_box(self._FS_OVERHANG)" in entry,         "the Windows way in stopped asking for the overhang"
+    hold = inspect.getsource(Renderer._hold_wallpaper_box)
+    assert "_wallpaper_box()" in hold, "the X11 geometry hold asked for one"
+
+
+def a_monitor_that_is_gone_falls_back_to_the_whole_desktop():
+    """Chosen once and unplugged since. Nothing at all is None, not a box of
+    zero size -- there is no desktop to be the wallpaper of."""
+    assert wallpaper_box(TWO, 9) == wallpaper_box(TWO, -1) == (0, 0, 5760, 2160)
+    assert wallpaper_box([], -1) is None
+
+
+def picking_a_monitor_while_it_is_off_turns_it_on():
+    """A menu entry under "Set as desktop wallpaper" that only remembered the
+    monitor for next time would look like a dead one."""
+    r = bare({"wallpaper_display": -1})
+    turned = []
+    r._set_wallpaper_mode = lambda on: turned.append(on)
+    r._wallpaper_on_display(1)
+    assert r._cfg["wallpaper_display"] == 1, r._cfg
+    assert turned == [True], turned
+
+
+def moving_it_while_it_is_up_refits_to_the_new_box():
+    r = bare({"wallpaper_display": -1})
+    r._wallpaper, r._native_handle, r._wp_fixes = True, 0, 4
+    fits = []
+    r._fit_to_wallpaper = lambda box=None: fits.append(box)
+    r._wallpaper_on_display(1)
+    # The overhang is Windows-only, so what the box is depends on where this
+    # suite is running -- the monitor it covers does not.
+    o = Renderer._FS_OVERHANG if sys.platform == "win32" else 0
+    assert fits == [(1920 - o, -o, 3840 + 2 * o, 2160 + 2 * o)], fits
+    assert r._wp_fixes == 0, "a new box inherited the last one's spent budget"
 
 
 class _MenuHost:
@@ -955,6 +1015,74 @@ def _wallpaper_entries(host, layered=False, support=(True, ""), tray=True):
         viz_common.find_desktop_host = real_host
         viz_common.wallpaper_support = real_sup
         viz_common.QSystemTrayIcon = real_tray
+
+
+class _WallHost(_MenuHost):
+    """A renderer that remembers what the wallpaper entries asked it for."""
+    def __init__(self, on=False, displays=TWO):
+        self.on, self.displays, self.asked = on, list(displays), []
+    def is_wallpaper(self):              return self.on
+    def list_displays(self):             return list(self.displays)
+    def request_wallpaper_on(self, idx): self.asked.append(idx)
+    def request_wallpaper(self, on=None): self.asked.append(("toggle", on))
+
+
+def _wallpaper_item(cfg, host):
+    """The wallpaper entry itself, so a submenu under it can be opened."""
+    real_host, real_sup = viz_common.find_desktop_host, viz_common.wallpaper_support
+    real_tray = viz_common.QSystemTrayIcon
+    viz_common.find_desktop_host = lambda *a, **k: (1, False)
+    viz_common.wallpaper_support = lambda *a, **k: (True, "")
+    _FakeTray.available = True
+    viz_common.QSystemTrayIcon = _FakeTray
+    try:
+        menu = viz_common.ContextMenu(renderer=host, cfg=cfg,
+                                      ratings={}, keymaps={})
+        return next(a for a in menu.actions()
+                    if "wallpaper" in a.text().lower())
+    finally:
+        viz_common.find_desktop_host = real_host
+        viz_common.wallpaper_support = real_sup
+        viz_common.QSystemTrayIcon = real_tray
+
+
+def every_monitor_is_offered_as_a_place_to_put_the_wallpaper():
+    act = _wallpaper_item({"wallpaper_display": -1}, _WallHost())
+    sub = act.menu()
+    assert sub is not None, f"{act.text()!r} is one action on two monitors"
+    rows = [a.text() for a in sub.actions() if a.text()]
+    assert len(rows) == 3, rows
+    assert "whole desktop" in rows[0].lower(), rows
+    assert "DP-1" in rows[1] and "HDMI-2" in rows[2], rows
+
+
+def one_monitor_is_still_one_click():
+    """There is nothing to choose between, and a submenu to say so is a click
+    spent on the answer being the only one."""
+    act = _wallpaper_item({}, _WallHost(displays=TWO[:1]))
+    assert act.menu() is None, "a submenu over a single monitor"
+
+
+def picking_a_monitor_asks_to_be_the_wallpaper_there():
+    cfg, host = {"wallpaper_display": -1}, _WallHost()
+    sub = _wallpaper_item(cfg, host).menu()
+    [a for a in sub.actions() if a.text().startswith("2.")][0].trigger()
+    assert cfg["wallpaper_display"] == 1, cfg
+    assert host.asked == [1], host.asked
+
+
+def the_monitor_it_is_already_on_is_ticked():
+    sub = _wallpaper_item({"wallpaper_display": 1}, _WallHost(on=True)).menu()
+    ticked = [a.text() for a in sub.actions()
+              if a.isCheckable() and a.isChecked()]
+    assert len(ticked) == 1 and ticked[0].startswith("2."), ticked
+
+
+def the_way_out_is_the_first_thing_under_the_submenu():
+    """A desktop window takes no keyboard and no mouse, so leaving cannot be
+    at the bottom of a list of monitors."""
+    sub = _wallpaper_item({}, _WallHost(on=True)).menu()
+    assert "leave" in sub.actions()[0].text().lower(),         [a.text() for a in sub.actions()]
 
 
 def a_desktop_with_no_tray_is_not_offered_a_one_way_trip():
@@ -1313,6 +1441,17 @@ for fn in (the_worker_behind_the_icons_is_chosen,
            asking_for_the_mode_it_is_already_in_does_nothing,
            a_chosen_monitor_is_the_one_filled,
            with_no_choice_it_spans_every_monitor,
+           the_window_overhangs_the_monitor_it_covers,
+           the_overhang_is_measured_from_the_monitor_and_not_the_desktop,
+           the_way_in_asks_for_the_overhang_and_the_x11_hold_does_not,
+           a_monitor_that_is_gone_falls_back_to_the_whole_desktop,
+           picking_a_monitor_while_it_is_off_turns_it_on,
+           moving_it_while_it_is_up_refits_to_the_new_box,
+           every_monitor_is_offered_as_a_place_to_put_the_wallpaper,
+           one_monitor_is_still_one_click,
+           picking_a_monitor_asks_to_be_the_wallpaper_there,
+           the_monitor_it_is_already_on_is_ticked,
+           the_way_out_is_the_first_thing_under_the_submenu,
            positions_are_relative_to_the_virtual_desktop_origin,
            a_machine_with_no_desktop_is_told_so_in_the_menu,
            a_session_that_cannot_host_it_gets_a_dead_entry_carrying_the_reason,

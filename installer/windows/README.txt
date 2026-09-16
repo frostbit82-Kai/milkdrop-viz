@@ -160,8 +160,10 @@ this is on the visualiser cannot be clicked -- a tray icon appears instead, and
 clicking it opens the same menu. Use it to change preset, rate, or leave
 wallpaper mode.
 
-With a monitor chosen under Fullscreen display it fills that one; otherwise it
-spans every monitor.
+On one monitor that is one click. On more than one, the entry opens a list:
+the whole desktop, or the screen you pick -- and picking a screen while it is
+already on moves it there rather than starting again. The tray menu carries
+the same list, so you can move it without leaving the mode.
 
 
 THEME

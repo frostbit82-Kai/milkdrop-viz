@@ -271,6 +271,47 @@ There is no display in an agent shell and SDL needs one, so:
   also means the overhang trick is not needed for that window, and should not
   be added -- on a real second monitor it would spill two pixels onto the
   neighbour.
+
+  **There IS a capture that sees the real screen: the Desktop Duplication
+  API, through ffmpeg's `ddagrab` filter.** It is what OBS uses, it reads the
+  composed output rather than the desktop DC, and it settled in one shot a
+  defect that three rounds of `CopyFromScreen` had been lying about:
+
+      ffmpeg -f lavfi -i "ddagrab=0:framerate=1" -frames:v 4              -vf "hwdownload,format=bgra,scale=960:540" -y shot_%02d.png
+
+  (`ddagrab` is a *filter*, not a demuxer -- `-f lavfi`, and the hwdownload is
+  not optional, the frames arrive on the GPU.) 16 Sep 2026 the GDI grab of a
+  wallpaper-mode desktop showed the visuals frozen in the pre-transition
+  window rectangle with the icons drawn over them, and four separate "fixes"
+  appeared to change it; `ddagrab` showed the truth every time -- the visuals
+  covering the whole screen, taskbar and icons and every other window gone.
+  Use it for anything that has to be seen rather than measured, and keep the
+  GDI grab only for ordinary windows.
+
+  **Do not reach for PrintScreen on this box.** `SendKeys {PRTSC}` leaves the
+  clipboard empty and opens the Snipping Tool overlay over whatever the user
+  is doing -- ESC closes it, but it is a full-screen interruption on someone
+  else's desktop for no result.
+- **Wallpaper mode trips the same fullscreen-optimisation trap as fullscreen
+  mode, and the report reads completely differently.** Reported 16 Sep 2026 as
+  *"it starts out fullscreen at first, but when I click or right-click
+  anywhere, it snaps behind icons and widgets"* -- which sounds like a
+  stacking bug and is not one. The window is a child of Explorer's WorkerW,
+  below `SHELLDLL_DefView` in the tree the whole time, structurally perfect:
+  what fails is composition. Its rectangle is exactly the monitor's and it is
+  the foreground window at the moment it is parented (the user clicked the
+  menu entry), so DWM hands it the display and stops compositing everything
+  else -- icons, taskbar, Rainmeter widgets, other applications' windows. The
+  fix is `_FS_OVERHANG` again, two pixels past every edge, applied to the
+  wallpaper box: `wallpaper_box(displays, want, overhang)` takes it as an
+  argument because **X11 must not have it** -- two pixels off the screen there
+  is a window manager clamping the window back and `_hold_wallpaper_box`
+  correcting it, for ever. Measured A/B/A/B with `ddagrab` (see above), which
+  is the only reason this was settled rather than guessed at: four plausible
+  fixes -- clearing the `WS_POPUP` SDL puts back, handing the foreground to
+  Progman, hiding and re-showing, a real resize -- all changed the GDI grab
+  and none of them changed the screen.
+
 - **Do not read an unfamiliar tray icon as an absent one.** Windows 11 hides
   new tray icons in the chevron flyout, and this app's 16x16 logo there is a
   small dark square with a gold mark that looks like half a dozen other

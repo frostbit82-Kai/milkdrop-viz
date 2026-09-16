@@ -62,6 +62,9 @@ DEFAULT_CONFIG = {
     "quality":              "high",
     # Which monitor fullscreen uses. -1 = whichever one the window is on.
     "fullscreen_display":   -1,
+    # Which monitor the desktop wallpaper covers. -1 = the whole desktop,
+    # every monitor at once, which is what a wallpaper usually means.
+    "wallpaper_display":    -1,
     # Dark, light, or "system" to follow the desktop. Dark was the only
     # look this app had, so it stays the default.
     "theme":                "dark",

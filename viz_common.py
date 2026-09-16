@@ -5437,9 +5437,23 @@ class ContextMenu(QMenu):
         cannot. Offering it anyway spends a click to reach a toast that is gone
         three seconds later, so the reason goes where the click would have
         been -- in the tooltip, which is longer than a menu line allows."""
+        try:
+            displays = self._renderer.list_displays()
+        except Exception:
+            displays = []
         if self._renderer.is_wallpaper():
-            self.addAction("🖥   Leave wallpaper mode",
-                           lambda: self._renderer.request_wallpaper())
+            if len(displays) < 2:
+                self.addAction("🖥   Leave wallpaper mode",
+                               lambda: self._renderer.request_wallpaper())
+                return
+            # More than one monitor, and it is already the desktop: leaving is
+            # still the first thing on the list, and moving it is the rest.
+            sub = self.addMenu("🖥   Desktop wallpaper")
+            sub.setStyleSheet(self.styleSheet())
+            sub.addAction("Leave wallpaper mode",
+                          lambda: self._renderer.request_wallpaper())
+            sub.addSeparator()
+            self._add_wallpaper_monitors(sub, displays)
             return
         ok, why = wallpaper_support()
         if ok and sys.platform == "win32":
@@ -5464,8 +5478,42 @@ class ContextMenu(QMenu):
             self.setToolTipsVisible(True)
             self.addAction(dead)
             return
-        self.addAction("🖥   Set as desktop wallpaper",
-                       lambda: self._renderer.request_wallpaper())
+        if len(displays) < 2:
+            self.addAction("🖥   Set as desktop wallpaper",
+                           lambda: self._renderer.request_wallpaper())
+            return
+        sub = self.addMenu("🖥   Set as desktop wallpaper")
+        sub.setStyleSheet(self.styleSheet())
+        self._add_wallpaper_monitors(sub, displays)
+
+    def _add_wallpaper_monitors(self, sub, displays):
+        """Which monitor the wallpaper covers: one of them, or all of them.
+
+        Picking one is an instruction to be the wallpaper there, not a
+        preference stored for next time -- an entry under "Set as desktop
+        wallpaper" that only wrote a setting would look like a dead one.
+        """
+        group = QActionGroup(sub)
+        group.setExclusive(True)
+        current = int(self._cfg.get("wallpaper_display", -1))
+
+        def choose(idx: int):
+            self._cfg["wallpaper_display"] = idx
+            self._renderer._save_config(self._cfg)
+            self._renderer.request_wallpaper_on(idx)
+
+        rows = [(-1, "Whole desktop")]
+        rows += [(i, f"{i + 1}.  {name}   {w}×{h}")
+                 for i, name, _x, _y, w, h in displays]
+        for idx, label in rows:
+            act = QAction(label, sub)
+            act.setCheckable(True)
+            act.setChecked(idx == current)
+            act.triggered.connect(lambda _, i=idx: choose(i))
+            group.addAction(act)
+            sub.addAction(act)
+            if idx == -1:
+                sub.addSeparator()
 
     def _build_record_menu(self):
         """Record what is on screen to a clip.
@@ -6435,6 +6483,41 @@ def find_desktop_host(u=None, wait=2.0):
         if host[0] or _time.monotonic() >= deadline:
             return host
         _time.sleep(0.05)
+
+
+def wallpaper_box(displays, want, overhang=0):
+    """Where the visualiser goes on the desktop: (x, y, w, h), or None.
+
+    `want` is a display index, or -1 for the whole desktop. What comes back is
+    relative to the desktop window, whose origin is the top-left of the
+    *virtual* desktop -- which is not (0, 0) when a monitor sits above or left
+    of the primary one.
+
+    `overhang` sits it that many pixels past every edge, and on Windows it is
+    not cosmetic: a window whose rectangle is exactly a monitor's is handed
+    the display by DWM, which then composites nothing over it at all. Measured
+    16 Sep 2026 with the Desktop Duplication API -- at 0,0 1920x1080 the
+    desktop icons, the taskbar, the widgets and every other window vanish
+    behind the visuals; at -2,-2 1924x1084 they are all back with the visuals
+    behind them, and putting the exact rectangle back loses them again. The
+    same trap `_FS_OVERHANG` was written for in fullscreen mode, reached a
+    second way. The extra pixels are clipped by the desktop window, so the
+    same pixels are covered either way.
+    """
+    box = next((d for d in displays if d[0] == want), None)
+    if box is None and displays:
+        xs = [d[2] for d in displays]
+        ys = [d[3] for d in displays]
+        x2 = max(d[2] + d[4] for d in displays)
+        y2 = max(d[3] + d[5] for d in displays)
+        box = (-1, "", min(xs), min(ys), x2 - min(xs), y2 - min(ys))
+    if box is None:
+        return None
+    _i, _n, x, y, w, h = box
+    vx = min((d[2] for d in displays), default=0)
+    vy = min((d[3] for d in displays), default=0)
+    return (x - vx - overhang, y - vy - overhang,
+            w + 2 * overhang, h + 2 * overhang)
 
 
 # ─── desktop wallpaper (X11) ──────────────────────────────────────────────────
@@ -8093,6 +8176,8 @@ class Renderer:
         self._req_fullscreen             = False  # toggle fullscreen
         self._req_record                 = None   # 'mp4' | 'gif' | 'stop'
         self._req_wallpaper              = None   # True/False: be the desktop
+        #: Which monitor to be the desktop on: -1 for the whole desktop.
+        self._req_wp_display             = None
         self._req_collection             = None   # name to play, "" = all
         self._req_preset_data            = None   # preset text to play now
         self._req_reset_textures         = False  # rescan after a swap
@@ -9235,6 +9320,10 @@ class Renderer:
                     want = self._req_wallpaper
                     self._req_wallpaper = None
                     self._set_wallpaper_mode(want)
+                if self._req_wp_display is not None:
+                    where = self._req_wp_display
+                    self._req_wp_display = None
+                    self._wallpaper_on_display(where)
                 if self._req_record is not None:
                     kind = self._req_record
                     self._req_record = None
@@ -9933,6 +10022,12 @@ class Renderer:
         with self._lock:
             self._req_wallpaper = (not self._wallpaper) if on is None else bool(on)
 
+    def request_wallpaper_on(self, display: int):
+        """Be the desktop on a named monitor, -1 for the whole desktop. Qt
+        thread."""
+        with self._lock:
+            self._req_wp_display = int(display)
+
     def _set_wallpaper_mode(self, on: bool):
         """Become the desktop: Explorer's wallpaper window on Windows, an
         EWMH desktop window on X11.
@@ -10011,7 +10106,7 @@ class Renderer:
                     u.SetWindowLongPtrW(hwnd, _GWL_STYLE, ctypes.c_void_p(
                         (st | _WS_CHILD) & ~(_WS_POPUP | _WS_FRAME)))
                     self._wallpaper = True
-                    box = self._wallpaper_box()
+                    box = self._wallpaper_box(self._FS_OVERHANG)
                     if box:
                         u.SetWindowPos(hwnd, _HWND_TOP, *box,
                                        _SWP_FRAMECHANGED | _SWP_SHOWWINDOW)
@@ -10062,6 +10157,42 @@ class Renderer:
         self._bridge.status_message.emit(
             "Wallpaper mode ON — use the tray icon to leave it"
             if self._wallpaper else "Wallpaper mode OFF")
+
+    def _wallpaper_on_display(self, idx: int):
+        """Put the wallpaper on one monitor, or across the whole desktop (-1).
+        Render thread.
+
+        Also the way in: picking a monitor is an instruction to be the
+        wallpaper there, so it turns the mode on when it is off rather than
+        remembering the choice for next time.
+        """
+        self._cfg["wallpaper_display"] = int(idx)
+        if not self._wallpaper:
+            self._set_wallpaper_mode(True)
+            return
+        box = self._wallpaper_box(
+            self._FS_OVERHANG if sys.platform == "win32" else 0)
+        if box is None:
+            return
+        # A window manager that fought the last box gets asked again about
+        # this one: the budget is spent per geometry, not per session.
+        self._wp_fixes, self._wp_gave_up = 0, False
+        try:
+            if sys.platform == "win32" and self._native_handle:
+                # The HWND is moved directly for the same reason the way in
+                # does it: SDL takes the new size into its bookkeeping and
+                # leaves a window it did not parent where it is.
+                _user32().SetWindowPos(
+                    ctypes.c_void_p(self._native_handle), _HWND_TOP, *box,
+                    _SWP_NOZORDER | _SWP_NOACTIVATE)
+            self._fit_to_wallpaper(box)
+        except Exception as e:
+            print(f"[wallpaper] could not move to display {idx}: {e}",
+                  flush=True)
+            return
+        where = next((n for i, n, *_r in self._displays if i == idx),
+                     "the whole desktop")
+        self._bridge.status_message.emit(f"Wallpaper on {where}")
 
     def _set_x11_wallpaper(self, on: bool):
         """Ask the window manager to treat the visualiser as the desktop.
@@ -10268,31 +10399,25 @@ class Renderer:
             self._fit_to_wallpaper(box)
         self._track_window()
 
-    def _wallpaper_box(self):
+    def _wallpaper_box(self, overhang=0):
         """Where the visualiser goes on the desktop: (x, y, w, h), or None.
 
         The chosen monitor, or the whole desktop when none is chosen. Not SDL
         fullscreen: a fullscreen window is taken out of its parent and put
         back on top, which is exactly what wallpaper mode is not.
+
+        `wallpaper_display` and not `fullscreen_display`: which monitor the
+        wallpaper covers and which monitor fullscreen goes to are two
+        questions, and answering the second used to move the first.
+
+        The overhang is the caller's to ask for, because it is Windows-only
+        and asking for it on X11 would be a window two pixels off the screen
+        for a window manager to clamp back and this to correct, for ever.
         """
         self._refresh_displays()
-        want = int(self._cfg.get("fullscreen_display", -1))
-        box = next((d for d in self._displays if d[0] == want), None)
-        if box is None and self._displays:
-            xs = [d[2] for d in self._displays]
-            ys = [d[3] for d in self._displays]
-            x2 = max(d[2] + d[4] for d in self._displays)
-            y2 = max(d[3] + d[5] for d in self._displays)
-            box = (-1, "", min(xs), min(ys), x2 - min(xs), y2 - min(ys))
-        if box is None:
-            return None
-        _i, _n, x, y, w, h = box
-        # Positions are relative to WorkerW, whose origin is the top-left of
-        # the virtual desktop -- which is not (0, 0) when a monitor sits above
-        # or left of the primary one.
-        vx = min((d[2] for d in self._displays), default=0)
-        vy = min((d[3] for d in self._displays), default=0)
-        return (x - vx, y - vy, w, h)
+        return wallpaper_box(
+            self._displays, int(self._cfg.get("wallpaper_display", -1)),
+            overhang)
 
     def _fit_to_wallpaper(self, box=None):
         """SDL's side of the desktop geometry: its own bookkeeping, the GL
