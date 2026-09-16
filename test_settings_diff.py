@@ -107,6 +107,94 @@ def the_dialog_measures_a_settled_layout():
         f"{form.minimumSizeHint().height()}"
 
 
+def the_quality_row_follows_the_ticked_visual():
+    """One pair of boxes doing two jobs: a tick switches that visual on AND
+    points the rows at it. The bug this guards is the obvious implementation
+    -- one quality widget writing one key -- which silently gives visual 2
+    visual 1's quality, and the pair costs about twice one of them to draw."""
+    cfg = dict(DEFAULT_CONFIG)
+    cfg["quality"] = "high"
+    cfg["dual_quality"] = "low"
+    dlg = v.SettingsDialog(cfg)
+
+    # Opens on visual 1, showing visual 1's quality.
+    assert dlg._quality.currentData() == "high", dlg._quality.currentData()
+    assert "1" in dlg._quality_label.text(), dlg._quality_label.text()
+
+    # Tick visual 2 and the same row is now visual 2's.
+    dlg._visual_box[1].setChecked(True)
+    dlg._pick_visual(1, True)
+    assert dlg._quality.currentData() == "low", dlg._quality.currentData()
+    assert "2" in dlg._quality_label.text(), dlg._quality_label.text()
+
+    # Change it there, and visual 1 keeps what it had.
+    dlg._quality.setCurrentIndex(dlg._quality.findData("ultra"))
+    out = dlg.get_config()
+    assert out["dual_quality"] == "ultra", out["dual_quality"]
+    assert out["quality"] == "high", out["quality"]
+
+
+def an_edit_survives_moving_to_the_other_visual_and_back():
+    """The half of this that get_config cannot cover: it flushes whatever is
+    on screen when OK is pressed, so a value only goes missing if you leave
+    the visual you set it on. Set visual 1 to ultra, look at visual 2, come
+    back -- without the flush in _set_editing, visual 1 is quietly back at
+    high and the dialog shows the old value as if you never typed it."""
+    cfg = dict(DEFAULT_CONFIG)
+    cfg["quality"] = "high"
+    cfg["dual_quality"] = "low"
+    dlg = v.SettingsDialog(cfg)
+    dlg._quality.setCurrentIndex(dlg._quality.findData("ultra"))
+
+    dlg._visual_box[1].setChecked(True)
+    dlg._pick_visual(1, True)
+    assert dlg._quality.currentData() == "low", dlg._quality.currentData()
+
+    dlg._pick_visual(0, True)
+    assert dlg._quality.currentData() == "ultra", \
+        f"visual 1's edit was lost going to visual 2 and back: " \
+        f"{dlg._quality.currentData()}"
+    assert dlg.get_config()["quality"] == "ultra"
+    assert dlg.get_config()["dual_quality"] == "low"
+
+
+def unticking_the_last_visual_puts_it_straight_back():
+    """Both off is a black window. The box springing back under the cursor
+    says so more plainly than a message box would."""
+    _, dlg = cfg_and_dialog()
+    assert dlg._visual_box[0].isChecked() and not dlg._visual_box[1].isChecked()
+    dlg._visual_box[0].setChecked(False)
+    dlg._pick_visual(0, False)
+    assert dlg._visual_box[0].isChecked(), \
+        "the only visual on screen was allowed off"
+    assert dlg.get_config()["visual1_enabled"] is True
+
+
+def switching_a_visual_off_moves_the_rows_to_the_one_left():
+    """Nothing to set up on a visual that is not there."""
+    cfg = dict(DEFAULT_CONFIG)
+    cfg["dual_enabled"] = True
+    dlg = v.SettingsDialog(cfg)
+    dlg._visual_box[1].setChecked(True)
+    dlg._pick_visual(1, True)
+    assert "2" in dlg._quality_label.text()
+    dlg._visual_box[1].setChecked(False)
+    dlg._pick_visual(1, False)
+    assert "1" in dlg._quality_label.text(), dlg._quality_label.text()
+
+
+def the_second_visual_settings_the_crossfader_replaced_are_gone():
+    """Strength moved to the right-click menu, where you can see what it does
+    while you move it, and quality moved into the row above. Leaving either
+    behind means two controls for one thing, disagreeing."""
+    dlg = cfg_and_dialog()[1]
+    assert not hasattr(dlg, "_dual_opacity"), "the strength spin box is back"
+    assert not hasattr(dlg, "_dual_quality"), \
+        "there are two quality controls for visual 2 again"
+    out = dlg.get_config()
+    assert "dual_opacity" not in out, "Settings is still writing the old key"
+
+
 def a_key_absent_from_the_old_config_counts_as_changed():
     cfg = dict(DEFAULT_CONFIG)
     cfg.pop("theme", None)

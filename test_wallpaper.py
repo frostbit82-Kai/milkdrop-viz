@@ -910,6 +910,13 @@ class _MenuHost:
     def can_dual(self):       return True
     def dual_on(self):        return False
     def focus(self):          return 0
+    def visual_on(self, which):   return not which
+    def crossfade(self):      return 0.5
+    def second_window_display(self): return -1
+    def request_visual(self, which, on): pass
+    def request_crossfade(self, x):      pass
+    def request_second_window(self, d):  pass
+    def request_fullscreen_on(self, d):  pass
     def list_displays(self):  return list(TWO)
     def _save_config(self, cfg): pass
 

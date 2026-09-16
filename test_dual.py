@@ -111,8 +111,15 @@ class FakeSignal:
 class FakeBridge:
     def __init__(self):
         for name in ("show_toast", "dual_changed", "focus_changed",
+                     "visual_changed", "crossfade_changed",
                      "preset_changed", "status_message"):
             setattr(self, name, FakeSignal())
+
+
+class _Lock:
+    """`with` and nothing else -- these tests are single-threaded."""
+    def __enter__(self): return self
+    def __exit__(self, *a): return False
 
 
 def renderer(second=True, blend=True, cfg=None):
@@ -124,6 +131,8 @@ def renderer(second=True, blend=True, cfg=None):
     r._pm = r._pms[0]
     r._focus = 0
     r._blend = FakeBlend(blend) if second else None
+    r._v1_on = True
+    r._window2 = None
     r._preset_start = 0.0
     r._burnt = []
     r._burn_this_frame = lambda pm=None: r._burnt.append(
@@ -152,15 +161,78 @@ def two_visuals_each_draw_into_a_framebuffer_of_their_own():
     r._render_visuals()
     assert r._pms[0].drawn == [("fbo", 100)], r._pms[0].drawn
     assert r._pms[1].drawn == [("fbo", 101)], r._pms[1].drawn
-    assert r._blend.drawn == [(800, 600, v.DUAL_OPACITY_DEFAULT)], \
+    assert r._blend.drawn == [(800, 600, v.DUAL_CROSSFADE_DEFAULT)], \
         r._blend.drawn
 
 
-def the_strength_comes_from_the_config_every_frame():
-    """So a change in Settings shows while the dialog is still open."""
-    r = renderer(cfg={"dual_opacity": 0.2})
+def the_crossfade_comes_from_the_config_every_frame():
+    """So the menu's fader moves the picture while it is still being held."""
+    r = renderer(cfg={"dual_crossfade": 0.2})
     r._render_visuals()
     assert r._blend.drawn[-1][2] == 0.2, r._blend.drawn
+
+
+def a_config_from_before_the_fader_keeps_the_number_it_had():
+    """2.1.6 and earlier wrote `dual_opacity`. Ignoring it would snap every
+    upgraded config back to the middle on first run, which is a visible
+    change to something the user set on purpose."""
+    r = renderer(cfg={"dual_opacity": 0.8})
+    r._render_visuals()
+    assert r._blend.drawn[-1][2] == 0.8, r._blend.drawn
+
+
+def the_new_key_wins_over_the_old_one():
+    """Both present means an upgraded config that has since been touched."""
+    r = renderer(cfg={"dual_opacity": 0.8, "dual_crossfade": 0.3})
+    r._render_visuals()
+    assert r._blend.drawn[-1][2] == 0.3, r._blend.drawn
+
+
+def a_faded_out_visual_is_not_drawn_at_all():
+    """The shader multiplies that end by zero, so its target is never
+    sampled -- rendering into it is work nobody can see. Parking the fader
+    at one end has to cost one visual, not two."""
+    r = renderer(cfg={"dual_crossfade": 0.0})
+    r._render_visuals()
+    assert r._pms[0].drawn == [("fbo", 100)], r._pms[0].drawn
+    assert r._pms[1].drawn == [], \
+        f"visual 2 drew at a fader that hides it: {r._pms[1].drawn}"
+
+    r = renderer(cfg={"dual_crossfade": 1.0})
+    r._render_visuals()
+    assert r._pms[0].drawn == [], \
+        f"visual 1 drew at a fader that hides it: {r._pms[0].drawn}"
+    assert r._pms[1].drawn == [("fbo", 101)], r._pms[1].drawn
+
+
+def switching_visual_one_off_pins_the_fader_to_visual_two():
+    """The switch and the fader are the same mechanism underneath: "off" is
+    the far end. What must not happen is the stored fader position showing
+    visual 1 through a switch that says it is off."""
+    r = renderer(cfg={"dual_crossfade": 0.5})
+    r._v1_on = False
+    r._render_visuals()
+    assert r._blend.drawn[-1][2] == 1.0, r._blend.drawn
+    assert r._pms[0].drawn == [], r._pms[0].drawn
+
+
+def a_window_each_draws_both_visuals_whatever_the_fader_says():
+    """A screen each is not a mix: both are wanted whole. Carrying the fader
+    into it would blank one of the two monitors at either end -- and the
+    fader sitting at an end is the ordinary case for anyone who used it
+    before sending a visual away."""
+    r = renderer(cfg={"dual_crossfade": 0.0})
+    r._window2 = object()
+    drew = []
+    r._draw_second_window = lambda: drew.append(True)
+    r._render_visuals()
+    assert r._pms[0].drawn == [("fbo", 100)], r._pms[0].drawn
+    assert r._pms[1].drawn == [("fbo", 101)], \
+        f"visual 2 was skipped on a monitor of its own: {r._pms[1].drawn}"
+    assert drew == [True], "the second window was not drawn"
+    # And this window is left showing visual 1: the recorder and the
+    # thumbnail both read its back buffer after this returns.
+    assert r._blend.drawn[-1][2] == 0.0, r._blend.drawn
 
 
 def a_blender_that_cannot_be_built_falls_back_to_one_visual():
@@ -371,11 +443,16 @@ def no_thumbnail_is_taken_off_a_blend():
 # ── the settings ──────────────────────────────────────────────────────────
 
 def every_dual_setting_has_a_default():
-    for key in ("dual_enabled", "dual_opacity", "dual_quality", "dual_focus"):
+    for key in ("visual1_enabled", "dual_enabled", "dual_crossfade",
+                "dual_quality", "dual_focus", "visual2_display"):
         assert key in app_config.DEFAULT_CONFIG, key
     assert app_config.DEFAULT_CONFIG["dual_enabled"] is False, \
         "two visuals by default doubles what every machine has to draw"
+    assert app_config.DEFAULT_CONFIG["visual1_enabled"] is True, \
+        "a fresh install with no visual on is a black window"
     assert app_config.DEFAULT_CONFIG["dual_quality"] == "low"
+    assert app_config.DEFAULT_CONFIG["visual2_display"] == -1, \
+        "a fresh install must not claim a monitor it was never given"
 
 
 def the_second_visual_keeps_its_own_quality_when_settings_change():
@@ -390,6 +467,72 @@ def the_second_visual_keeps_its_own_quality_when_settings_change():
     start = inspect.getsource(v.Renderer._start_dual)
     assert 'cfg["quality"] = self._cfg.get("dual_quality"' in start
     assert "self._apply_pm_settings(cfg, second)" in start
+
+
+def the_shader_reaches_both_ends_of_the_fader():
+    """The one piece of GLSL in the application, and nothing else here can
+    run it -- there is no GL context in an offscreen suite, so a broken blend
+    would ship looking fine. What is checkable without one is the arithmetic:
+    pull the weight each visual is multiplied by straight out of the shipped
+    source and evaluate it at both ends.
+
+    The bug this exists for is the shape the shader had until 2.1.7, which
+    scaled only the second visual. That reaches "visual 1" and "both at once"
+    and can never reach "visual 2 alone" -- so the right-hand half of a
+    crossfader did nothing, which is exactly the sort of thing that is
+    obvious on screen and invisible in a diff."""
+    import re
+    weights = {}
+    for name, sampler in (("a", "visual_a"), ("b", "visual_b")):
+        m = re.search(
+            r"vec3 %s = texture\(%s, uv\)\.rgb\s*(.*?);" % (name, sampler),
+            v._BLEND_FRAG)
+        assert m, f"the shader no longer samples {sampler} the expected way"
+        # "1.0" plus whatever the shader multiplies the sample by, which is
+        # the scalar weight -- in Python, because GLSL's `*` on a float is.
+        weights[name] = "1.0 " + m.group(1).strip()
+
+    def weigh(name, x):
+        return eval(weights[name], {"__builtins__": {}}, {"crossfade": x})
+
+    assert weigh("a", 0.0) == 1.0, f"visual 1 is not whole at 0: {weights['a']}"
+    assert weigh("a", 1.0) == 0.0, \
+        f"visual 1 still shows at the far end: {weights['a']}"
+    assert weigh("b", 0.0) == 0.0, \
+        f"visual 2 shows at the near end: {weights['b']}"
+    assert weigh("b", 1.0) == 1.0, f"visual 2 is not whole at 1: {weights['b']}"
+    assert weigh("a", 0.5) == weigh("b", 0.5), \
+        "the middle of the fader does not weigh the two evenly"
+    # And the screen itself, which is what keeps either end exact: with one
+    # term at zero, 1-(1-0)(1-t) is t.
+    assert "1.0 - (1.0 - a) * (1.0 - b)" in v._BLEND_FRAG, \
+        "the screen blend went away; either end is only exact because of it"
+
+
+def the_fader_keys_exist_and_move_it_both_ways():
+    for action in ("crossfade_back", "crossfade_fwd", "toggle_visual1"):
+        assert action in v.DEFAULT_KEYMAPS, action
+        assert action in v.ACTION_LABELS, action
+    assert v.DEFAULT_KEYMAPS["crossfade_back"] != \
+        v.DEFAULT_KEYMAPS["crossfade_fwd"], "one key cannot fade both ways"
+    assert 0.0 < v.CROSSFADE_STEP < 0.5, v.CROSSFADE_STEP
+
+
+def the_last_visual_standing_cannot_be_switched_off():
+    """Both off is a black window, and the menu that would undo it is drawn
+    over that window. The greyed checkbox is the first line of defence; this
+    is the one behind it, for the key binding that has no checkbox to grey."""
+    r = renderer(second=False)
+    r._lock = _Lock()
+    r._req_dual = r._req_v1 = None
+    r.request_visual(0, False)
+    assert r._req_v1 is None, "the only visual on screen was switched off"
+    # With both up, either may go.
+    r = renderer()
+    r._lock = _Lock()
+    r._req_dual = r._req_v1 = None
+    r.request_visual(0, False)
+    assert r._req_v1 is False, "a visual that is not the last one would not go"
 
 
 def both_visuals_answer_for_their_own_live_textures():

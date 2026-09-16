@@ -111,14 +111,23 @@ DEFAULT_CONFIG = {
     # them. Off falls back to its own scanner, which is the 2.1.2 behaviour.
     # Read once, when projectM is created, so it needs a restart.
     "live_textures":        True,
-    # Two visuals at once, the second blended over the first. `dual_opacity`
-    # is how hard it shows through, `dual_quality` is its own quality setting
-    # -- low by default, because the pair costs about twice one of them --
-    # and `dual_focus` is which of the two every control is driving.
+    # Two visuals at once, mixed by a crossfader. `visual1_enabled` and
+    # `dual_enabled` are the two switches -- one of them is always on, and
+    # both on is the pair. `dual_crossfade` is where the fader sits: 0 is
+    # visual 1 alone, 1 is visual 2 alone, 0.5 is both at even weight. It
+    # replaces `dual_opacity`, which only ran from "visual 1" to "both" and
+    # is still read when the new key is missing. `dual_quality` is visual 2's
+    # own quality -- low by default, because the pair costs about twice one
+    # of them -- and `dual_focus` is which of the two every control drives.
+    "visual1_enabled":      True,
     "dual_enabled":         False,
-    "dual_opacity":         0.5,
+    "dual_crossfade":       0.5,
     "dual_quality":         "low",
     "dual_focus":           0,
+    # Which monitor visual 2 gets a window of its own on. -1 keeps it in the
+    # one window, blended against visual 1 by the crossfader; so does naming
+    # the monitor visual 1 is already on.
+    "visual2_display":      -1,
 }
 
 

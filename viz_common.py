@@ -1074,6 +1074,9 @@ DEFAULT_KEYMAPS = {
     "exclude":          "x",
     "snapshot":         "c",
     "toggle_dual":      "2",
+    "toggle_visual1":   "1",
+    "crossfade_back":   "[",
+    "crossfade_fwd":    "]",
     "swap_focus":       "TAB",
 }
 
@@ -3129,6 +3132,8 @@ class Bridge(QObject):
     thumbnail_ready    = pyqtSignal(str)        # a preset's picture was written
     dual_changed       = pyqtSignal(bool)       # a second visual is/is not on
     focus_changed      = pyqtSignal(int)        # which visual the controls drive
+    visual_changed     = pyqtSignal(int, bool)  # visual 0 or 1 is/is not drawn
+    crossfade_changed  = pyqtSignal(float)      # the fader moved
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -3915,37 +3920,41 @@ class SettingsDialog(QDialog):
         self._fps.setSuffix("  fps")
         layout.addRow("FPS:", self._fps)
 
-        # Quality
+        # Which visuals are on, and which of them the rows below are for.
+        # One pair of boxes doing both jobs: ticking one switches it on and
+        # points the settings at it, which is the same thing you meant either
+        # way -- nobody ticks "visual 2" to leave it alone.
+        #
+        # There is no "second visual quality" row any more, and no strength.
+        # Quality is THIS row, read against whichever visual is ticked, and
+        # the strength was replaced by the crossfader on the right-click menu,
+        # where you can see what it is doing while you move it.
+        self._editing = 1 if cfg.get("dual_focus") else 0
+        self._quality_by_visual = [cfg.get("quality", "high"),
+                                   cfg.get("dual_quality", "low")]
+        self._visual_box = []
+        picker = QHBoxLayout()
+        picker.setContentsMargins(0, 0, 0, 0)
+        picker.setSpacing(12)
+        for which in (0, 1):
+            box = QCheckBox(f"Visual {which + 1}")
+            box.setChecked(bool(cfg.get("visual1_enabled", True)) if not which
+                           else bool(cfg.get("dual_enabled", False)))
+            box.setToolTip("Tick to switch it on and set it up below.")
+            box.clicked.connect(
+                lambda checked, i=which: self._pick_visual(i, checked))
+            self._visual_box.append(box)
+            picker.addWidget(box)
+        picker.addStretch()
+        layout.addRow("Visuals:", picker)
+
+        # Quality, of whichever visual is being edited.
         self._quality = QComboBox()
         for q in ["low", "medium", "high", "ultra"]:
             self._quality.addItem(q.capitalize(), q)
-        idx = self._quality.findData(cfg.get("quality", "high"))
-        if idx >= 0:
-            self._quality.setCurrentIndex(idx)
-        layout.addRow("Quality:", self._quality)
-
-        # The second visual. Its own quality because the pair costs about
-        # twice one of them to draw, and low is the setting you want on the
-        # one that is blended underneath rather than looked at.
-        self._dual_quality = QComboBox()
-        for q in ["low", "medium", "high", "ultra"]:
-            self._dual_quality.addItem(q.capitalize(), q)
-        idx = self._dual_quality.findData(cfg.get("dual_quality", "low"))
-        if idx >= 0:
-            self._dual_quality.setCurrentIndex(idx)
-        self._dual_quality.setToolTip(
-            "Applies next time the second visual is switched on.")
-        layout.addRow("Second visual quality:", self._dual_quality)
-
-        self._dual_opacity = QDoubleSpinBox()
-        self._dual_opacity.setRange(0.0, 1.0)
-        self._dual_opacity.setSingleStep(0.05)
-        self._dual_opacity.setDecimals(2)
-        self._dual_opacity.setValue(cfg.get("dual_opacity", 0.5))
-        self._dual_opacity.setToolTip(
-            "How hard the second visual shows through the first. Takes "
-            "effect as you change it.")
-        layout.addRow("Second visual strength:", self._dual_opacity)
+        self._quality_label = QLabel()
+        layout.addRow(self._quality_label, self._quality)
+        self._show_visual_settings()
 
         # Theme. Dark is the default and was the only option: the
         # visualiser is a black window, and a light dialog beside it is a
@@ -4166,8 +4175,48 @@ class SettingsDialog(QDialog):
         layout.addRow(label, row)
         return field
 
+    def _pick_visual(self, which: int, checked: bool):
+        """A tick switches that visual on AND points the rows at it.
+
+        Both off is a black window, so the last one standing goes back on --
+        silently, because the box springing back under the cursor says it
+        more plainly than a message box would.
+        """
+        other = self._visual_box[1 - which]
+        if not checked and not other.isChecked():
+            self._visual_box[which].setChecked(True)
+            return
+        if not checked:
+            # Switched off. Nothing to set up on a visual that is not there,
+            # so the rows follow the one that is.
+            self._set_editing(1 - which)
+            return
+        self._set_editing(which)
+
+    def _set_editing(self, which: int):
+        """Point the per-visual rows at visual 1 (0) or visual 2 (1)."""
+        which = 1 if which else 0
+        # Keep what is on screen before swapping it out, or moving between
+        # the two would quietly hand both of them the same value.
+        self._quality_by_visual[self._editing] = \
+            self._quality.currentData() or "high"
+        self._editing = which
+        self._show_visual_settings()
+
+    def _show_visual_settings(self):
+        """Load the editing visual's values into the rows that are per-visual."""
+        self._quality_label.setText(f"Visual {self._editing + 1} quality:")
+        idx = self._quality.findData(self._quality_by_visual[self._editing])
+        if idx >= 0:
+            self._quality.setCurrentIndex(idx)
+        self._quality.setToolTip(
+            "Applies at once." if not self._editing else
+            "Applies next time the second visual is switched on.")
+
     def get_config(self) -> dict:
-        quality = self._quality.currentData()
+        self._quality_by_visual[self._editing] = \
+            self._quality.currentData() or "high"
+        quality = self._quality_by_visual[0]
         mx, my = QUALITY_MESH.get(quality, (64, 48))
         return {
             "preset_dir":           self._preset_dir.text().strip(),
@@ -4176,8 +4225,9 @@ class SettingsDialog(QDialog):
             "preset_random_extra":  self._rnd.value(),
             "fps":                  self._fps.value(),
             "quality":              quality,
-            "dual_quality":         self._dual_quality.currentData() or "low",
-            "dual_opacity":         round(self._dual_opacity.value(), 2),
+            "dual_quality":         self._quality_by_visual[1],
+            "visual1_enabled":      self._visual_box[0].isChecked(),
+            "dual_enabled":         self._visual_box[1].isChecked(),
             "theme":                self._theme.currentData() or "dark",
             "mesh_x":               mx,
             "mesh_y":               my,
@@ -4264,7 +4314,10 @@ ACTION_LABELS = {
     "toggle_wallpaper": "Desktop wallpaper mode on / off",
     "exclude":          "Exclude this visual (rate it 0★) and move on",
     "snapshot":         "Snapshot this visual for the browser",
-    "toggle_dual":      "Show a second visual over the first",
+    "toggle_dual":      "Visual 2 on / off",
+    "toggle_visual1":   "Visual 1 on / off",
+    "crossfade_back":   "Crossfade towards visual 1",
+    "crossfade_fwd":    "Crossfade towards visual 2",
     "swap_focus":       "Adjust the other visual",
 }
 
@@ -4279,6 +4332,9 @@ ACTION_NOTES = {
                         "window gets no keys",
     "exclude":          "Hides it from rotation. Nothing is deleted",
     "snapshot":         "Replaces the picture the browser already has",
+    "toggle_visual1":   "One of the two always stays on",
+    "crossfade_back":   "Only does anything while both visuals are on",
+    "crossfade_fwd":    "Only does anything while both visuals are on",
 }
 
 
@@ -4983,7 +5039,7 @@ MENU_ENTRIES = (
     ("reset_ratings", "Reset all ratings\u2026",        ""),
     ("collections",   "Collections",                  ""),
     ("lock",          "Lock / unlock visual",         "lock"),
-    ("dual",          "Second visual",                "toggle_dual"),
+    ("dual",          "Visuals and crossfade",        "toggle_dual"),
     ("borderless",    "Borderless window",            "toggle_borderless"),
     ("on_top",        "Always on top",                "toggle_on_top"),
     ("fullscreen",    "Fullscreen",                   "fullscreen"),
@@ -5216,25 +5272,165 @@ class ContextMenu(QMenu):
             self.removeAction(self.actions()[-1])
 
     def _build_dual_menu(self):
-        """The second visual, and which of the two the controls drive.
+        """The two visuals, the fader between them, and where each one goes.
 
-        The focus line is the one that needs saying out loud: everything else
+        Two switches rather than one "second visual" toggle: with a fader in
+        the menu, visual 2 is no longer a thing you add on top of visual 1 --
+        either of the two can be the one on screen, and a single toggle
+        cannot say that. Whichever is left on its own is greyed out, because
+        both off is a black window and the menu that would undo it is no
+        longer being drawn.
+
+        The focus line stays and still needs saying out loud: everything else
         on this menu, every key and the whole preset browser act on one of the
         two visuals, and without a line naming which, the other one looks
         broken rather than unselected.
         """
         if not self._renderer.can_dual():
             return
+        on = (self._renderer.visual_on(0), self._renderer.visual_on(1))
+        for which in (0, 1):
+            act = QAction(f"\u29c9   Visual {which + 1}", self)
+            act.setCheckable(True)
+            act.setChecked(on[which])
+            if on[which] and not on[1 - which]:
+                act.setEnabled(False)
+                act.setToolTip("The only visual on screen. Switch the other "
+                               "one on first.")
+            act.triggered.connect(
+                lambda checked, i=which: self._renderer.request_visual(
+                    i, checked))
+            self.addAction(act)
+
+        self._build_crossfade_row(on[0] and on[1])
+        self._build_send_visual_menu()
+
         if not self._renderer.dual_on():
-            self.addAction("\u29c9   Add a second visual",
-                           lambda: self._renderer.request_dual(True))
             return
-        self.addAction("\u29c9   One visual again",
-                       lambda: self._renderer.request_dual(False))
         which = self._renderer.focus()
         self.addAction("\u21c4   Adjust the first visual" if which
                        else "\u21c4   Adjust the second visual",
                        lambda: self._renderer.request_focus(1 - which))
+
+    def _build_crossfade_row(self, live: bool):
+        """The fader, in the menu rather than behind Settings.
+
+        It is the one control here you want to move while watching the thing
+        it changes, which is exactly what a settings dialog is worst at. Same
+        shape as the audio sensitivity row further down, including the save
+        timer -- sliderReleased does not fire for a click on the groove or an
+        arrow key, and a fader that moves the picture without ever being
+        written down is the bug that row already paid for.
+        """
+        row = QWidget()
+        row_l = QHBoxLayout(row)
+        row_l.setContentsMargins(14, 4, 14, 4)
+        row_l.setSpacing(8)
+        value = int(round(self._renderer.crossfade() * 100))
+
+        def caption(v: int) -> str:
+            if v <= 0:
+                return "\u21c4 Visual 1 only"
+            if v >= 100:
+                return "\u21c4 Visual 2 only"
+            return f"\u21c4 {100 - v}%  /  {v}%"
+
+        lbl = QLabel(caption(value))
+        lbl.setStyleSheet(f"color:{theme_colour('fg' if live else 'muted')};"
+                          "font-size:12px;min-width:130px;")
+        slider = QSlider(Qt.Orientation.Horizontal)
+        slider.setRange(0, 100)
+        slider.setValue(value)
+        slider.setFixedWidth(160)
+        slider.setEnabled(live)
+        if not live:
+            slider.setToolTip("Switch both visuals on to fade between them.")
+
+        # What is on disk, not self._cfg: request_crossfade writes into the
+        # very dict the render loop is reading, so comparing against it would
+        # find the new value already there and skip every save.
+        on_disk = [self._renderer.crossfade()]
+
+        def store():
+            x = round(slider.value() / 100.0, 2)
+            if x == on_disk[0]:
+                return
+            on_disk[0] = x
+            self._renderer._save_config(self._cfg)
+            _log(f"[dual] crossfade {x:g}")
+
+        save_timer = QTimer(row)
+        save_timer.setSingleShot(True)
+        save_timer.setInterval(250)
+        save_timer.timeout.connect(store)
+
+        def on_change(v):
+            lbl.setText(caption(v))
+            self._renderer.request_crossfade(v / 100.0)
+            save_timer.start()
+
+        slider.valueChanged.connect(on_change)
+        row_l.addWidget(lbl)
+        row_l.addWidget(slider)
+        wa = QWidgetAction(self)
+        wa.setDefaultWidget(row)
+        self.addAction(wa)
+
+    def _build_send_visual_menu(self):
+        """Put each visual on a monitor of its own.
+
+        Nothing to offer on one monitor -- the two are already sharing the
+        only screen there is, which is what the fader above is for. Point
+        them at the same screen and that is what you get back.
+        """
+        try:
+            displays = self._renderer.list_displays()
+        except Exception:
+            displays = []
+        if len(displays) < 2:
+            return
+        sub = self.addMenu("\U0001f5b5   Send visual to")
+        sub.setStyleSheet(self.styleSheet())
+        here = int(self._cfg.get("fullscreen_display", -1))
+        there = int(self._cfg.get("visual2_display", -1))
+
+        def monitors(parent, current, chosen, first_label):
+            group = QActionGroup(parent)
+            group.setExclusive(True)
+            rows = [(-1, first_label)]
+            rows += [(i, f"{i + 1}.  {name}   {w}\u00d7{h}")
+                     for i, name, _x, _y, w, h in displays]
+            for idx, label in rows:
+                act = QAction(label, parent)
+                act.setCheckable(True)
+                act.setChecked(idx == current)
+                act.triggered.connect(lambda _, i=idx: chosen(i))
+                group.addAction(act)
+                parent.addAction(act)
+                if idx == -1:
+                    parent.addSeparator()
+
+        def send_first(idx: int):
+            self._cfg["fullscreen_display"] = idx
+            self._renderer._save_config(self._cfg)
+            if idx >= 0:
+                self._renderer.request_fullscreen_on(idx)
+
+        def send_second(idx: int):
+            self._cfg["visual2_display"] = idx
+            self._renderer._save_config(self._cfg)
+            self._renderer.request_second_window(idx)
+            if idx >= 0:
+                # A window of its own shows visual 2 alone, so a second
+                # visual has to exist for there to be anything in it.
+                self._renderer.request_visual(1, True)
+
+        one = sub.addMenu("Visual 1")
+        one.setStyleSheet(self.styleSheet())
+        monitors(one, here, send_first, "Follow the window")
+        two = sub.addMenu("Visual 2")
+        two.setStyleSheet(self.styleSheet())
+        monitors(two, there, send_second, "Same window as visual 1")
 
     def _build_wallpaper_entry(self):
         """Live where the session can host it, disabled with a reason where it
@@ -7238,8 +7434,38 @@ class _LiveTexture:
 # screen and it cannot do this: it ignores blending entirely. Hence a program
 # of our own -- the one piece of hand-written OpenGL in the application.
 
-#: 0 is the primary alone; 1 is the secondary at full strength.
-DUAL_OPACITY_DEFAULT = 0.5
+#: Where the crossfader sits: 0 is visual 1 alone, 1 is visual 2 alone,
+#: 0.5 is both at even weight.
+DUAL_CROSSFADE_DEFAULT = 0.5
+
+def display_no(index: int) -> str:
+    """A monitor's number as a person counts them, from one."""
+    return str(int(index) + 1)
+
+
+#: How far one press of a crossfade key moves it. Twenty steps end to end:
+#: few enough to cross in a second of held key, fine enough to place.
+CROSSFADE_STEP = 0.05
+
+
+def dual_crossfade(cfg: dict) -> float:
+    """Read the crossfader, falling back to the strength it replaced.
+
+    Up to 2.1.6 this number was a strength: how hard visual 2 screened over
+    visual 1, running from "visual 1 alone" to "both, hard". The crossfader
+    ends at *visual 2 alone* instead, so the two are not the same control --
+    but they agree at 0 and they agree in the middle, and the middle is where
+    a config that was never touched is sitting. Carrying the old key over is
+    therefore right for the default and close for everything else, which beats
+    snapping every upgraded config back to 0.5.
+    """
+    x = cfg.get("dual_crossfade")
+    if x is None:
+        x = cfg.get("dual_opacity", DUAL_CROSSFADE_DEFAULT)
+    try:
+        return min(1.0, max(0.0, float(x)))
+    except (TypeError, ValueError):
+        return DUAL_CROSSFADE_DEFAULT
 
 _BLEND_VERT = """#version 330 core
 out vec2 uv;
@@ -7258,14 +7484,18 @@ in vec2 uv;
 out vec4 colour;
 uniform sampler2D visual_a;
 uniform sampler2D visual_b;
-uniform float strength;
+uniform float crossfade;
 void main()
 {
-    vec3 a = texture(visual_a, uv).rgb;
-    vec3 b = texture(visual_b, uv).rgb * strength;
+    // Weight BOTH, not just the second one. Scaling b alone can reach
+    // "visual 1" and "both at once" but never "visual 2 alone", which is
+    // the far end of a crossfader and half of what it is for.
+    vec3 a = texture(visual_a, uv).rgb * (1.0 - crossfade);
+    vec3 b = texture(visual_b, uv).rgb * crossfade;
     // Screen rather than add. Two bright presets added together clip to
     // white and both shapes disappear; screen keeps each one readable and
-    // cannot blow past 1 however bright they get.
+    // cannot blow past 1 however bright they get. At either end one term is
+    // zero and screen leaves the other exactly as it was.
     colour = vec4(1.0 - (1.0 - a) * (1.0 - b), 1.0);
 }
 """
@@ -7349,7 +7579,7 @@ class _Blender:
             raise RuntimeError(f"the blend shader would not link: {why.strip()}")
         self._program = int(program)
         self._uniform = {n: glGetUniformLocation(self._program, n)
-                         for n in ("visual_a", "visual_b", "strength")}
+                         for n in ("visual_a", "visual_b", "crossfade")}
         # A core profile refuses to draw without one bound, even for a
         # triangle that reads no vertex attributes at all.
         self._vao = int(glGenVertexArrays(1))
@@ -7388,8 +7618,15 @@ class _Blender:
         """The framebuffer the i-th visual draws into."""
         return self._fbo[i]
 
-    def draw(self, w: int, h: int, strength: float):
+    def draw(self, w: int, h: int, crossfade: float, origin=(0, 0)):
         """Mix the two targets onto the window. Render thread.
+
+        `origin` places the w by h drawing inside a larger window, for the
+        letterbox a second monitor of another shape needs.
+
+        `crossfade` runs 0 (visual 1 alone) to 1 (visual 2 alone). Either end
+        is exact, so this one call also serves a lone visual -- there is no
+        second program for the single-visual case.
 
         projectM leaves its own program, its own framebuffer and whatever
         blend state it used behind it, so all of that is set here rather than
@@ -7397,7 +7634,7 @@ class _Blender:
         and a correct one on the next.
         """
         glBindFramebuffer(GL_FRAMEBUFFER, 0)
-        glViewport(0, 0, w, h)
+        glViewport(origin[0], origin[1], w, h)
         glDisable(GL_BLEND)
         glDisable(GL_DEPTH_TEST)
         glDisable(GL_SCISSOR_TEST)
@@ -7408,8 +7645,8 @@ class _Blender:
         glBindTexture(GL_TEXTURE_2D, self._tex[1])
         glUniform1i(self._uniform["visual_a"], 0)
         glUniform1i(self._uniform["visual_b"], 1)
-        glUniform1f(self._uniform["strength"],
-                    max(0.0, min(1.0, float(strength))))
+        glUniform1f(self._uniform["crossfade"],
+                    max(0.0, min(1.0, float(crossfade))))
         glBindVertexArray(self._vao)
         glDrawArrays(GL_TRIANGLES, 0, 3)
         glBindVertexArray(0)
@@ -7672,7 +7909,8 @@ from OpenGL.GL import (glGenFramebuffers, glBindFramebuffer,
                        glGenVertexArrays, glBindVertexArray,
                        glDeleteVertexArrays, glDrawArrays, GL_TRIANGLES,
                        glActiveTexture, GL_TEXTURE0, GL_TEXTURE1,
-                       glDisable, GL_BLEND, GL_DEPTH_TEST, GL_SCISSOR_TEST)
+                       glDisable, GL_BLEND, GL_DEPTH_TEST, GL_SCISSOR_TEST,
+                       glClear, glClearColor, GL_COLOR_BUFFER_BIT)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -7867,6 +8105,23 @@ class Renderer:
         self._blend = None          # a _Blender while two are on screen
         self._req_dual  = None      # True or False, from the Qt thread
         self._req_focus = None      # 0 or 1, ditto
+        # Visual 1 is a switch, not an instance: the primary projectM owns the
+        # playlist, the ratings and everything the browser talks to, so it
+        # stays alive when it is switched off and simply is not drawn. What
+        # that saves is the render, which is the whole cost.
+        self._v1_on = True
+        self._req_v1 = None         # True or False, from the Qt thread
+        # A second SDL window, borderless over one monitor, showing visual 2
+        # on its own. One GL context serves both -- SDL will make a context
+        # current on any window built to the same attributes, so there is no
+        # sharing to set up and every texture and framebuffer is already
+        # visible to both.
+        self._window2 = None
+        self._window2_display = -1
+        #: When the fader last moved under a key, or 0.0 for "nothing owed".
+        self._fade_dirty = 0.0
+        self._req_win2 = None       # display index, or -1 for "no second window"
+        self._req_fullscreen_on = None   # display index, from the Qt thread
 
         #: Set by the key or the browser's button. Taken on the render thread
         #: at the one point in the loop where the back buffer holds this
@@ -8069,6 +8324,9 @@ class Renderer:
         # building it wants the preset directory loaded first.
         if self._cfg.get("dual_enabled"):
             self._req_dual = True
+            # Only alongside a second visual. On its own it is a black window,
+            # and a config that somehow says so is not worth honouring.
+            self._v1_on = bool(self._cfg.get("visual1_enabled", True))
 
         # Before the library loads, so the first frame drawn is ours. projectM
         # draws its own "M" idle preset for as long as nothing else is
@@ -8931,6 +9189,20 @@ class Renderer:
                         second.pop("mesh_x", None)
                         second.pop("mesh_y", None)
                         self._apply_pm_settings(second, self._pms[1])
+                    if "visual1_enabled" in updates or "dual_enabled" in updates:
+                        want1 = bool(self._cfg.get("visual1_enabled", True))
+                        want2 = bool(self._cfg.get("dual_enabled", False))
+                        # Neither is not a setting, it is a black window.
+                        if not want1 and not want2:
+                            want1 = True
+                        # Up before down: taking the last one off screen trips
+                        # the guard that puts one back, and the guard would
+                        # undo half of what was just asked for.
+                        if want2:
+                            self._do_set_dual(True)
+                        self._do_set_v1(want1)
+                        if not want2:
+                            self._do_set_dual(False)
                     if "fps" in updates:
                         self._set_swap_interval(updates.get("fps", 60))
                     if "audio_device" in updates:
@@ -8997,6 +9269,22 @@ class Renderer:
                     on = self._req_dual
                     self._req_dual = None
                     self._do_set_dual(on)
+                if self._req_v1 is not None:
+                    on = self._req_v1
+                    self._req_v1 = None
+                    self._do_set_v1(on)
+                if self._req_win2 is not None:
+                    where = self._req_win2
+                    self._req_win2 = None
+                    self._do_set_window2(where)
+                if self._req_fullscreen_on is not None:
+                    where = self._req_fullscreen_on
+                    self._req_fullscreen_on = None
+                    self._do_fullscreen_on(where)
+            if self._fade_dirty and \
+                    _time.monotonic() - self._fade_dirty > self.FADE_SETTLE_S:
+                self._fade_dirty = 0.0
+                self._save_config(self._cfg)
                 if self._req_focus is not None:
                     which = self._req_focus
                     self._req_focus = None
@@ -9134,6 +9422,7 @@ class Renderer:
                 pm.destroy()
             self._pms[i] = None
         self._pm = None
+        self._drop_window2()
         if self._context:
             sdl2.SDL_GL_DeleteContext(self._context)
         if self._window:
@@ -9182,6 +9471,14 @@ class Renderer:
             self._rate_current(-1)
         elif km("toggle_dual", sym, scancode):
             self._do_set_dual(not self.dual_on())
+        elif km("toggle_visual1", sym, scancode):
+            # Straight through request_visual, not _do_set_v1: it is the one
+            # that refuses to leave a black window.
+            self.request_visual(0, not self._v1_on)
+        elif km("crossfade_back", sym, scancode):
+            self.nudge_crossfade(-CROSSFADE_STEP)
+        elif km("crossfade_fwd", sym, scancode):
+            self.nudge_crossfade(CROSSFADE_STEP)
         elif km("swap_focus", sym, scancode):
             if self.dual_on():
                 self._do_set_focus(1 - self._focus)
@@ -10201,6 +10498,11 @@ class Renderer:
 
     # ── Two visuals at once ───────────────────────────────────────────────
 
+    #: How long the crossfade key has to be still before the new position is
+    #: written down. Long enough to swallow a held key's repeats, short
+    #: enough that nudging it and quitting keeps the nudge.
+    FADE_SETTLE_S = 0.6
+
     def dual_on(self) -> bool:
         """Is a second visual on screen? Either thread."""
         return self._pms[1] is not None
@@ -10222,6 +10524,84 @@ class Renderer:
         """Point the controls at the primary (0) or the secondary (1)."""
         with self._lock:
             self._req_focus = 1 if which else 0
+
+    def visual_on(self, which: int) -> bool:
+        """Is visual 1 (0) or visual 2 (1) on screen? Either thread."""
+        return self.dual_on() if which else bool(self._v1_on)
+
+    def request_visual(self, which: int, on: bool):
+        """Switch one of the two visuals on or off. Qt thread.
+
+        The last one standing stays: switching both off is a black window and
+        no way back from a key, so the request is simply dropped. Callers that
+        can grey the control out should -- this is the backstop for the ones
+        that cannot, like a key binding.
+        """
+        which = 1 if which else 0
+        on = bool(on)
+        if not on and not self.visual_on(1 - which):
+            return
+        with self._lock:
+            if which:
+                self._req_dual = on
+            else:
+                self._req_v1 = on
+
+    def crossfade(self) -> float:
+        """Where the fader sits. 0 is visual 1 alone, 1 is visual 2 alone."""
+        return dual_crossfade(self._cfg)
+
+    def request_crossfade(self, x: float):
+        """Move the fader. Read by the render thread on the next frame.
+
+        A bare float write, like the strength it replaces: the render thread
+        reads it once a frame and a half-written one is not a thing CPython
+        can hand it.
+        """
+        try:
+            x = min(1.0, max(0.0, float(x)))
+        except (TypeError, ValueError):
+            return
+        self._cfg["dual_crossfade"] = round(x, 3)
+        self._bridge.crossfade_changed.emit(self._cfg["dual_crossfade"])
+
+    def nudge_crossfade(self, delta: float):
+        """Move the fader by a step, for the two keys bound to it.
+
+        Marked for saving rather than saved here: a held key repeats about
+        thirty times a second and crossing the range takes twenty presses,
+        so writing on each one is a file write per frame for no gain. The
+        render loop writes it once the key stops.
+        """
+        self.request_crossfade(self.crossfade() + delta)
+        self._fade_dirty = _time.monotonic()
+
+    def second_window_display(self) -> int:
+        """Which monitor visual 2 has a window on. -1 is "none". Any thread."""
+        return self._window2_display
+
+    def request_second_window(self, display: int):
+        """Give visual 2 a monitor of its own, or take it back. Qt thread.
+
+        -1 puts it back in the one window, blended against visual 1 by the
+        fader -- and so does naming the monitor visual 1 is already on, which
+        is the same request said a different way.
+        """
+        try:
+            display = int(display)
+        except (TypeError, ValueError):
+            return
+        with self._lock:
+            self._req_win2 = display
+
+    def request_fullscreen_on(self, display: int):
+        """Put the main window fullscreen on a named monitor. Qt thread.
+
+        Not the fullscreen toggle: picking a monitor is an instruction to go
+        there, and toggling would send every second pick back to a window.
+        """
+        with self._lock:
+            self._req_fullscreen_on = int(display)
 
     def _render_visuals(self):
         """Draw this frame. Render thread.
@@ -10247,9 +10627,25 @@ class Renderer:
             return
         if (second is not None and self._blend is not None
                 and self._blend.ready(dw, dh)):
-            # The burn-in goes into whichever visual is being adjusted,
-            # matching every other control.
+            # A screen each means the fader is not mixing anything: both
+            # visuals are wanted at full strength, so neither may be skipped
+            # and neither is weighted. `x` is None for exactly that case.
+            split = self._window2 is not None
+            x = None if split else (
+                1.0 if not self._v1_on else dual_crossfade(self._cfg))
             for i, pm in enumerate(self._pms):
+                # Don't draw what the crossfader has faded out. The shader
+                # multiplies that end by zero, so its target is not sampled
+                # and a stale frame in it cannot show -- which makes parking
+                # the fader at one end cost one visual rather than two.
+                # The price is that a fully faded visual stops advancing;
+                # it picks up where it left off, which is what "off" should
+                # look like.
+                if x is not None and ((x >= 1.0 and i == 0) or
+                                      (x <= 0.0 and i == 1)):
+                    continue
+                # The burn-in goes into whichever visual is being adjusted,
+                # matching every other control.
                 if i == self._focus:
                     self._burn_this_frame(pm)
                 # render_frame_fbo, not render_frame: the plain one targets
@@ -10258,9 +10654,14 @@ class Renderer:
                 # empty textures over the top. A black window, no GL error,
                 # and nothing in the log.
                 pm.render_frame_fbo(self._blend.target(i))
-            self._blend.draw(dw, dh,
-                             self._cfg.get("dual_opacity",
-                                           DUAL_OPACITY_DEFAULT))
+            if split:
+                # Visual 2's window first, then visual 1 into this one. The
+                # caller reads THIS window's back buffer for the recording
+                # and for thumbnails, so it has to be the one left drawn.
+                self._draw_second_window()
+                self._blend.draw(dw, dh, 0.0)
+            else:
+                self._blend.draw(dw, dh, x)
             return
         if second is not None:
             # The blender gave up -- it says why once. Fall back to one
@@ -10268,6 +10669,25 @@ class Renderer:
             self._do_set_dual(False)
         self._burn_this_frame()
         self._pm.render_frame()
+
+    def _do_set_v1(self, on: bool):
+        """Draw the primary, or stop drawing it. Render thread.
+
+        Nothing is created or destroyed -- the primary projectM is the one
+        the playlist, the ratings and the browser all speak to, and taking it
+        down would take them with it. The crossfader is parked at the far end
+        instead, which is what "off" already looks like to the shader.
+        """
+        on = bool(on)
+        if on == self._v1_on:
+            return
+        self._v1_on = on
+        self._cfg["visual1_enabled"] = on
+        # Written through, the same as the hard-cuts key: it is a switch in a
+        # menu now, not a transient toggle, and a tick that is gone at the
+        # next launch reads as the setting not having taken.
+        self._save_config(self._cfg)
+        self._bridge.visual_changed.emit(0, on)
 
     def _do_set_dual(self, on: bool):
         """Bring the second visual up or take it down. Render thread."""
@@ -10278,7 +10698,13 @@ class Renderer:
         else:
             self._stop_dual()
         self._cfg["dual_enabled"] = self.dual_on()
+        self._save_config(self._cfg)
         self._bridge.dual_changed.emit(self.dual_on())
+        self._bridge.visual_changed.emit(1, self.dual_on())
+        if not self.dual_on() and not self._v1_on:
+            # It went down on its own -- the blender gave up, or it never
+            # started. Something has to be on screen.
+            self._do_set_v1(True)
 
     def _start_dual(self):
         """A second projectM in the same GL context. Render thread.
@@ -10344,6 +10770,9 @@ class Renderer:
 
     def _stop_dual(self):
         """Take the second visual down. Render thread."""
+        # Its own window shows visual 2 and nothing else, so an empty one is
+        # a black rectangle over a monitor with no way to shift it.
+        self._drop_window2()
         second, self._pms[1] = self._pms[1], None
         # Back to the primary first: leaving the controls pointed at a
         # visual that is being destroyed is a use-after-free with extra
@@ -10708,6 +11137,194 @@ class Renderer:
                 _SWP_NOZORDER | _SWP_NOACTIVATE)
         except Exception as e:
             print(f"[renderer] could not overhang the display: {e}", flush=True)
+
+    def _draw_second_window(self):
+        """Visual 2 alone, in its own window. Render thread.
+
+        Letterboxed rather than stretched. The two targets are built at the
+        MAIN window's size, so a second monitor of another shape would pull
+        the picture out of shape -- and a stretched visual reads as a broken
+        one. Two monitors of the same shape, which is the ordinary case, get
+        the whole screen and no bars.
+        """
+        if self._window2 is None or self._blend is None:
+            return
+        if sdl2.SDL_GL_MakeCurrent(self._window2, self._context) != 0:
+            # The window went away underneath us -- a monitor unplugged, or
+            # the session taking it. Say so once and fall back to one window
+            # rather than repeating this sixty times a second.
+            print(f"[dual] second window lost: {sdl2.SDL_GetError()}",
+                  flush=True)
+            self._drop_window2()
+            return
+        try:
+            w, h = ctypes.c_int(), ctypes.c_int()
+            sdl2.SDL_GL_GetDrawableSize(self._window2,
+                                        ctypes.byref(w), ctypes.byref(h))
+            ww, wh = int(w.value), int(h.value)
+            if ww <= 0 or wh <= 0:
+                return
+            tw, th = self._blend.size
+            if tw <= 0 or th <= 0:
+                return
+            scale = min(ww / tw, wh / th)
+            dw, dh = max(1, int(tw * scale)), max(1, int(th * scale))
+            if (dw, dh) != (ww, wh):
+                # Only when there are bars to paint. glClear on every frame
+                # of a full-bleed window is a wasted pass over the screen.
+                glBindFramebuffer(GL_FRAMEBUFFER, 0)
+                glViewport(0, 0, ww, wh)
+                glClearColor(0.0, 0.0, 0.0, 1.0)
+                glClear(GL_COLOR_BUFFER_BIT)
+            # 1.0 is visual 2 alone: the same shader, with visual 1's term
+            # multiplied out. There is no second program for this.
+            self._blend.draw(dw, dh, 1.0,
+                             ((ww - dw) // 2, (wh - dh) // 2))
+            sdl2.SDL_GL_SwapWindow(self._window2)
+        finally:
+            sdl2.SDL_GL_MakeCurrent(self._window, self._context)
+
+    def _do_set_window2(self, display: int):
+        """Open, move or close visual 2's own window. Render thread."""
+        if display >= 0 and display == int(
+                self._cfg.get("fullscreen_display", -1)):
+            # Both visuals pointed at one screen is the blended pair, asked
+            # for the other way round.
+            display = -1
+        if display == self._window2_display:
+            return
+        self._drop_window2()
+        if display < 0:
+            self._cfg["visual2_display"] = -1
+            return
+        rect = None
+        for i, _name, mx, my, mw, mh in self._displays:
+            if i == display:
+                rect = (mx, my, mw, mh)
+                break
+        if rect is None:
+            print(f"[dual] there is no monitor {display + 1}", flush=True)
+            self._cfg["visual2_display"] = -1
+            return
+        mx, my, mw, mh = rect
+        # Borderless at the monitor's own rectangle rather than
+        # FULLSCREEN_DESKTOP: a second fullscreen window takes the focus from
+        # the first, and the first is the one with the keys on it. The pixels
+        # are the same either way.
+        win = sdl2.SDL_CreateWindow(
+            f"{APP_NAME} \u2014 visual 2".encode(), mx, my, mw, mh,
+            sdl2.SDL_WINDOW_OPENGL | sdl2.SDL_WINDOW_SHOWN |
+            sdl2.SDL_WINDOW_BORDERLESS)
+        if not win:
+            print(f"[dual] second window failed: {sdl2.SDL_GetError()}",
+                  flush=True)
+            self._bridge.show_toast.emit("Could not open a second window.")
+            self._cfg["visual2_display"] = -1
+            return
+        self._window2 = win
+        self._window2_display = display
+        self._cfg["visual2_display"] = display
+        # Ask for the position again, because a reparenting window manager
+        # places a borderless window by its own policy and simply ignores the
+        # one SDL_CreateWindow was given. Measured under xfwm4 on 15 Sep 2026:
+        # a window created at (1100, 0) was mapped at (0, 0), on top of the
+        # main window -- which reads as the second visual having replaced the
+        # first rather than joined it. SDL drops a request matching its own
+        # cache, and its cache already says (1100, 0), so the cache has to be
+        # moved off the target before the real ask goes out.
+        def place(x, y):
+            sdl2.SDL_SetWindowPosition(win, x + 1, y)
+            sdl2.SDL_SetWindowPosition(win, x, y)
+
+        place(mx, my)
+        # And then put it there for real, through X. That ask still lands
+        # short -- measured under xfwm4, 29px, because it reparents even a
+        # borderless window and positions the FRAME while the client sits
+        # inside it, leaving a black strip down the monitor's left edge.
+        # SDL is the right way to ask for a change and the wrong way to undo
+        # somebody else's, which is the same conclusion the wallpaper hold
+        # reached: move the toplevel itself.
+        self._place_second_window(win, mx, my, mw, mh)
+        # And hand the keyboard back. Every key in the application belongs to
+        # the main window, so a second window that keeps the focus it took on
+        # the way up leaves the app looking dead to every key press.
+        sdl2.SDL_RaiseWindow(self._window)
+        # The context followed the new window on some drivers merely by it
+        # being created. Put it back on the main one before the frame loop
+        # draws anything.
+        sdl2.SDL_GL_MakeCurrent(self._window, self._context)
+        self._bridge.show_toast.emit(f"Visual 2 on monitor {display + 1}")
+
+    def _place_second_window(self, win, mx, my, mw, mh):
+        """Move the second window's toplevel onto the monitor. X11 only.
+
+        Windows does not reparent a window into a frame of someone else's, so
+        SDL's own placement is final there and there is nothing to do.
+
+        Whatever the window manager wrapped around the window is what sits in
+        the root's stack, so that is what has to be moved -- moving the client
+        inside its own frame is what left it 29px short.
+        """
+        if not sys.platform.startswith("linux"):
+            return
+        try:
+            info = sdl2.SDL_SysWMinfo()
+            sdl2.SDL_VERSION(info.version)
+            if not sdl2.SDL_GetWindowWMInfo(win, _ctypes.byref(info)):
+                return
+            lib, dpy = _libx11(), info.info.x11.display
+            handle = info.info.x11.window
+            if not lib or not dpy or not handle:
+                return
+            lib.XMoveResizeWindow(dpy, x11_toplevel_of(lib, dpy, handle),
+                                  int(mx), int(my), int(mw), int(mh))
+            lib.XSync(dpy, False)
+            where = x11_window_origin(lib, dpy,
+                                      x11_toplevel_of(lib, dpy, handle))
+            if where is not None and where != (int(mx), int(my)):
+                # Not fatal: the visual is up and on the right screen, just
+                # not flush to its corner. Worth a line, because the symptom
+                # is a black strip nobody would connect to a window manager.
+                print(f"[dual] visual 2 sits at {where}, not "
+                      f"({mx}, {my}) -- the window manager moved it back",
+                      flush=True)
+        except Exception as why:
+            print(f"[dual] could not place the second window: {why}",
+                  flush=True)
+
+    def _drop_window2(self):
+        """Close visual 2's window if it has one. Render thread."""
+        if self._window2 is not None:
+            sdl2.SDL_DestroyWindow(self._window2)
+            self._window2 = None
+            sdl2.SDL_GL_MakeCurrent(self._window, self._context)
+        self._window2_display = -1
+
+    def _do_fullscreen_on(self, display: int):
+        """Fullscreen on a named monitor. Render thread.
+
+        Not the fullscreen toggle: naming a monitor is an instruction to go
+        there, and a toggle would send every second pick back to a window.
+        """
+        display = int(display)
+        self._cfg["fullscreen_display"] = display
+        if display < 0:
+            return
+        if self._window2_display == display:
+            # Visual 2 was sent here first. One of them has to move, and the
+            # one just asked for wins.
+            self._drop_window2()
+            self._cfg["visual2_display"] = -1
+        if not self._fullscreen:
+            self._toggle_fullscreen()       # reads fullscreen_display itself
+            return
+        # Already fullscreen somewhere else. Leaving and re-entering is the
+        # only way SDL moves a fullscreen-desktop window between monitors.
+        sdl2.SDL_SetWindowFullscreen(self._window, 0)
+        self._move_to_chosen_display()
+        sdl2.SDL_SetWindowFullscreen(self._window,
+                                     sdl2.SDL_WINDOW_FULLSCREEN_DESKTOP)
+        self._overhang_display()
 
     def _toggle_fullscreen(self):
         flags = sdl2.SDL_GetWindowFlags(self._window)

@@ -41,6 +41,13 @@ class MenuHost:
     def can_dual(self):       return True
     def dual_on(self):        return False
     def focus(self):          return 0
+    def visual_on(self, which):   return not which
+    def crossfade(self):      return 0.5
+    def second_window_display(self): return -1
+    def request_visual(self, which, on): pass
+    def request_crossfade(self, x):      pass
+    def request_second_window(self, d):  pass
+    def request_fullscreen_on(self, d):  pass
     def list_displays(self):
         return [(0, "DP-1", 0, 0, 1920, 1080), (1, "HDMI-1", 1920, 0, 1920, 1080)]
     def collections(self):    return {"Chill": ["p001"]}
@@ -86,15 +93,26 @@ def check(name, fn):
 
 
 # --- every key gates exactly its own entry --------------------------------
+#: How many rows an entry draws, where it is not the usual one. Written out
+#: rather than inferred, because the count is the point: a group that grows
+#: or loses a row without this being updated is a row that quietly stopped
+#: being hideable, which is exactly what the test below is for.
+#:
+#: "dual" draws four -- a switch each for the two visuals, the crossfader,
+#: and the "Send visual to" submenu.
+MENU_ROWS = {"dual": 4}
+
+
 def every_key_in_the_table_switches_a_real_entry_off():
     """A key that matches nothing in _build is a tick box that does nothing,
     and the dialog gives no hint which one it was."""
     full = rows(build())
     for key, label, _action in v.MENU_ENTRIES:
+        want = MENU_ROWS.get(key, 1)
         got = rows(build([key]))
-        assert len(got) == len(full) - 1, (
+        assert len(got) == len(full) - want, (
             f"hiding {key!r} ({label}) changed the menu by "
-            f"{len(full) - len(got)} entries, not 1: "
+            f"{len(full) - len(got)} entries, not {want}: "
             f"{sorted(set(full) - set(got))}")
 
 
