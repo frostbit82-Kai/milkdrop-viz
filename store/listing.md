@@ -324,6 +324,17 @@ Shoot these in order — they tell the story in the order the description does:
    mistaken for the free one. The Windows half already exists on the site as
    `bomsai-software/src/assets/apps/milkdrop-visualizer/win-dual.webp`; shoot a
    fresh one at Store resolution rather than upscaling that.
+
+   Since 2.1.7 this shot is better with the **right-click menu open over it**,
+   far enough to the side to leave the blend readable: the two switches and
+   the crossfader between them are what make the feature legible in a still.
+   A blend on its own looks like one busy preset, which is the thing a buyer
+   cannot tell apart from the free player.
+
+   **Giving each visual its own monitor does not get a slot**, and should not
+   go looking for one. It needs two screens in a single frame, which is a
+   photograph of a desk rather than a screenshot, and the Store wants
+   screenshots. It stays in the description, where it reads fine.
 3. The browser sorted by rating — the top of the list, all high scores, with
    thumbnails filled in. The clearest single picture of what this app is for.
 4. **The Code tab** open on a preset with a real shader, syntax-coloured, with
