@@ -2276,6 +2276,40 @@ rows at it, which is the same thing you meant either way.
 - the fader written to disk 0.6 s after the last key and not during a run of
   them.
 
-**No Linux package built for 2.1.7.** 2.1.6 was a Windows-only release and
-the newest Linux tarball in `installer/dist/` is 2.1.5; both platforms want a
-build off this commit.
+**Linux 2.1.7 built and verified — 2026-09-15.**
+`BomsAIVisualizer-2.1.7-linux-x86_64.tar.gz`, 86 MB, sha256
+`90a457b3710fda5e7f89f5e03acd16740114e3a8a43da3d013251b3593a20316`, built
+from `4d927e8` with `PROJECTM_SRC=/home/fr0st/projectm` at the pin
+`397f15eb`. **glibc floor 2.34**, unchanged.
+
+It has to be the container build. This box is now on **glibc 2.43**, so a
+bare `build_linux.sh` would stamp 2.43 as the floor and the package would
+start on almost nothing but the machine that made it. `build_linux_docker.sh`
+is what produces a shippable one.
+
+Contents proved by inflating the **688 zlib streams out of the executable**
+(13.8 MB) — the app's own modules live in the PKG appended to the exe, not in
+`_internal`, so a byte search of the unpacked directory finds nothing.
+Present: `dual_crossfade`, `_do_set_window2`, `_place_second_window`,
+`_draw_second_window`, `toggle_visual1`, `crossfade_back`, `visual1_enabled`,
+`FADE_SETTLE_S`. Absent, and checked for on purpose because this release
+removed them: `_dual_opacity` and "Second visual strength". Names that should
+be gone are worth asserting as well as names that should be there — a stale
+build passes the first half of that test.
+
+Container check, stock `ubuntu:24.04`, both halves of the recipe this file
+recorded at 2.1.5:
+- `--help` with `libgl1 libglib2.0-0t64 libegl1` → usage, the
+  `sounddevice unavailable` line, **exit 0**;
+- a plain start with `libxcb-cursor0 libxkbcommon-x11-0` on top and the host
+  X socket (`--net=host -e DISPLAY=:0 -v /tmp/.X11-unix:/tmp/.X11-unix:ro`)
+  → still alive when `timeout` killed it at 20 s, **exit 124**.
+
+**No Windows package at 2.1.7 yet** — the newest is the 2.1.6 setup.exe. That
+build is Adam's; everything it needs is on the drive and nothing under
+`installer/` changed this release except the EULA's version line, so it is a
+plain rerun of `build_windows.ps1`.
+
+**552 MB deleted** with it, all gitignored and therefore final: the superseded
+2.1.5 tarball (86 MB) and its extracted tree (224 MB), and `installer/build/`
+(242 MB).
