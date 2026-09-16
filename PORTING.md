@@ -2589,3 +2589,94 @@ artifact. The code is identical and the probe says so, but the sentence "the
 shipped build was seen drawing" is not one this entry gets to make.
 
 The installer is the verified one from 2.1.6 and nothing here touches it.
+
+### The desktop wallpaper took the screen, and then learned which one — 2.1.10, 2026-09-16
+
+Reported against the installed 2.1.9: *"Desktop wallpaper now works, with one
+minor thing…it starts out fullscreen at first, but when I click or right-click
+anywhere, it snaps behind icons and widgets, displaying correctly."* Which
+sounds like a stacking bug, and is not one. Structurally the window was
+perfect the whole time: parented into Explorer's WorkerW, which is Progman's
+child below `SHELLDLL_DefView`, at 0,0 1920x1080 — measured on the live
+process every round. What fails is **composition**, not stacking.
+
+The rectangle is exactly the monitor's and the window is the foreground one at
+the moment it is parented, because the user clicked the menu entry to get
+there. That is DWM's fullscreen optimisation, the same trap `_FS_OVERHANG` was
+written for in fullscreen mode a week ago, reached from a completely different
+direction: the display is handed to the window and nothing else composites at
+all — desktop icons, taskbar, Rainmeter widgets and every other application's
+window, all gone.
+
+**The instrument is the finding.** `Graphics.CopyFromScreen` is already
+written up as a liar here, and it lied convincingly four times in a row: it
+showed the visuals frozen in the *old* window rectangle with the icons drawn
+over them, and each of four plausible fixes — clearing the `WS_POPUP` that
+`SDL_SetWindowBordered` puts back, handing the foreground to Progman, hiding
+and re-showing the window, forcing a real resize — appeared to change it.
+`ffmpeg -f lavfi -i "ddagrab=0:framerate=1" -vf hwdownload,format=bgra` reads
+the Desktop Duplication API, which is the composed output rather than the
+desktop DC, and it reproduced the user's screen exactly and scored every fix
+honestly: all four did nothing. Two pixels past every edge fixed it, and
+putting the exact rectangle back broke it again — A/B/A/B.
+
+So `_wallpaper_box` grew an `overhang` argument rather than a platform test,
+and the pure `wallpaper_box(displays, want, overhang)` behind it is what the
+suite can reach. **X11 must not have the overhang**: two pixels off the screen
+there is a window manager clamping the window back and `_hold_wallpaper_box`
+correcting it for the life of the process, so the Windows way in asks for it
+and the hold does not — which is pinned structurally, because nothing
+offscreen can see a compositor.
+
+#### Then the monitor of your choice
+
+`wallpaper_display`, and not `fullscreen_display` as the box read before:
+which screen the wallpaper covers and which screen fullscreen goes to are two
+questions, and answering the second used to move the first. Default -1, the
+whole desktop, which is what it did before.
+
+**Set as desktop wallpaper** is a submenu on more than one monitor — whole
+desktop, then a row per screen, with the current one ticked — and a single
+click on one. Picking a monitor is an instruction to *be* the wallpaper there:
+it turns the mode on when it is off, and moves it when it is already up, which
+is what makes the same list useful from the tray menu, where leaving the mode
+stays the first entry. A monitor that has been unplugged since it was chosen
+falls back to the whole desktop rather than to nothing.
+
+Driven on the real app through the `_refresh_displays` wrapper, which is still
+the only way to have a second monitor on this box: the visuals confined to the
+pretend screen's rectangle and behind the icons, moved to the whole desktop
+and back with the toast naming where they went, and the submenu itself
+photographed — `✔ Whole desktop / 1. Panasonic-TV 1920×1080 / 2. Pretend
+monitor 800×450`. Seven mutations of the new work are each caught, scored on
+the exit code.
+
+**2.1.10**: 2.1.9 is installed on the reporter's machine and this is a
+visible fix plus a feature in `viz_common.py`. Linux wants this one too — the
+overhang is Windows-only and gated on the caller, but the monitor choice is
+not.
+
+#### The verified 2.1.10 Windows package
+
+**`BomsAIVisualizer-2.1.10-win64-setup.exe`**, 78.4 MB (82,239,343 bytes),
+sha256 `2230c9da80ded10522c92d7388d1ac24e504921a3010a2d1cc8f63a44f928085`.
+Built from the settled tree with 2.1.9 deleted first; `VERSION` inside reads
+2.1.10 and the bundled EULA agrees.
+
+691 zlib streams inflated, carrying `wallpaper_box`, `_add_wallpaper_monitors`,
+`_wallpaper_on_display`, `wallpaper_display`, `_req_wp_display` and
+`request_wallpaper_on`. Three control names that appear nowhere in this repo
+at all — grepped first, which is the lesson from last time — are absent, so
+the scan is matching the work and not noise.
+
+**And this time the shipped build was seen doing it.** The frozen package, run
+on an isolated profile seeded with the reporter's own config: `d`, and one
+second later the Desktop Duplication capture has the visuals as the wallpaper
+with the desktop icons, RocketDock, the Rainmeter widgets, the taskbar and
+another application's window all composited over them — no click needed. Then
+thirty seconds of silence in a quiet room: the idle pause parks it on a
+full-size frame with everything still over the top, so 2.1.9's parked-frame
+fix survives the overhang. Pressing `d` again brought the window back and left
+Explorer's WorkerW exactly as it was found.
+
+The installer is the verified one from 2.1.6 and nothing here touches it.
