@@ -16,6 +16,9 @@ import sys
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
+import ast                                            # noqa: E402
+import inspect                                        # noqa: E402
+import textwrap                                       # noqa: E402
 import viz_common as v                                # noqa: E402
 
 
@@ -55,6 +58,59 @@ def zero_seconds_disables_the_silence_rule_only():
     """The spin box's "Never on silence" row. A full-screen app still pauses."""
     assert not v.should_idle("always", False, 99999, 0, False)
     assert v.should_idle("always", False, 0, 0, True)
+
+
+# ── whose full-screen window is it? ───────────────────────────────────────
+#
+# The pause used to ask SHQueryUserNotificationState, which answers "is this
+# machine busy" -- and in wallpaper mode the thing making it busy is us. The
+# visualiser covering the desktop reads back as RUNNING_D3D_FULL_SCREEN, so
+# the check went true within one poll of the mode starting and the visuals
+# parked on their first frame and never came back, whatever was playing.
+# Reported 16 Sep 2026 as "displays a static box, can't interact any further".
+#
+# Whole screen, full monitor rectangle, so every case below is measured
+# against the same monitor.
+_MON = (0, 0, 1920, 1080)
+
+
+def our_own_wallpaper_is_not_another_app():
+    """The bug, named. In wallpaper mode this app is always covering the
+    screen, so anything that cannot tell whose window it is will answer yes
+    for ever and park the visuals it was meant to protect."""
+    assert not v.foreign_fullscreen(True, "SDL_app", _MON, _MON)
+
+
+def the_desktop_is_not_an_app_either():
+    """Progman and WorkerW are the size of the screen by definition, and in
+    wallpaper mode one of them is usually what has focus."""
+    for cls in ("Progman", "WorkerW", "Shell_TrayWnd", "#32769"):
+        assert not v.foreign_fullscreen(False, cls, _MON, _MON), cls
+
+
+def a_game_filling_the_screen_counts():
+    assert v.foreign_fullscreen(False, "UnrealWindow", _MON, _MON)
+
+
+def a_game_overhanging_the_edges_counts():
+    """The app's own fullscreen sits two pixels past every edge to keep DWM
+    compositing the menu over it; somebody else's may do the same."""
+    assert v.foreign_fullscreen(False, "UnrealWindow", (-2, -2, 1922, 1082),
+                                _MON)
+
+
+def a_maximised_window_does_not():
+    """The taskbar is still showing, so the monitor is not covered. Pausing
+    for this would pause for a maximised browser, which is most of the time."""
+    assert not v.foreign_fullscreen(False, "Chrome_WidgetWin_1",
+                                    (0, 0, 1920, 1032), _MON)
+
+
+def an_unanswerable_question_is_a_no():
+    """A wrong no costs some GPU behind a game; a wrong yes freezes the
+    wallpaper, which is the failure this function already caused once."""
+    assert not v.foreign_fullscreen(False, "Whatever", None, _MON)
+    assert not v.foreign_fullscreen(False, "Whatever", _MON, None)
 
 
 def off_windows_nothing_is_ever_fullscreen():
@@ -111,9 +167,32 @@ def silence_pauses_and_sound_resumes():
         v._time.monotonic = lambda: 1000.0
         loop.idle()                       # seeds _last_sound
         v._time.monotonic = lambda: 1025.0
+        # The pass that goes idle still draws -- see the check below -- and
+        # the one after it is the first that parks.
+        assert loop.idle() is False
         assert loop.idle() is True
         loop._last_sound = 1025.0         # the render loop's own update
         assert loop.idle() is False
+    finally:
+        v._time.monotonic = real
+
+
+def the_frame_that_goes_idle_is_still_drawn():
+    """The window keeps the last frame it drew, and as a wallpaper that frame
+    is all anyone sees -- on Windows it is a layered child of WorkerW, which
+    DWM only recomposites when it swaps. Parking on the same pass that enters
+    idle leaves whatever was on the buffer, and entering wallpaper mode
+    resizes the window, so what stayed on the desktop was the frame from the
+    OLD size sitting in a corner. Reported 16 Sep 2026 as "a static box"."""
+    loop = FakeLoop()
+    real = v._time.monotonic
+    try:
+        v._time.monotonic = lambda: 1000.0
+        loop.idle()
+        v._time.monotonic = lambda: 1025.0
+        assert loop.idle() is False, "parked without drawing the frame first"
+        assert loop._idle is True, "but it did not go idle"
+        assert loop.idle() is True, "and the next pass has to park"
     finally:
         v._time.monotonic = real
 
@@ -128,6 +207,7 @@ def a_pause_does_not_burn_through_the_preset():
         loop.idle()
         loop._preset_start = 995.0
         v._time.monotonic = lambda: 1025.0
+        assert loop.idle() is False       # one more frame, then
         assert loop.idle() is True        # paused at t=1025
         v._time.monotonic = lambda: 1325.0
         loop._last_sound = 1325.0
@@ -175,9 +255,27 @@ def a_fullscreen_app_pauses_the_loop():
         v.fullscreen_app_running = lambda: True
         loop = FakeLoop()
         v._time.monotonic = lambda: 1000.0
+        assert loop.idle() is False       # the frame that goes idle is drawn
         assert loop.idle() is True
     finally:
         v.fullscreen_app_running, v._time.monotonic = real_fn, real_time
+
+
+def turning_the_wallpaper_on_restarts_the_silence_clock():
+    """Structural, because `_set_wallpaper_mode` needs a window and a desktop
+    to run: what is pinned is that it assigns `_last_sound`.
+
+    Without it the clock is inherited from whenever something last played,
+    which on a quiet machine is never -- so the pause is already overdue the
+    moment the mode starts and the visuals park on their first frame. The
+    feature then looks broken by the act of asking for it."""
+    src = textwrap.dedent(inspect.getsource(v.Renderer._set_wallpaper_mode))
+    reset = [n for n in ast.walk(ast.parse(src))
+             if isinstance(n, ast.Assign)
+             and any(isinstance(t, ast.Attribute) and t.attr == "_last_sound"
+                     for t in n.targets)]
+    assert reset, \
+        "_set_wallpaper_mode no longer restarts the silence clock"
 
 
 # ── where the check sits in the loop ──────────────────────────────────────

@@ -7679,34 +7679,111 @@ class _Blender:
 
 # ─── idle pause ───────────────────────────────────────────────────────────────
 
-#: SHQueryUserNotificationState answers. Only two of them mean "somebody is
-#: using this screen for something else", and those are the two worth pausing
-#: for: a full-screen Direct3D application (a game) and a full-screen window
-#: with presentation mode on.
-_QUNS_BUSY, _QUNS_RUNNING_D3D_FULL_SCREEN, _QUNS_PRESENTATION_MODE = 1, 2, 3
+#: Window classes that are the desktop itself rather than an application.
+#: Every one of them is the size of the screen by definition, so a check for
+#: "something is covering the monitor" has to let them through.
+_SHELL_CLASSES = frozenset((
+    "Progman", "WorkerW", "Shell_TrayWnd", "Shell_SecondaryTrayWnd", "#32769",
+))
+
+
+class _WRECT(ctypes.Structure):
+    """Win32 RECT. Module level, not inside the function that uses it: this is
+    asked every couple of seconds for the life of a wallpaper, and a Structure
+    defined per call is a new *type* per call -- `ctypes.POINTER` caches one
+    entry per type, so it would grow for as long as the app ran."""
+    _fields_ = [("left", ctypes.c_long), ("top", ctypes.c_long),
+                ("right", ctypes.c_long), ("bottom", ctypes.c_long)]
+
+
+class _MONITORINFO(ctypes.Structure):
+    _fields_ = [("cbSize", ctypes.c_ulong), ("rcMonitor", _WRECT),
+                ("rcWork", _WRECT), ("dwFlags", ctypes.c_ulong)]
+
+
+def foreign_fullscreen(same_process: bool, cls: str, win, mon) -> bool:
+    """Does the window in front mean another application has the screen?
+
+    Split out as a plain function for the same reason `should_idle` is: it is
+    a policy question, and the loop it serves needs a display to run.
+
+    `win` and `mon` are (left, top, right, bottom); either may be None when
+    the question could not be answered, which counts as "no".
+    """
+    if same_process or cls in _SHELL_CLASSES or not win or not mon:
+        return False
+    return (win[0] <= mon[0] and win[1] <= mon[1]
+            and win[2] >= mon[2] and win[3] >= mon[3])
 
 
 def fullscreen_app_running() -> bool:
-    """Is something else running full-screen right now? Windows only.
+    """Is another application running full-screen in front? Windows only.
 
-    Nothing equivalent exists on Linux: a full-screen window there is an
+    Asked only while the visualiser is the desktop wallpaper, to stop it
+    keeping a GPU busy behind a game.
+
+    **Not `SHQueryUserNotificationState`, which is what this used to call**,
+    and the reason is the whole bug: that API answers "is this machine busy",
+    and in wallpaper mode the thing making it busy is *us*. A full-screen
+    OpenGL window covering the display reads back as
+    `QUNS_RUNNING_D3D_FULL_SCREEN`, so the check went true within one poll of
+    the mode starting, `should_idle` returns True for a full-screen app
+    whatever the silence is, and the visuals parked on their first frame and
+    never came back however much music played. Reported 16 Sep 2026 as
+    "displays a static box, can't interact any further". Measured: state 3
+    with the wallpaper up, state 5 (ACCEPTS_NOTIFICATIONS) with the app shut.
+    The constants were also off by one -- the real BUSY is 2, not 1 -- so it
+    was reading NOT_PRESENT as busy and missing PRESENTATION_MODE entirely,
+    which is how it survived a reading.
+
+    The foreground window cannot be ours here: a wallpaper is a child of
+    WorkerW and never takes focus. So ask what is actually in front, whether
+    it belongs to somebody else, and whether it covers the monitor it is on.
+
+    Nothing equivalent exists on Linux -- a full-screen window there is an
     ordinary window with a hint set, and asking every window about it from
-    another process is neither cheap nor reliable. So the answer off Windows
-    is False, and the silence timer is what pauses instead.
+    another process is neither cheap nor reliable -- so the answer off Windows
+    is False and the silence timer is the whole mechanism.
     """
     if sys.platform != "win32":
         return False
     try:
-        state = ctypes.c_int(0)
-        # S_OK is 0. Any failure leaves state at 0, which is not one of the
-        # busy values, so a broken call reads as "not busy" rather than
-        # freezing the visuals.
-        if ctypes.WinDLL("shell32").SHQueryUserNotificationState(
-                ctypes.byref(state)) != 0:
+        P = ctypes.c_void_p
+        u = ctypes.WinDLL("user32", use_last_error=True)
+        u.GetForegroundWindow.restype = P
+        u.MonitorFromWindow.restype, u.MonitorFromWindow.argtypes = \
+            P, (P, ctypes.c_ulong)
+        u.GetWindowRect.argtypes = (P, ctypes.POINTER(_WRECT))
+        u.GetMonitorInfoW.argtypes = (P, ctypes.POINTER(_MONITORINFO))
+        u.GetClassNameW.argtypes = (P, ctypes.c_wchar_p, ctypes.c_int)
+        u.GetWindowThreadProcessId.argtypes = (P, ctypes.POINTER(ctypes.c_ulong))
+
+        fg = u.GetForegroundWindow()
+        if not fg:
             return False
-        return state.value in (_QUNS_BUSY, _QUNS_RUNNING_D3D_FULL_SCREEN,
-                               _QUNS_PRESENTATION_MODE)
+        pid = ctypes.c_ulong(0)
+        u.GetWindowThreadProcessId(fg, ctypes.byref(pid))
+        name = ctypes.create_unicode_buffer(256)
+        u.GetClassNameW(fg, name, 256)
+
+        wr = _WRECT()
+        win = ((wr.left, wr.top, wr.right, wr.bottom)
+               if u.GetWindowRect(fg, ctypes.byref(wr)) else None)
+        mi = _MONITORINFO()
+        mi.cbSize = ctypes.sizeof(_MONITORINFO)
+        # MONITOR_DEFAULTTONEAREST: a window off the side of every monitor
+        # still belongs to one for this purpose.
+        hmon = u.MonitorFromWindow(fg, 2)
+        mon = None
+        if hmon and u.GetMonitorInfoW(hmon, ctypes.byref(mi)):
+            mon = (mi.rcMonitor.left, mi.rcMonitor.top,
+                   mi.rcMonitor.right, mi.rcMonitor.bottom)
+        return foreign_fullscreen(pid.value == os.getpid(), name.value,
+                                  win, mon)
     except Exception:
+        # Anything unanswerable reads as "not busy": a wrong False costs some
+        # GPU behind a game, and a wrong True freezes the wallpaper, which is
+        # the failure this function just caused.
         return False
 
 
@@ -9871,6 +9948,15 @@ class Renderer:
         if not ok:
             self._bridge.show_toast.emit(why)
             return
+        # Switching this on counts as activity, so the idle pause gets its
+        # whole silence window from here rather than from whenever the last
+        # sound was. Without it the pause is already overdue the moment the
+        # mode starts -- nothing has played since launch on a machine that is
+        # simply quiet -- so the visuals park on the first frame and the
+        # feature looks broken the instant it is asked for. Reported that way
+        # on 16 Sep 2026: "displays a static box, can't interact any further".
+        if on:
+            self._last_sound = _time.monotonic()
         # ponytail: dropped on the way in, never restored on the way out. Both
         # platforms wipe what carries it -- X11 rewrites _NET_WM_STATE whole,
         # Windows puts back a saved exstyle -- so a window that came back still
@@ -10318,6 +10404,18 @@ class Renderer:
         if idle and not self._idle:
             self._idle, self._idle_since = True, now
             print("[idle] paused", flush=True)
+            # Draw this one, then park. The window keeps the last frame it
+            # drew, and as a wallpaper that frame is all anyone sees -- on
+            # Windows the visualiser is a layered child of WorkerW, which DWM
+            # only recomposites when it swaps, so whatever is on the buffer
+            # when the loop stops is what stays on the desktop for as long as
+            # the room is quiet. Entering wallpaper mode resizes the window,
+            # so parking on the same pass left the frame from the OLD size
+            # and position sitting in a corner of the desktop: reported on
+            # 16 Sep 2026 as "a static box", and it is the strongest possible
+            # signal that the app has died when it has not. One more frame
+            # costs one frame and the parked picture is then the right one.
+            return False
         elif not idle and self._idle:
             self._idle = False
             # Give the current preset back the time it did not get to play.
