@@ -192,12 +192,21 @@ only like borderless is. Parking as the desktop drops it first: X11 rewrites
 `_NET_WM_STATE` wholesale and Windows restores a saved exstyle, so nothing
 carries it back out and a window that still claimed to be on top would be lying.
 
-### C2. Span multiple monitors
-The display picker chooses *one* display. Spanning is new: size the window to the
-union of the chosen displays, and skip SDL's fullscreen, which is per-display by
-definition. Same class of problem as the wallpaper work — the window manager gets
-a vote. Expect it to be a bigger job than it sounds on X11, and check Windows
-first where it is nearly free.
+### C2. Span multiple monitors — **answered a different way in 2.1.7**
+The original idea was one visual stretched across the union of two displays.
+What shipped instead is **a visual on each**: "Send visual to" gives visual 2
+a borderless SDL window of its own on a chosen monitor, one GL context serving
+both windows. That is the thing people with two screens actually asked for,
+and it sidesteps the part of this entry that predicted trouble — there is no
+union rectangle to compute and no fight with SDL's per-display fullscreen.
+
+Spanning *one* visual across two screens is still not built, and is still the
+harder job for the reason given here: the window manager gets a vote. Nobody
+has asked for it. Leave it until somebody does.
+
+Two window-manager traps were paid for on the way and are in CLAUDE.md: a
+reparenting WM ignores `SDL_CreateWindow`'s position for a borderless window,
+and SDL drops the obvious correction because it matches its own cache.
 
 ---
 

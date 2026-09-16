@@ -73,13 +73,22 @@ does, projectM's own Steam listing included.
 > through, which are the ones you were going to look for again. See a better
 > frame later and one key retakes the picture from what is in front of you.
 >
-> **Run two at once.** One key puts a second preset on screen, screened into
-> the first. Both are reacting to the same music and both keep advancing on
-> their own, so what you are watching is a combination that has never existed
-> before and will not come round again. Tab swaps which of the two everything
-> else is adjusting — rate one, lock one, edit one, while the other carries on.
-> How strongly the second one shows through is a setting, and so is how hard it
-> is made to work.
+> **Run two at once, and fade between them.** Switch on a second preset and it
+> is screened into the first. Both react to the same music and both keep
+> advancing on their own, so what you are watching is a combination that has
+> never existed before and will not come round again. A crossfader runs from
+> one to the other — all the way left is the first preset alone, all the way
+> right is the second, anywhere between is a mix you set while you watch it,
+> with two keys to nudge it a step at a time. Tab swaps which of the two
+> everything else is adjusting — rate one, lock one, edit one, while the other
+> carries on. Each has its own quality setting, because the pair costs about
+> twice one of them to draw.
+>
+> **Or give each one its own screen.** With more than one monitor, send the
+> second preset to a monitor of its own and the two stop sharing a window: one
+> visual on each screen, both reacting to the same music, both still yours to
+> rate and edit. Send them both to the same screen and you are back to the
+> pair, blended.
 >
 > **Open the preset's own code.** Presets are text, and this shows you the
 > text: the whole preset, syntax-coloured, with find and replace. Put the cursor
@@ -179,7 +188,7 @@ does, projectM's own Steam listing included.
 > put them, and reads them from a folder you choose. You get the same library
 > either way — it just arrives with the credit pointing in the right direction.
 
-*(8045 characters.)*
+*(8604 characters.)*
 
 ## Feature bullets  (Microsoft Store — up to 20, 200 char each)
 
@@ -190,11 +199,11 @@ does, projectM's own Steam listing included.
 5. Delete every 0-rated preset in one action and never see them again
 6. Name a collection — "chill", "party" — and play only what is in it
 7. Thumbnails build themselves from the presets you watch — no batch render
-8. Run two presets at once, screened into each other, both reacting to the music
-9. Open any preset's own code and edit it — with a slider built for any number in it
-10. Mash two presets together: one's shader, the other's motion, in a click
-11. Ten sliders change the visual while you watch — zoom, rotation, trails, brightness
-12. Save a preset you have changed under a new name, as its own preset
+8. Run two presets at once and crossfade between them, live, on a slider
+9. Send each preset to its own monitor — one visual per screen
+10. Open any preset's own code and edit it — with a slider built for any number in it
+11. Mash two presets together: one's shader, the other's motion, in a click
+12. Ten sliders change the visual while you watch — zoom, rotation, trails, brightness
 13. Full MilkDrop 2 texture support — and textures that move: GIF, WebP, video
 14. Lay your own picture over the visuals — spinning, drifting, or on the beat
 15. Or burn a moving picture into the preset, where its own warp takes hold of it
@@ -204,8 +213,11 @@ does, projectM's own Steam listing included.
 19. Visualises system audio: Spotify, YouTube, a game, a browser tab — nothing to route
 20. No account, no sign-in, no telemetry — works fully offline, forever
 
-What came out to make room: picking which monitor fullscreen uses, and the
-zip backup. Both are still in the description; neither is why anyone buys.
+What came out to make room: picking which monitor fullscreen uses, the zip
+backup, and — at 2.1.7, for the new second-screen line — saving an edited
+preset under a new name. All three are still in the description; none of them
+is why anyone buys, and the edit-and-save one is already implied by the two
+bullets above it.
 
 ## Search terms  (7 max)
 
@@ -253,18 +265,23 @@ no ads, no in-app purchases, no gambling.
 
 ## What version this listing is for
 
-**2.1.5.** Anywhere the copy ends up naming a number, that is the number. The
+**2.1.7.** Anywhere the copy ends up naming a number, that is the number. The
 EULA says so, and both build scripts refuse to run if it does not.
 
-2.1.5 rather than shipping 2.1.4 because a polish pass on 2026-09-15 found
-something a buyer could be stopped by: **the Settings dialog could not be made
-shorter than about 860px**, which is taller than a 1366×768 laptop screen — the
-smallest size the Store itself accepts a screenshot at — so OK and Cancel were
-off the bottom, with the preset folder a new install has to set inside the
-dialog they could not finish. Two smaller things went in with it: preset names
-in the browser list stepped 96px left and right depending on whether that
-preset had a thumbnail yet, and a recording that lost its sound mid-clip said
-nothing about it.
+2.1.7 is a feature release on top of two fix releases, so the copy above moved
+with it. The second visual is no longer a thing you switch on top of the first:
+there are two switches, a **crossfader** between them, and — with more than one
+monitor — the option of giving each visual a screen of its own. Two lines in
+the description and two feature bullets are new because of it, and "Second
+visual strength" and "Second visual quality" have gone from Settings, so any
+screenshot of that dialog taken before 2026-09-15 is stale.
+
+Behind it: 2.1.5 fixed a Settings dialog that could not be made shorter than
+about 860px — taller than a 1366×768 laptop screen, the smallest the Store
+itself accepts a screenshot at — along with preset names stepping 96px left and
+right in the browser and a recording that lost its sound saying nothing. 2.1.6
+widened two dialogs and cleared files an old installer had left behind. Neither
+changed what the copy claims.
 
 Everything above was 1.x copy until 2026-09-15 and is now current. What went
 in, and why each one was worth the words:

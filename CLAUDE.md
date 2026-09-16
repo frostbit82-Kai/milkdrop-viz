@@ -161,6 +161,14 @@ that make the results lies:
   before the first mutation -- both are in `scratchpad/mutate.py`. This
   happened on 14 Sep 2026 and voided fourteen results before the rig's own
   "0 matches" line gave it away.
+- **Check what the harness counts as a failure before trusting a green run.**
+  15 Sep 2026: a mutation rig scored each run with `grep -c "^  FAIL"` and
+  reported **every** mutation caught by nothing — because `check()` in
+  `test_dual.py` does not catch `AssertionError`, it lets it out, so a failing
+  suite dies with a traceback and prints no `FAIL` line at all. Five fixes
+  read as untested and were not. Score on the **exit code**, which is the one
+  signal every suite here agrees on, and sanity-check the harness by mutating
+  something you are certain is covered before believing a zero.
 - **A mutation that yields a `SyntaxError`** fails every suite and proves
   nothing. So does one whose original text does not appear exactly once:
   report that as SKIPPED rather than silently doing nothing.
@@ -180,6 +188,14 @@ There is no display in an agent shell and SDL needs one, so:
   expression instead of a copy that can drift from it.
 - Anything touching the GL loop or live audio has to be run by hand. Say so rather
   than claiming it passed.
+- **The one shader in the application cannot be compiled by any suite**, so a
+  broken blend would ship looking fine — there is no GL context offscreen.
+  What *is* checkable without one is the arithmetic: pull the weight each
+  visual is multiplied by straight out of `_BLEND_FRAG` with a regex and
+  evaluate it as Python at both ends of the fader
+  (`test_dual.the_shader_reaches_both_ends_of_the_fader`). That catches the
+  shape the shader had until 2.1.7, which scaled only the second visual and
+  therefore could reach "visual 1" and "both" but never "visual 2 alone".
 - **The UI can be driven headlessly**: Xvfb plus `xdotool` for clicks and keys,
   and `xwininfo -id <id>` for what is actually on screen. Two things will mislead
   you. `xwininfo -root -children` lists *unmapped* windows, so a window in that
@@ -290,6 +306,38 @@ There is no display in an agent shell and SDL needs one, so:
   of them is visible from the source, and all three were on screen the whole time.
 
 ## Traps already paid for
+
+- **A reparenting window manager ignores where `SDL_CreateWindow` was told to
+  put a borderless window.** 2.1.7's second visual gets an SDL window of its
+  own on another monitor; created at (1100, 0) under xfwm4 it was *mapped at
+  (0, 0)*, on top of the main window — which reads as the second visual having
+  replaced the first rather than joined it. Two corrections, and both are
+  needed: ask SDL again (and move its cache off the target first, because
+  **SDL drops a position request matching what it already believes** — the
+  same trap the wallpaper hold records further down), then go straight to
+  `XMoveResizeWindow` on the **toplevel**, since whatever the window manager
+  wrapped around the window is what the root's stack holds. `x11_align_frame`,
+  which the wallpaper path uses, does *not* transfer here — it is written for
+  a desktop-type window and measuring frame-against-client sent the window to
+  x=29 instead of x=1100. Verify with `xwininfo -id` on the real window, and
+  **do not read a residual offset in a rig as a bug**: under Xephyr the window
+  manager clamps to a screen that genuinely ends at 1100, so it parks the
+  window at 1071 (= 1100 − a title bar) every time. Asking for a position
+  *inside* the screen the WM knows about lands exactly, which is what proves
+  the code rather than the rig.
+
+- **SDL does not see a fake second monitor, so a two-monitor feature cannot be
+  driven that way.** Xephyr `+xinerama` with two `-screen` arguments gives
+  XINERAMA two heads and `xrandr --setmonitor` adds virtual monitors, and
+  `SDL_GetNumVideoDisplays` still answers **1** for both — SDL 2.32's X11
+  backend enumerates real XRandR *outputs*. The menu is gated on
+  `len(displays) < 2`, so "Send visual to" and "Fullscreen display" both
+  vanish and the feature looks unbuilt. What works is wrapping
+  `Renderer._refresh_displays` from outside — a six-line script that imports
+  `viz_common`, appends a second entry to `self._displays`, and `runpy`s
+  `main.py`. Nothing in the app is modified, the real menu and the real SDL
+  window creation run, and the fake monitor is placed inside the rig's real
+  screen so the window manager will not clamp it.
 
 - **A `QFormLayout` set straight on a `QDialog` makes the form's height the
   window's MINIMUM, and a window manager then refuses to shrink it.** Twenty-one

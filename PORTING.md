@@ -2203,3 +2203,79 @@ screensaver keys go to whichever user's hive the elevated installer runs as,
 which on a one-account machine is the right one and on a shared machine is
 not. Not changed here; it is a design decision about who the screensaver
 setting belongs to.
+
+### 2.1.7 — the second visual became a pair, and got its own screen — 2026-09-15
+
+Adam's call, after playing with 2.1.6: the "Second visual" toggle was the
+wrong shape. Visual 2 was a thing you added on top of visual 1, and with a
+fader between them that is no longer what it is — either of the two can be the
+one on screen. Four changes, all in `viz_common.py`, and the Windows build at
+2.1.6 needs a rebuild to match.
+
+**Two switches instead of one toggle.** The right-click menu carries
+`⧉ Visual 1` and `⧉ Visual 2`, both checkable, and whichever is left on its
+own is greyed out — both off is a black window with the menu that would undo
+it drawn over the top. `Renderer.request_visual` refuses it a second time, for
+the key binding that has no checkbox to grey. Visual 1 switching off does
+**not** destroy the primary projectM: that instance owns the playlist, the
+ratings and everything the browser talks to, so it stays and simply is not
+drawn, which is where the whole cost was anyway.
+
+**A crossfader, in the menu.** It is the one control here you want to move
+while watching what it changes, so it is a slider on the menu rather than a
+number behind Settings — same shape as the audio sensitivity row, save timer
+included, because `sliderReleased` does not fire for a click on the groove.
+`[` and `]` move it by 0.05 a press.
+
+The shader had to change to do it. Until 2.1.6 it scaled only the second
+visual — `1-(1-a)(1-b*strength)` — which reaches "visual 1" and "both at once"
+and can never reach "visual 2 alone", so the right-hand half of a crossfader
+would have done nothing. It weights **both** now,
+`1-(1-a(1-x))(1-b·x)`, which is exact at either end and still screens in the
+middle, so two bright presets cannot clip to white. A visual the fader has
+faded out is not rendered at all, which makes parking it at one end cost one
+visual rather than two; the price is that it stops advancing while it is off,
+which is what "off" should look like.
+
+`dual_opacity` became `dual_crossfade`. The old key is still read when the new
+one is missing: the two agree at 0 and in the middle, and the middle is where
+an untouched config sits, so carrying it over beats snapping every upgraded
+config back to 0.5.
+
+**Send visual to.** `visual2_display` names a monitor; visual 2 then gets a
+borderless SDL window of its own on it, showing visual 2 alone, letterboxed
+rather than stretched — the two targets are built at the main window's size,
+and a second monitor of another shape would otherwise pull the picture out of
+shape. One GL context serves both windows (`SDL_GL_MakeCurrent` moves it), so
+there is no sharing to set up and every texture and framebuffer is already
+visible to both. Visual 2's window is drawn and swapped **before** the main
+one, and the context is handed back, because the recorder and the thumbnail
+both read the main window's back buffer. Pointing both visuals at one screen
+is the blended pair said the other way round, and is treated as such.
+
+Two window-manager traps came out of this and are in CLAUDE.md: a reparenting
+WM ignores `SDL_CreateWindow`'s position for a borderless window, and SDL
+drops the obvious correction because it matches its own cache.
+
+**Settings.** "Second visual quality" and "Second visual strength" are gone.
+The strength is the fader; the quality is the ordinary Quality row, read
+against whichever of the two `Visual 1` / `Visual 2` boxes is ticked. One pair
+of boxes doing both jobs — a tick switches that visual on *and* points the
+rows at it, which is the same thing you meant either way.
+
+**Verified in a two-screen Xephyr rig**, driving the real menu:
+- the fader end to end, measured by pixel rather than by eye — mean brightness
+  38 at visual 1 alone, 104 in the middle, 143 at visual 2 alone, and the
+  middle brighter than the average of the ends, which is the screen blend
+  behaving;
+- both windows up at once showing different presets, the second letterboxed
+  into a 140×700 strip with correct bars;
+- the second window placed exactly on its monitor's corner;
+- teardown both ways — back to one window, and unticking Visual 2 while it
+  owns a window;
+- the fader written to disk 0.6 s after the last key and not during a run of
+  them.
+
+**No Linux package built for 2.1.7.** 2.1.6 was a Windows-only release and
+the newest Linux tarball in `installer/dist/` is 2.1.5; both platforms want a
+build off this commit.
