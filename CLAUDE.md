@@ -383,6 +383,40 @@ There is no display in an agent shell and SDL needs one, so:
 
 ## Traps already paid for
 
+- **The Qt binding is PySide6, and a test venv built on PyQt6 fails two suites
+  for reasons that are not the code.** `viz_common` prefers PySide6 and falls
+  back to PyQt6 for Bomsai Player's sake, so a PyQt6 venv imports fine and runs
+  almost everything — then `test_theme` dies on *"no access to protected
+  functions or signals for objects not created from Python"* and
+  `test_thumbnails` on a `QImage.save` unbound-method signature. Both pass on
+  PySide6. Measured 16 Sep 2026: the same tree that read 20/22 under PyQt6
+  reads 26/26 under PySide6. Install from `requirements.txt`, and if a pin will
+  not resolve, fix the pin rather than substituting the binding.
+
+- **`requirements.txt` is pinned for the Python the bundle is built with
+  (3.14), not for the one a host distribution ships.** On Mint 21.3 (Python
+  3.10) `numpy==2.4.6` does not exist — 2.2.6 is the newest 3.10 wheel — and
+  the whole install aborts on that one line, leaving a venv with nothing in it.
+  Pin-for-pin fidelity is not available off the build image; what matters for
+  the suites is the *binding*, so install PySide6 at its pin and let the rest
+  float.
+
+- **A source run keeps its config in the repo directory, so `XDG_CONFIG_HOME`
+  cannot isolate one.** `config._base_dir` returns `Path(__file__).parent`
+  unless `sys.frozen`, and only the frozen build looks at `XDG_CONFIG_HOME`.
+  So running `main.py` reads and *writes* the repo's own `config.json` —
+  gitignored, so nothing shows up in `git status` to warn you. Back it up and
+  put it back, or drive a frozen build instead.
+
+- **Mint's system SDL2 is too old for the pinned PySDL2, and the symptom names
+  the wrong thing.** Jammy ships libSDL2 2.0.20; PySDL2 0.9.17 expects the 2.32
+  series, and `SDL_GetWindowWMInfo` fails the version check, so there is no
+  native handle and wallpaper mode reports *"no X11 window to make the
+  desktop"* — which reads as a wallpaper bug and is a binding mismatch.
+  `viz_common` does `setdefault("PYSDL2_DLL_PATH", "/usr/lib/x86_64-linux-gnu")`
+  on Linux, which wins over the `pysdl2-dll` wheel, so a host with an old SDL2
+  has to set `PYSDL2_DLL_PATH` at the wheel's `dll` directory explicitly.
+
 - **A reparenting window manager ignores where `SDL_CreateWindow` was told to
   put a borderless window.** 2.1.7's second visual gets an SDL window of its
   own on another monitor; created at (1100, 0) under xfwm4 it was *mapped at

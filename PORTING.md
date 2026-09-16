@@ -1196,6 +1196,87 @@ purpose -- more changes are coming before the Windows trip, and the package is
 worth building once at the end of them.
 
 
+### Linux came straight to 2.1.10 — 2026-09-16
+
+Nothing to port. 2.1.8, 2.1.9 and 2.1.10 are all in `viz_common.py`, which is
+one file shared by both machines, so the Linux tree fast-forwarded from 2.1.7
+to `82409a1` and had the features. What Linux owed was the other half of three
+seams that Windows could only prove on Windows, and one of them is a claim the
+Windows entry makes *about* X11 rather than about itself.
+
+**The overhang is absent, as 2.1.10 says it must be.** `_wallpaper_box` grew an
+`overhang` argument gated on the caller, and the Windows way in asks for two
+pixels past every edge while `_hold_wallpaper_box` does not — the note warns
+that asking on X11 would be a window a window manager clamps back and the hold
+corrects for the life of the process. Measured on Muffin: entering wallpaper
+mode puts the window at **0,0 1920x1080 exactly**, held over six seconds, with
+`nemo-desktop` above it in `_NET_CLIENT_LIST_STACKING`. Both overhang call
+sites check out by reading: the unconditional one at the `SetWindowPos` is
+inside the Windows branch, and `_wallpaper_on_display` gates on `sys.platform`.
+
+**The monitor choice works here too**, which is the half 2.1.10 said Linux
+wants. Driven on the live app with a `_refresh_displays` wrapper adding a
+pretend 800x450 screen at x=1920 — the same trick the Windows pass used, for
+the same reason — and with `request_wallpaper_on` called from a timer, so the
+path under test is *moving while already up* and not just the box arithmetic:
+
+    whole desktop   0,0      2720x1080     (the union, both screens)
+    monitor 2       1920,0   800x450       (exactly the pretend rectangle)
+    whole desktop   0,0      2720x1080     (and back)
+
+Worth noting that X11 gets there by a different road than Windows does.
+`_wallpaper_on_display` moves the HWND directly on Windows and leaves X11 to
+`_fit_to_wallpaper`, which is SDL — and SDL drops a request matching its own
+cache. A move to a different monitor is not such a request, so it goes; and
+where it would not, `_hold_wallpaper_box` recomputes the box from the same
+config key every two seconds and converges anyway. Both routes were inside
+three seconds here, so this is an observation and not a defect.
+
+**2.1.9's two portable halves hold.** The `SHQueryUserNotificationState` bug
+cannot happen here — `fullscreen_app_running` returns False off Windows and
+says so — but the silence-clock restart and the still-drawing first pass are
+shared. Entering the mode produced **no `[idle] paused` at all** in its first
+six seconds, and the preset list loaded and advanced. Later, after a genuinely
+quiet stretch, it parked as designed, and the 2.1.2 geometry hold still ran
+underneath it: shoved to `0,-40 1920x1040` **while parked**, back to
+`0,0 1920x1080` within six seconds.
+
+**The 2.1.8 visuals drive clean on X11.** `request_dual`, `request_visual`
+either way round, `request_crossfade` to both ends and back, then dual off —
+every transition logged, no traceback, and after `dual off` exactly one window
+is left at 1920x1080, which is the "stop a switched-off visual showing" fix
+doing its job. The pair-on-another-monitor gap 2.1.8 left open on purpose is
+the same here and stays open: it is a question about what the feature is.
+
+**26 of 26 suites pass — and the last Linux pass reporting 20 of 22 was the
+harness, not the code.** The binding is PySide6; the venv that reported those
+two failures had PyQt6 in it, which `viz_common` falls back to for Bomsai
+Player's sake and which fails `test_theme` and `test_thumbnails` on API
+differences that have nothing to do with this app. Four traps from building
+that venv are in CLAUDE.md: the binding, the pins being for Python 3.14 rather
+than whatever the host ships, a source run keeping its config in the repo
+directory where `XDG_CONFIG_HOME` cannot reach it, and Mint's SDL2 being too
+old for the pinned PySDL2 in a way that reports itself as a wallpaper failure.
+
+#### The verified 2.1.10 Linux package
+
+**`BomsAIVisualizer-2.1.10-linux-x86_64.tar.gz`**, 86 MB (89,945,128 bytes),
+sha256 `a09ff2b9d79d137f757dc6b3a63d0973bca491b530a6a63e036d633d9e974330`.
+`VERSION` inside reads 2.1.10 and the bundled EULA agrees. Highest glibc symbol
+required is **GLIBC_2.34**, unchanged, which is the oldest system it starts on.
+
+**And the shipped build was seen doing it**, which is the standard the Windows
+entries set. Extracted from the tarball and run on an isolated profile — a
+source run cannot be isolated, but a frozen one reads `XDG_CONFIG_HOME`, and
+this one did: the window at **0,0 1920x1080** for six seconds with
+`nemo-desktop` above it, 9,795 presets loaded, and **no `[idle] paused`**. The
+screen capture has the desktop icons, the conky widgets, another application's
+window and the taskbar all composited over the visuals — the same picture the
+Windows 2.1.10 entry got from Desktop Duplication, and here an ordinary root
+grab is enough, because X11 has no fullscreen optimisation to lie about.
+
+The installer script is unchanged and nothing here touches it.
+
 ## Notes
 
 - `SDL_GetWindowWMInfo` is used once, for the embedded-in-BomsAI-Studio case. The
