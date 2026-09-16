@@ -2313,3 +2313,158 @@ plain rerun of `build_windows.ps1`.
 **552 MB deleted** with it, all gitignored and therefore final: the superseded
 2.1.5 tarball (86 MB) and its extracted tree (224 MB), and `installer/build/`
 (242 MB).
+
+### Windows caught up with 2.1.7, and the pair of new switches took it to 2.1.8 — 2026-09-16
+
+Pulled `6a30cb0`. Twenty-six suites pass here unchanged, and the whole of the
+crossfader and the second window were driven on a box with **one monitor**,
+through the same `_refresh_displays` wrapper the Linux entry describes — there
+is no fake-head option at all on Windows, so that wrapper is not a
+convenience here, it is the only way in.
+
+**Why 2.1.8.** Three fixes below are in `viz_common.py`, which both platforms
+ship, and Linux has already built and recorded a 2.1.7 tarball. Same trade as
+2.1.6 a day ago, and the number is still the cheap half of it. Linux needs a
+pull and a rebuild at 2.1.8; nothing to port.
+
+Worth saying out loud, because this is twice running: **the bump is a product
+of the order, not of the code.** Linux builds and records a package, then
+Windows verifies and finds something in shared code, and the number has to
+move. Holding the Linux build until after the Windows pass would put one
+number on both packages and cost nothing but a day.
+
+#### What 2.1.7 does on Windows
+
+Everything Linux built works here, and the one place the code says "Windows
+needs nothing" is right: `SDL_CreateWindow` put visual 2's borderless window
+at exactly the rectangle it was given, so the X11 correction in
+`_place_second_window` is correctly a no-op. One GL context serving two
+windows, `SDL_GL_MakeCurrent` between them every frame, teardown both ways,
+and the keyboard handed back to the main window — all as written.
+
+Measured rather than assumed:
+
+- The fader is exact at both ends. Driven with `]` and `[`, each end showed
+  one preset alone and the other gone, and `dual_crossfade` reached disk.
+- A clip recorded while the visuals were split came back **946x532** — the
+  main window's size, not the second window's — so the back buffer the
+  recorder reads is the one the code says it is.
+- Both windows render different presets at once, and the second window came
+  back on its remembered monitor after a restart.
+- The Settings dialog is down two rows and still opens without the scroll bar
+  2.1.6 fixed; the Key bindings dialog absorbed three new actions and still
+  sizes its columns to fit every note. Both of those were measured fixes from
+  yesterday and neither needed touching.
+
+#### Three things the pass found, all in the same seam
+
+Each of the three is the *pair* of two features that are each correct alone.
+
+- **Visual 1 switched off still showed on a screen each.** A screen apart
+  makes the main window draw `crossfade 0.0`, which is "visual 1 alone", and
+  it did that whether or not visual 1's switch was on — so the visual sat
+  there at full strength with the tick beside it saying off. `test_dual` has
+  a check for each half and the combination was not one of them. The window
+  is cleared instead, which is also the honest thing for the recorder and the
+  thumbnail to read out of it. Seen on screen, not only in the fakes.
+- **The remembered monitor was never read back.** `visual2_display` is a
+  setting like the two switches beside it, `_stop_dual` drops the window
+  without clearing it, and nothing restored it — so the menu, which ticks the
+  monitor straight out of config, claimed visual 2 was on a screen it was not
+  on. Reachable twice: switch it off and on again, and every launch after the
+  feature has been used once. `_do_set_dual` now queues `_req_win2` from
+  config when it brings the second visual up, which covers the in-session
+  route and startup in one line, because startup is just another caller.
+  Verified both ways on screen.
+- **The shipped README described the 2.1.6 shape of all this** — "a second
+  preset over the first", the strength in Settings — one day after I rewrote
+  that section. Rewritten again around the two switches, the fader, the two
+  keys and "Send visual to", and the controls list in **both** READMEs gained
+  `1`, `[` and `]`.
+
+All three are mutation-checked, and the rig scores on the **exit code**: the
+trap the CLAUDE.md entry records is real here, because `test_dual`'s `check()`
+lets the AssertionError out and a failing run prints no `FAIL` line at all.
+
+#### Two findings left alone on purpose
+
+- **Wallpaper mode and a visual on another monitor do not compose.** Turning
+  wallpaper mode on with the pair split sends the main window to the desktop
+  layer and leaves visual 2 an ordinary window floating over everything on its
+  monitor, taskbar button and all. It is recoverable rather than a trap — the
+  tray menu is complete in that state, and "Leave wallpaper mode" put both
+  windows back exactly where they were — but it is not what the word wallpaper
+  promises. The two ways out are giving the second window a desktop host of
+  its own on that monitor, or folding it back into the wallpaper with a toast
+  saying so, and which of those is right is a decision about what the feature
+  *is*, not a defect to quietly pick a side on.
+- **`send_to` is not in `MENU_ENTRIES`, so Customize menu cannot hide it**,
+  while `display` — conditional on the same two monitors — can. Cosmetic, and
+  on the other machine's newest code, so it is written down rather than
+  changed.
+
+#### Also worth knowing
+
+- **The DWM fullscreen-optimisation trap needs the FOREGROUND window.** Visual
+  2's window is borderless at exactly a monitor's rectangle, which is the
+  shape CLAUDE.md says cannot be photographed — and it photographs perfectly,
+  because `SDL_RaiseWindow` hands activation straight back to the main window.
+  Two grabs three seconds apart differed in 23,213 of 24,069 sampled pixels.
+  The entry has been corrected. It also means the `_overhang_display` trick
+  must *not* be copied to that window: it would spill two pixels onto the
+  neighbouring monitor for no gain.
+- **The letterbox follows the main window's aspect, not the second monitor's.**
+  A 900x600 main window puts 150px bars down each side of a 1920x1080 second
+  screen; making the main window 16:9 removed them exactly. Deliberate, and
+  invisible in the ordinary case where the main window is fullscreen on a
+  monitor the same shape — but it is the first thing anyone will report, so
+  the README now says it.
+- A harness trap, in CLAUDE.md: **PowerShell unrolls an array of arrays into a
+  pipeline**, so a `Where-Object` that matched exactly one window row hands
+  `ForEach-Object` its six *fields*, and `$_[2]` then indexes a string. The
+  output is single characters where coordinates should be, which reads as the
+  window list being wrong rather than the shell taking it apart.
+
+#### The verified 2.1.8 Windows package
+
+**`BomsAIVisualizer-2.1.8-win64-setup.exe`**, 78.4 MB (82,216,946 bytes),
+sha256 `9607ae056db178b6fd01720ca2c419710e1c462d8815cfb2379dfad83ee2dbdb`.
+Built from the clean tree with 2.1.6 deleted first; `VERSION` inside reads
+2.1.8 and the bundled EULA agrees.
+
+691 zlib streams inflated out of the PYZ, carrying `_clear_window` and
+`_req_win2` from this pass and `_draw_second_window`, `crossfade`,
+`visual2_display` and the string `second window lost` from Linux's 2.1.7.
+Three never-written control names are absent, one of them
+`_letterbox_to_monitor` — a method that was considered and not written while
+reading this code, so its absence says the probe is matching the tree rather
+than matching anything. Eight licence files including the PyAudioWPatch one
+2.1.6 added; ffmpeg still the LGPL build.
+
+**The smoke run was pointed at a monitor that is not there**, which is the
+one thing about this release a frozen build on a one-monitor box can test
+that a source run cannot: the isolated profile was seeded with
+`dual_enabled: true` and `visual2_display: 1`. The app came up, stayed alive
+and responding for 110 seconds, opened exactly **one** SDL window, and drew
+the two visuals blended in it — so the restore found no second monitor, said
+so, folded visual 2 back into the one window and did not take anything down
+with it. That is the "the TV was unplugged since last time" path, verified on
+the artifact.
+
+The split itself was driven from source rather than from the package: the
+fake monitor is a wrapper around `Renderer._refresh_displays`, and there is
+nothing to wrap in a frozen exe. Everything either side of it — the
+crossfader, both switches, the recording, the dialogs — was seen on both.
+
+One wrinkle worth knowing, and left as it is: when the restore finds the
+monitor missing it sets `visual2_display` to -1 **in memory** and does not
+write it, so the file keeps the index. That is the better half of the trade —
+unplug the TV for one session and the setting survives — but it does mean the
+value is forgotten the moment anything else writes the config, which the
+switches now do on every toggle. Arbitrary rather than wrong.
+
+**The installer is the verified one from 2.1.6** — `[InstallDelete]` clearing
+`_internal` and `licenses` wholesale, `UsePreviousGroup=no` — and nothing in
+this build changes it. The check that proved it is in the entry above: diff
+the installed tree against the portable tree, and expect Inno's `unins000`
+pair and nothing else.

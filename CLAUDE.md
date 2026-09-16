@@ -247,6 +247,19 @@ There is no display in an agent shell and SDL needs one, so:
   whole time. Verify those two modes by eye or with a recorded clip. And if a
   clip is black, suspect the preset before the code: ten sampled at random off
   the library gave nine under 26/255 mean brightness.
+
+  **The precondition is being the FOREGROUND window, and 2.1.7 proves it.**
+  Visual 2's own window is borderless at exactly a monitor's rectangle, which
+  is the shape described above -- and it photographs perfectly: two grabs
+  three seconds apart differed in 23,213 of 24,069 sampled pixels, live and
+  changing, with the main window drawn over the top of it. `_do_set_window2`
+  calls `SDL_RaiseWindow` on the *main* window straight after creating it, so
+  the full-screen one never becomes foreground, and DWM's fullscreen
+  optimisation never engages. So do not read "borderless and the size of a
+  monitor" as "cannot be captured": it is that plus the foreground. Which
+  also means the overhang trick is not needed for that window, and should not
+  be added -- on a real second monitor it would spill two pixels onto the
+  neighbour.
 - **Do not read an unfamiliar tray icon as an absent one.** Windows 11 hides
   new tray icons in the chevron flyout, and this app's 16x16 logo there is a
   small dark square with a gold mark that looks like half a dozen other
@@ -275,6 +288,17 @@ There is no display in an agent shell and SDL needs one, so:
   the interval it was asked for and every frame is correct, only late. If the
   frame rate is mysteriously terrible, measure a bare swap loop before
   suspecting anything in this repo.
+
+- **PowerShell unrolls an array of arrays on the way into a pipeline, so one
+  matching window comes back as six scalars.** `[A]::Windows()` returns rows
+  of `object[]`; `... | Where-Object {...}` piped into `ForEach-Object` hands
+  each *field* to `$_` when exactly one row matched, so `$_[2]` then indexes a
+  **string** and the output is single characters where coordinates should be
+  ("popup m,s AxI"). It reads as the window list being wrong rather than as
+  the shell taking it apart. `| Select-Object -First 1` happens to survive it,
+  which is why the older helpers never hit it. Use a `foreach` statement over
+  `[A]::Windows()` and never a pipeline -- `Popups` in `scratchpad/lib.ps1` is
+  that shape, and returns `,$array` so the return value does not unroll either.
 
 - **A window-listing helper that reads titles takes the harness down with a
   hung app.** `GetWindowTextW` is a `SendMessage` of `WM_GETTEXT`, so calling
@@ -338,6 +362,16 @@ There is no display in an agent shell and SDL needs one, so:
   `main.py`. Nothing in the app is modified, the real menu and the real SDL
   window creation run, and the fake monitor is placed inside the rig's real
   screen so the window manager will not clamp it.
+
+  **The same wrapper is the only option on Windows, where there is no fake
+  head to try in the first place** -- no Xinerama, no `xrandr --setmonitor`,
+  and adding a virtual display needs a signed driver. It drives the whole
+  feature: the menu gains both multi-monitor submenus, `SDL_CreateWindow`
+  lands the second window exactly where it was told (no reparenting, so the
+  X11 correction in `_place_second_window` is rightly a no-op there), one GL
+  context serves both windows, and teardown is clean. Point `FAKE_RECT` at
+  the real monitor's own rectangle and it also exercises the full-screen
+  case, which is how the foreground precondition above was settled.
 
 - **A `QFormLayout` set straight on a `QDialog` makes the form's height the
   window's MINIMUM, and a window manager then refuses to shrink it.** Twenty-one
@@ -1568,6 +1602,49 @@ There is no display in an agent shell and SDL needs one, so:
   elif chain's order, which is not the table's order, and guessing wrong is
   worse than showing both. A fixture with both keys written out is how this was
   briefly mistaken for a live bug.
+- **Two switches that are each right on their own can be wrong together, and
+  a suite with a test for each will not see it.** 2.1.7 shipped a crossfader
+  and "give visual 2 a monitor of its own", with a check for each: switching
+  visual 1 off pins the fader to visual 2, and a screen each draws both
+  whatever the fader says. The *pair* was not checked, and the pair is where
+  the bug was -- a screen each makes the main window draw `crossfade 0.0`,
+  which is "visual 1 alone", and it did that whether or not visual 1's own
+  switch was on. So visual 1 sat on screen at full strength with the tick
+  beside it saying off. There is nothing to blend in that state: the window
+  is cleared instead, which is also the honest thing for the recorder and the
+  thumbnail to read out of it.
+
+  The same session found the other half of the same shape: `visual2_display`
+  is a setting, `_stop_dual` drops the window without clearing it, and
+  **nothing read it back** -- so the menu, which ticks the monitor straight
+  out of config, claimed visual 2 was on a screen it was not on after any
+  switch off and on, and on every launch after the feature had been used
+  once. `_do_set_dual` queues `_req_win2` from config when it brings the
+  second visual up, which covers both routes in one line because startup is
+  just another caller. **When a feature adds a second independent switch, the
+  test to write is the combination, not the switch.**
+
+- **Wallpaper mode and a visual on another monitor do not compose.** Entering
+  wallpaper mode with the pair split sends the *main* window to the desktop
+  layer and leaves visual 2 as an ordinary window floating over everything on
+  its own monitor, taskbar button and all -- half the pair behind the icons
+  and half in front of the work. Measured on Windows 16 Sep 2026. It is
+  recoverable rather than a trap: the tray menu is complete in that state, so
+  "Leave wallpaper mode" and "Send visual to -> Same window" both work, and
+  the round trip puts both windows back exactly where they were. Left alone
+  deliberately -- the two ways out are giving the second window a desktop
+  host of its own on that monitor, or folding it back into the wallpaper with
+  a toast saying so, and that is a decision about what the feature *is*.
+
+- **The second window is letterboxed to the MAIN window's aspect, not to its
+  own monitor's.** Both visuals draw into targets built at the main window's
+  drawable size, so a 900x600 window sends a 3:2 picture to a 16:9 monitor and
+  gets 150px bars down each side -- measured, and they vanish the moment the
+  main window is made 16:9. Deliberate (a stretched visual reads as a broken
+  one) and invisible in the ordinary case, where the main window is fullscreen
+  on a monitor the same shape as the other. Worth knowing before reading the
+  bars as a bug.
+
 - **One frame that arrives with no drawable size used to end dual mode for the
   session.** `_render_visuals` fell through to `_do_set_dual(False)` whenever
   `_blend.ready(w, h)` was false, and `ready` answers false for `w <= 0` as
