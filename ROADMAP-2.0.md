@@ -239,11 +239,21 @@ A1, then A2. Those two are the release. A3 and A4 are cheap once the editor is
 there; A5 only if the splitter's round-trip test comes out clean. C1 done.
 B after A, because it is the one item that can cost frame rate. C2 last, or never.
 
-**Everything on this page is done except two things**, as of 2026-09-15:
+**Everything on this page is done except three things**, as of 2026-09-16:
 
 - **C2, spanning multiple monitors.** Still "last, or never".
 - **D's microphone.** Needs a person and a headset; nothing here can stand in
   for it.
+- **The key-bindings dialog opens too short.** It comes up 512px tall and shows
+  9 of its 24 rows, so everything added since 2.1.7 -- Visual 1, Visual 2, both
+  Crossfade keys and Adjust the other visual -- is below the fold on first open.
+  Found 16 Sep 2026 while shooting it for the site: the window had to be dragged
+  out by hand before the picture was worth taking, and a buyer will not know to
+  do that. `KeymapDialog` already measures its own WIDTH from the column hints
+  (see the long comment at the `resize` call); it passes `self.height()` through
+  unchanged, which is the `setMinimumHeight(480)` it was given. Give the height
+  the same treatment -- rows x row height + header + chrome, capped against the
+  screen -- rather than picking another number that a later row will outgrow.
 
 D's Bluetooth half is done. What is left of it needs a chair and a microphone.
 

@@ -390,6 +390,19 @@ There is no display in an agent shell and SDL needs one, so:
   whatever this machine has been rebound to -- which is what made the previous
   key-bindings shot disagree with the guide's own table.
 
+- **The visual behind an open menu is frozen, so you cannot wait out an ugly
+  background.** 16 Sep 2026: four grabs nine seconds apart, with the right-click
+  menu open, were pixel-identical -- the render loop does not advance while the
+  popup holds the grab. To get a different backdrop, close the menu, let it run,
+  and reopen. Hovering a different row inside the menu re-renders the menu but
+  not the picture behind it.
+
+- **A run from the source tree rewrites the repo's own `config.json`.** Back it
+  up with `cp -p`, restore it afterwards and check the md5 -- the window size,
+  position and any switch the rig flips are all written back on exit. Seed
+  per-run data (collections, ratings) through `XDG_DATA_HOME` instead, which
+  keeps it out of the user's real profile entirely.
+
 - **Grab with `-draw_mouse 0`.** The pointer sat over a notes cell in the first
   frame and had to be reshot.
 
