@@ -427,6 +427,17 @@ There is no display in an agent shell and SDL needs one, so:
   longer needs a wrapper script to diagnose: on Linux the dump lands in the
   journal, and in the rig in the app's log.
 
+- **A GNOME Wayland desktop can be photographed through the screenshot
+  portal, and nothing else here can.** `x11grab` of `:0` is black (above), and
+  `gnome-screenshot` falls back to X11 and is black too -- GNOME Shell's own
+  screenshot interface refuses callers it does not know. The portal
+  (`org.freedesktop.portal.Screenshot`, `interactive: false`, then wait for
+  the Request's `Response` signal) answered with no prompt on 2 Oct 2026, but
+  it **writes `~/Pictures/Screenshot.png`** -- a file in the user's own
+  folder. Check one is not already there before each call (plocate's
+  database answers "was there one before today"), move it out straight away,
+  and never leave one behind.
+
 - **Grab with `-draw_mouse 0`.** The pointer sat over a notes cell in the first
   frame and had to be reshot.
 
@@ -1876,7 +1887,7 @@ There is no display in an agent shell and SDL needs one, so:
   was taken as being at the bottom, so
   nothing was lowered, and mutter, which maps a window at the top of its layer,
   left the visuals over every icon and under every window: exactly the report.
-  Three things make it work, all read off source rather than guessed:
+  Four things make it work -- three read off source, the fourth found live:
   - **`_NET_RESTACK_WINDOW` with no sibling is "bottom (or top) of your
     layer"**, and mutter's `handle_net_restack_window` honours it from a pager
     (source 2) with **no focus-stealing check**. A plain `XLowerWindow` goes
@@ -1887,14 +1898,25 @@ There is no display in an agent shell and SDL needs one, so:
     window maps or closes** (`emulateX11WindowType.js`: `map` and `destroy`
     handlers, plus `lower()` on its own `raised`), so getting under it once is
     lost at the next tooltip. Where `x11_stack_is_partial()` -- a Wayland
-    session -- the hold asks blind every `WP_HOLD_BLIND_EVERY` (0.5 s), which
-    costs nothing when nothing moved (`meta_stack_lower` returns early), and
-    at once when the pointer enters the window, since that only happens when
-    it is over the icons.
+    session -- the hold asks blind every `WP_HOLD_BLIND_EVERY` (0.1 s), which
+    costs nothing when nothing moved (`meta_stack_lower` returns early).
+  - **Every click on the desktop raises DING, and DING answers by lowering
+    itself under the visualiser** -- so for a moment the pointer is over our
+    window, and the shell takes the pointer leaving DING as the end of DING's
+    menu. Live, 2 Oct 2026, GNOME 50: the desktop menu "flashes once, then
+    disappears", and the next click landed on the visuals. A trace showed the
+    pointer entering our window on every click; turning the periodic hold off
+    changed nothing, so no re-stack, however quick, can fix it -- it is after
+    the fact. **An empty input region** can (`x11_input_passthrough`, XShape
+    `ShapeInput` with no rectangles): the pointer never stops being DING's,
+    whatever the stacking does in between. Click-through whenever Caps Lock is
+    off, normal input when it is on. Verified on the user's own desktop the
+    same day: menu up on the first click, every time.
   - **Measured against muffin in the rig** with the partial path forced
     (`XDG_SESSION_TYPE=wayland`): under nemo-desktop with Caps Lock off, over
-    it with Caps Lock on, back under on off. DING itself cannot run in Xephyr,
-    so the GNOME half is the source reading above plus the user's machine.
+    it with Caps Lock on, back under on off. DING itself cannot run in Xephyr;
+    the GNOME half was run live on the user's desktop with
+    `LIBGL_ALWAYS_SOFTWARE=1`, so a driver fault could not end their session.
 
 - **Caps Lock decides whose menu the desktop opens in wallpaper mode.** Off:
   the desktop's own, icons on top. On: ours. On X11 that is the visualiser

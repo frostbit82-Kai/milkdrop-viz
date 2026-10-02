@@ -265,7 +265,10 @@ can prove is below.
 - Wallpaper mode waits for startup to settle before switching
   (`wallpaper_may_start`), which is what waiting by hand did. The report was a
   freeze, sometimes taking the desktop with it; the journal showed an amdgpu
-  page fault, a GPU reset and gnome-shell aborting, 16 s after launch.
+  page fault, a GPU reset and gnome-shell aborting, 16 s after launch. **Not
+  re-run on the GPU**: the fault is the driver's, so the wait makes it less
+  likely, not impossible. Worth one deliberate try on the real card -- launch,
+  press `d` at once, watch for "Wallpaper mode in a moment".
 - Under Wayland it gets below Desktop Icons NG, which X cannot see
   (`x11_stack_is_partial`). Was: visuals over the icons, under every window.
 - Caps Lock picks whose menu a right-click on the desktop opens.
@@ -275,6 +278,17 @@ can prove is below.
   and audio picks -- leave the menu open; rows that open a window or change
   the window still close it.
 - A shuffled playlist, and the place in it, survive closing the app.
+
+**Verified live on Linux, 2 Oct 2026**, on the user's own GNOME 50 / Wayland
+desktop with Desktop Icons NG (software rendering, so the driver fault could
+not recur): the icons stay over the visuals, including straight after other
+windows open and close; Caps Lock on hides them and right-click opens the
+visualiser's menu; Caps Lock off gives the desktop's own menu on the first
+click. That last one needed click-through -- see CLAUDE.md, Desktop Icons NG.
+**What Windows has to match** is that behaviour from the user's side: Caps
+Lock off, Explorer's own desktop menu; Caps Lock on, the visualiser's menu
+on the first right-click; the icons visible over the visuals with Caps Lock
+off. (On Windows the icons can stay visible with Caps Lock on too.)
 
 **Windows still has to prove:**
 

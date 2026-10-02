@@ -115,7 +115,7 @@ def bare(cfg=None, displays=TWO):
     r._wp_front = r._wp_partial = False
     r._caps_at = 0.0
     r._rclick = None
-    r._x11_display = None
+    r._x11_display = r._native_handle = None
     r._win_rect = (10, 20, 640, 480)
     r._bridge = FakeBridge()
     r._refresh_displays = lambda: None      # SDL is faked out from under it
@@ -385,6 +385,10 @@ def _x11_run(on, displays=TWO, cfg=None):
     real_stack = viz_common.x11_client_stack
     real_class = viz_common.x11_wm_class
     real_nemo = viz_common.nemo_allow_desktop_window
+    real_through = viz_common.x11_input_passthrough
+    # The display here is a made-up pointer, and libXext would follow it.
+    viz_common.x11_input_passthrough = (
+        lambda _l, _d, _w, through, ext=None: log.append(("through", through)))
     # The fake Xlib has no property reader and gsettings is not this
     # test's business; record what the wallpaper path asked for instead.
     viz_common.x11_wm_class = lambda _l, _dpy, _w: "BomsAIVisualizer"
@@ -409,6 +413,7 @@ def _x11_run(on, displays=TWO, cfg=None):
         viz_common.x11_client_stack = real_stack
         viz_common.x11_wm_class = real_class
         viz_common.nemo_allow_desktop_window = real_nemo
+        viz_common.x11_input_passthrough = real_through
     return r, lib, fake
 
 
@@ -846,6 +851,13 @@ def the_geometry_is_set_again_once_the_window_is_back_up():
     assert "show" in fake.order, fake.order
     after = fake.order[fake.order.index("show"):]
     assert "geom" in after, fake.order
+
+def the_way_in_lets_clicks_through_and_the_way_out_takes_them_back():
+    _r, lib, _f = _x11_run(True)
+    assert ("through", True) in lib.order, lib.order
+    _r, lib, _f = _x11_run(False)
+    assert ("through", False) in lib.order, lib.order
+
 
 def leaving_puts_the_window_back_where_it_was():
     r, lib, fake = _x11_run(False)
@@ -1467,14 +1479,15 @@ def first_in_a_partial_stack_still_asks_for_the_bottom():
 
 
 def a_partial_stack_is_held_blind_and_more_often():
-    """Desktop Icons NG lowers itself whenever any window maps, so the hold
-    asks again every half second instead of every two."""
+    """Desktop Icons NG lowers itself whenever any window maps and whenever
+    the desktop is clicked, so the hold asks again every tenth of a second
+    instead of every two."""
     r, lib = _hold([APP_WIN], partial=True)
     assert lib.restacks == [(APP_WIN, 0, viz_common._X11_BELOW)], lib.restacks
-    r, lib = _hold([APP_WIN], partial=True, hold_at=999.4, now=1000.0)
-    assert lib.restacks, "waited two seconds where half a second was due"
-    r, lib = _hold([APP_WIN], partial=True, hold_at=999.8, now=1000.0)
-    assert not lib.restacks, "asked every frame"
+    r, lib = _hold([APP_WIN], partial=True, hold_at=999.85, now=1000.0)
+    assert lib.restacks, "waited longer than a tenth of a second"
+    r, lib = _hold([APP_WIN], partial=True, hold_at=999.95, now=1000.0)
+    assert not lib.restacks, "asked more often than it needs to"
 
 
 def caps_lock_holds_it_over_the_icons_and_under_the_windows():
@@ -1560,6 +1573,68 @@ def explorers_desktop_is_told_from_a_window():
     assert viz_common.is_desktop_window_class("WorkerW")
     assert not viz_common.is_desktop_window_class("CabinetWClass")
     assert not viz_common.is_desktop_window_class("")
+
+
+class FakeXext:
+    """libXext, recording what was asked of it."""
+    def __init__(self):
+        self.calls = []
+        self.XShapeCombineRectangles = lambda *a: self.calls.append(("rects",) + a[1:])
+        self.XShapeCombineMask = lambda *a: self.calls.append(("mask",) + a[1:])
+
+
+class ShapeXlib:
+    """Just enough Xlib to say whether the server has SHAPE."""
+    def __init__(self, has_shape=True):
+        self.has_shape = has_shape
+    def XQueryExtension(self, _dpy, name, *_out):
+        assert name == b"SHAPE", name
+        return self.has_shape
+
+
+def behind_the_icons_every_click_falls_through_to_the_desktop():
+    """GNOME 50 with Desktop Icons NG: a click raises DING, DING lowers
+    itself under the visualiser, the pointer is then over us and the shell
+    ends DING's menu -- it flashed and vanished. An empty input region keeps
+    the pointer DING's whatever the stacking does."""
+    ext, lib = FakeXext(), ShapeXlib()
+    assert viz_common.x11_input_passthrough(lib, 1, APP_WIN, True, ext)
+    kind, win, shape, _x, _y, rects, n, op, _o = ext.calls[0]
+    assert (kind, win, shape, rects, n, op) == \
+        ("rects", APP_WIN, viz_common._SHAPE_INPUT, None, 0,
+         viz_common._SHAPE_SET), ext.calls
+    assert viz_common.x11_input_passthrough(lib, 1, APP_WIN, False, ext)
+    kind, win, shape, _x, _y, mask, op = ext.calls[1]
+    assert (kind, shape, mask, op) == ("mask", viz_common._SHAPE_INPUT, 0,
+                                       viz_common._SHAPE_SET), ext.calls
+
+
+def a_server_without_shape_is_not_sent_a_shape_request():
+    """An X error is fatal under Xlib's default handler, so the extension is
+    asked for before anything is sent."""
+    ext = FakeXext()
+    assert viz_common.x11_input_passthrough(ShapeXlib(False), 1, APP_WIN,
+                                            True, ext) is False
+    assert not ext.calls
+
+
+def caps_lock_makes_the_wallpaper_clickable_and_back():
+    r = bare()
+    r._wallpaper, r._native_handle, r._x11_display = True, APP_WIN, 1
+    seen = []
+    real = viz_common.x11_input_passthrough
+    real_x11 = viz_common._libx11
+    viz_common._libx11 = lambda: None
+    viz_common.x11_input_passthrough = lambda _l, d, w, through, ext=None: \
+        seen.append(through) or True
+    try:
+        if sys.platform != "win32":
+            r._set_wallpaper_front(True)
+            r._set_wallpaper_front(False)
+            assert seen == [False, True], seen
+    finally:
+        viz_common.x11_input_passthrough = real
+        viz_common._libx11 = real_x11
 
 for fn in (the_worker_behind_the_icons_is_chosen,
            a_desktop_with_no_defview_gives_nothing,
@@ -1652,7 +1727,11 @@ for fn in (the_worker_behind_the_icons_is_chosen,
            caps_lock_moves_the_wallpaper_and_says_so,
            a_right_click_on_the_wallpaper_is_the_desktops_unless_caps_lock_is_on,
            the_window_cannot_be_unmade_as_the_desktop_by_a_key,
-           explorers_desktop_is_told_from_a_window):
+           explorers_desktop_is_told_from_a_window,
+           behind_the_icons_every_click_falls_through_to_the_desktop,
+           a_server_without_shape_is_not_sent_a_shape_request,
+           caps_lock_makes_the_wallpaper_clickable_and_back,
+           the_way_in_lets_clicks_through_and_the_way_out_takes_them_back):
     results.append(check(fn.__name__, fn))
 
 print("all wallpaper checks passed" if all(results) else "FAILURES")

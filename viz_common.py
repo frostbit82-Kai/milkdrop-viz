@@ -7091,6 +7091,8 @@ def _libx11():
     lib.XQueryPointer.argtypes = [ptr, ulong, ctypes.POINTER(ulong),
                                   ctypes.POINTER(ulong)] + \
         [ctypes.POINTER(i)] * 4 + [ctypes.POINTER(ctypes.c_uint)]
+    lib.XQueryExtension.argtypes = [ptr, ctypes.c_char_p] + \
+        [ctypes.POINTER(i)] * 3
     lib.XSendEvent.restype = i
     lib.XSendEvent.argtypes = [ptr, ulong, i, ctypes.c_long,
                                ctypes.POINTER(_XEvent)]
@@ -7359,6 +7361,55 @@ def x11_restack(lib, dpy, win, sibling=0, detail=_X11_BELOW):
     ev.xclient.data.l[2] = detail
     return bool(lib.XSendEvent(dpy, lib.XDefaultRootWindow(dpy), False,
                                _X11_WM_EVENT_MASK, ctypes.byref(ev)))
+
+
+#: XShape's input kind and its "replace" operation (shape.h).
+_SHAPE_INPUT, _SHAPE_SET = 2, 0
+
+
+def x11_input_passthrough(lib, dpy, win, through: bool, ext=None) -> bool:
+    """Let every click on the window fall through to whatever is under it,
+    or take them again. True when it was done.
+
+    This is how a right-click on the desktop stays the desktop's with Caps
+    Lock off, whatever the stacking does in between. Measured 2 Oct 2026 on
+    GNOME 50 / Wayland with Desktop Icons NG: a click on the desktop raises
+    DING's window, DING answers every raise by lowering itself to the very
+    bottom -- below the visualiser -- and the pointer is then over *our*
+    window. The shell takes the pointer leaving DING as the end of DING's
+    menu, so the menu flashed and vanished, and the next click landed on the
+    visuals. A re-stack, however quick, is after the fact. An empty input
+    region is not: the pointer never stops being DING's.
+
+    The server is asked for SHAPE first, through `lib` like every other X11
+    call here, because a SHAPE request to a server without it is an X error
+    and Xlib's default answer to an X error is to end the process. `ext` is
+    libXext, a seam for the tests.
+    """
+    try:
+        op, ev, err = ctypes.c_int(), ctypes.c_int(), ctypes.c_int()
+        if not lib.XQueryExtension(dpy, b"SHAPE", ctypes.byref(op),
+                                   ctypes.byref(ev), ctypes.byref(err)):
+            return False
+        ext = ext or ctypes.CDLL("libXext.so.6")
+        if through:
+            ext.XShapeCombineRectangles.argtypes = [
+                ctypes.c_void_p, ctypes.c_ulong, ctypes.c_int, ctypes.c_int,
+                ctypes.c_int, ctypes.c_void_p, ctypes.c_int, ctypes.c_int,
+                ctypes.c_int]
+            # No rectangles: an input region with nothing in it.
+            ext.XShapeCombineRectangles(dpy, win, _SHAPE_INPUT, 0, 0, None,
+                                        0, _SHAPE_SET, 0)
+        else:
+            ext.XShapeCombineMask.argtypes = [
+                ctypes.c_void_p, ctypes.c_ulong, ctypes.c_int, ctypes.c_int,
+                ctypes.c_int, ctypes.c_ulong, ctypes.c_int]
+            # Mask None with Set removes the shape: the whole window again.
+            ext.XShapeCombineMask(dpy, win, _SHAPE_INPUT, 0, 0, 0, _SHAPE_SET)
+        return True
+    except (OSError, AttributeError) as e:
+        print(f"[wallpaper] no click-through: {e}", flush=True)
+        return False
 
 
 def x11_stack_is_partial(env=None) -> bool:
@@ -11012,7 +11063,10 @@ class Renderer:
                     lib, dpy, win, (box[0], box[1]),
                     lambda x, y: sdl2.SDL_SetWindowPosition(self._window, x, y))
                 self._track_window()
+            # Clicks go through to the desktop until Caps Lock says otherwise.
+            x11_input_passthrough(lib, dpy, win, True)
         else:
+            x11_input_passthrough(lib, dpy, win, False)
             sdl2.SDL_RaiseWindow(self._window)
         lib.XSync(dpy, False)
         self._track_window()
@@ -11030,10 +11084,11 @@ class Renderer:
     #: The same, where it cannot measure and can only ask: a Wayland session,
     #: or Caps Lock holding the visuals in front of the icons. Asking costs a
     #: message the window manager drops on the floor when nothing moved
-    #: (mutter's meta_stack_lower returns early), and Desktop Icons NG
-    #: re-lowers itself every time *any* window maps, so two seconds of
-    #: covered icons after every tooltip is too long.
-    WP_HOLD_BLIND_EVERY = 0.5
+    #: (mutter's meta_stack_lower returns early). Desktop Icons NG re-lowers
+    #: itself every time any window maps *and every time the desktop is
+    #: clicked*, so this is also the longest the icons go missing after a
+    #: click on them.
+    WP_HOLD_BLIND_EVERY = 0.1
 
     def _hold_wallpaper_bottom(self):
         """Keep the window under the desktop icons for as long as it is the
@@ -11150,6 +11205,10 @@ class Renderer:
                 self._rclick.stop()
         else:
             self._wp_hold_at = 0.0          # restack on this very pass
+            if self._wallpaper and self._native_handle and self._x11_display:
+                # Clickable in front of the icons, click-through behind them.
+                x11_input_passthrough(_libx11(), self._x11_display,
+                                      self._native_handle, not on)
         if not quiet:
             self._bridge.status_message.emit(
                 "Caps Lock on — right-click the desktop for this menu"
