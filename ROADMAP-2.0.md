@@ -257,6 +257,49 @@ B after A, because it is the one item that can cost frame rate. C2 last, or neve
 
 D's Bluetooth half is done. What is left of it needs a chair and a microphone.
 
+**Asked for on 2 Oct 2026 and built the same day, on Linux.** Six changes,
+from a round of use on other machines; all on Linux and in the rig, **none on
+Windows yet** -- that pass is the user's, and the list of what only Windows
+can prove is below.
+
+- Wallpaper mode waits for startup to settle before switching
+  (`wallpaper_may_start`), which is what waiting by hand did. The report was a
+  freeze, sometimes taking the desktop with it; the journal showed an amdgpu
+  page fault, a GPU reset and gnome-shell aborting, 16 s after launch.
+- Under Wayland it gets below Desktop Icons NG, which X cannot see
+  (`x11_stack_is_partial`). Was: visuals over the icons, under every window.
+- Caps Lock picks whose menu a right-click on the desktop opens.
+- The right-click menu takes user-named categories (Customize menu), each a
+  submenu on hover, for screens where the full menu ran to two columns.
+- Rows you press repeatedly -- next, previous, random, sorts, lock, collection
+  and audio picks -- leave the menu open; rows that open a window or change
+  the window still close it.
+- A shuffled playlist, and the place in it, survive closing the app.
+
+**Windows still has to prove:**
+
+- **The desktop right-click hook (`_DesktopRightClick`).** A low-level mouse
+  hook on a thread of its own, installed only while Caps Lock is on in
+  wallpaper mode. Unrun on any machine. Check that the menu opens over the
+  desktop with Caps Lock on, that Explorer's menu is untouched with it off,
+  that a right-click inside any other application still reaches that
+  application with Caps Lock on, and that the mouse does not lag.
+- **`GetKeyState(VK_CAPITAL)` from the render thread.** The toggle bit is
+  per-thread input state on paper, and the render thread's window never has
+  the keyboard in wallpaper mode. Background Caps Lock indicators rely on it
+  working, which is the evidence -- not a measurement.
+- **The icons on other Windows 11 builds.** The WorkerW-child route was
+  measured on 26200. Wallpaper apps that broke on 24H2's "raised desktop"
+  (Lively, kirie, rexpaper) moved to Microsoft's guidance instead: a layered
+  child of Progman, z-ordered directly below SHELLDLL_DefView, with the
+  WorkerW pushed to the bottom and the order re-asserted because Explorer
+  changes it. If a machine shows the visuals over the icons, that is the
+  change to make; nothing was changed here without a report.
+- **Linux, still: the X11 Caps Lock mode hides the icons while it is on.** It
+  works by holding the visualiser over the icon layer, because under Wayland
+  an X client cannot take a click away from a Wayland window -- there is no
+  other way to receive it there. On Windows the hook leaves the icons alone.
+
 **Mint is done, 9 Sep 2026.** Section A and C1 were exercised on real hardware
 — Mint 21.3, Cinnamon 6.0.5, AMD Pitcairn, the 9,795-preset pack, audio off a
 Bluetooth sink. A1 failed and is fixed (above). A2's editor, A3's hue shift

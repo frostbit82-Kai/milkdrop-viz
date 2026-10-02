@@ -11,6 +11,12 @@ import os
 import sys
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+# The kept shuffle is a file in the user's data directory, so this suite has
+# to point that somewhere of its own -- both variables, because Windows reads
+# LOCALAPPDATA and ignores the other one.
+import tempfile                                       # noqa: E402
+_TMP = tempfile.mkdtemp(prefix="viz-shuffle-")
+os.environ["XDG_DATA_HOME"] = os.environ["LOCALAPPDATA"] = _TMP
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import viz_common as v                                # noqa: E402
@@ -30,6 +36,7 @@ class FakeBridge:
     def __init__(self):
         self.status_message = FakeSignal()
         self.playlist_changed = FakeSignal()
+        self.preset_changed = FakeSignal()
 
 
 class FakePM:
@@ -71,8 +78,20 @@ class StubRenderer(v.Renderer):
         self._pm = FakePM([p for p, _ in self.files])
         self._bridge = FakeBridge()
         self._shuffle = False
+        self._shuffled_paths = []
         self._rated_history = []
         self._emitted = 0
+        self._cfg = {"preset_dir": "/presets"}
+        self._collection = ""
+        self._ratings = {}
+        self._pms = [self._pm, None]
+        self.saves = 0
+
+    def _save_config(self, cfg):
+        self.saves += 1
+
+    def collections(self):
+        return {}
 
     def _all_preset_files(self):
         return list(self.files)
@@ -195,6 +214,103 @@ def a_fresh_renderer_does_not_claim_to_be_shuffled():
     assert found == [False], f"Renderer.__init__ sets _shuffle to {found}"
 
 
+
+# --- kept across a restart (2 Oct 2026) -----------------------------------
+def _kept():
+    try:
+        with open(v.shuffle_path(), encoding="utf-8") as f:
+            return v.json.load(f)
+    except FileNotFoundError:
+        return None
+
+
+def turning_it_on_keeps_the_order_for_next_time():
+    """Reported: the shuffle reset every time the app was closed."""
+    r = StubRenderer()
+    r._do_toggle_mode()
+    kept = _kept()
+    assert kept is not None, "nothing written"
+    assert kept["order"] == [os.path.relpath(p, "/presets") for p in order(r)]
+    assert kept["preset_dir"] == "/presets"
+
+
+def turning_it_off_forgets_it():
+    r = StubRenderer()
+    r._do_toggle_mode()
+    r._do_toggle_mode()
+    assert _kept() is None, "a shuffle that is off came back next run"
+
+
+def the_next_run_gets_the_same_order_and_the_same_place():
+    first = StubRenderer()
+    first._do_toggle_mode()
+    first._pm.pos = 17
+    v.Renderer._emit_current_preset(first)
+    assert first._cfg["shuffle_at"] == first._pm.current_preset_name()
+
+    nxt = StubRenderer()
+    nxt._cfg = dict(first._cfg)
+    assert nxt._restore_shuffle() is True
+    assert order(nxt) == order(first), "a different order came back"
+    assert nxt._shuffle is True, "the browser would say shuffle is off"
+    assert nxt._pm.current_preset_name() == first._cfg["shuffle_at"], \
+        "came back at the top rather than where it was"
+
+
+def presets_gone_since_are_dropped_and_new_ones_go_on_the_end():
+    first = StubRenderer(count=50)
+    first._do_toggle_mode()
+    nxt = StubRenderer(count=60)
+    gone = order(first)[3]
+    nxt.files = [f for f in nxt.files if f[0] != gone]
+    nxt._cfg = dict(first._cfg)
+    nxt._restore_shuffle()
+    got = order(nxt)
+    assert gone not in got
+    assert got[:49] == [p for p in order(first) if p != gone], \
+        "the old part of the order was not kept"
+    assert sorted(got[49:]) == [f"/presets/p{i:03d}.milk"
+                                for i in range(50, 60)]
+
+
+def another_preset_folder_starts_fresh():
+    first = StubRenderer()
+    first._do_toggle_mode()
+    nxt = StubRenderer()
+    nxt._cfg = dict(first._cfg, preset_dir="/elsewhere")
+    assert nxt._restore_shuffle() is False
+    assert nxt._shuffle is False
+
+
+def a_sort_forgets_the_shuffle_too():
+    r = StubRenderer()
+    r._do_toggle_mode()
+    r._do_sort("name")
+    assert r._shuffle is False and _kept() is None
+
+
+def an_old_shuffle_key_in_config_is_not_taken_for_a_kept_order():
+    """Configs that went through older builds carry "shuffle": true, which
+    meant something else. Without a kept order there is nothing to restore."""
+    r = StubRenderer()
+    r._do_toggle_mode()
+    r._do_toggle_mode()                      # off: the file is gone
+    nxt = StubRenderer()
+    nxt._cfg = {"preset_dir": "/presets", "shuffle": True}
+    assert nxt._restore_shuffle() is False
+    assert nxt._shuffle is False
+
+
+def only_visual_one_moves_the_bookmark():
+    """With two visuals up, the focus can be on visual 2, whose playlist is
+    its own. The kept shuffle is visual 1's."""
+    r = StubRenderer()
+    r._do_toggle_mode()
+    r._cfg.pop("shuffle_at", None)
+    r._pms = [FakePM(["/presets/x.milk"]), r._pm]
+    v.Renderer._emit_current_preset(r)
+    assert "shuffle_at" not in r._cfg, r._cfg
+
 if __name__ == "__main__":
     for fn in (shuffle_permutes_rather_than_dropping,
                projectm_shuffle_is_never_turned_on,
@@ -205,6 +321,14 @@ if __name__ == "__main__":
                turning_it_on_again_reshuffles,
                with_no_presets_the_flag_does_not_move,
                the_toggle_reports_itself,
-               a_fresh_renderer_does_not_claim_to_be_shuffled):
+               a_fresh_renderer_does_not_claim_to_be_shuffled,
+               turning_it_on_keeps_the_order_for_next_time,
+               turning_it_off_forgets_it,
+               the_next_run_gets_the_same_order_and_the_same_place,
+               presets_gone_since_are_dropped_and_new_ones_go_on_the_end,
+               another_preset_folder_starts_fresh,
+               a_sort_forgets_the_shuffle_too,
+               an_old_shuffle_key_in_config_is_not_taken_for_a_kept_order,
+               only_visual_one_moves_the_bookmark):
         check(fn.__name__, fn)
     print("all shuffle checks passed")

@@ -469,6 +469,42 @@ def a_resize_reaches_both_visuals():
         "only the focused visual is told the window changed size"
 
 
+def a_resize_the_app_asks_for_itself_reaches_both_visuals():
+    """SDL sends RESIZED only for a size somebody else chose. The wallpaper
+    fit is the app's own SDL_SetWindowSize, which gets SIZE_CHANGED alone --
+    so a handler on RESIZED never told visual 2 the desktop's size."""
+    src = inspect.getsource(v.Renderer.run)
+    assert "== sdl2.SDL_WINDOWEVENT_SIZE_CHANGED" in src
+    assert "== sdl2.SDL_WINDOWEVENT_RESIZED" not in src, \
+        "the resize branch misses every resize the app makes itself"
+
+
+def every_request_is_dispatched_under_the_lock():
+    """Each `if self._req_...` is a direct child of the locked dispatch.
+
+    2.1.7 dropped the fader's save block into the middle of the list, and the
+    two requests after it were then nested inside it: Tab and the editor's
+    "play this" ran only in the pass where a fader move finished saving.
+    """
+    run = ast.parse(textwrap.dedent(inspect.getsource(v.Renderer.run)))
+    locked = [n for n in ast.walk(run) if isinstance(n, ast.With)
+              and "self._lock" in ast.unparse(n.items[0].context_expr)]
+    assert len(locked) == 1, "expected one locked dispatch block in run()"
+    direct = {id(n) for n in locked[0].body}
+
+    def asks(node):
+        first = node.test.values[0] if isinstance(node.test, ast.BoolOp) \
+            else node.test
+        return ast.unparse(first).startswith("self._req_")
+
+    stray = [ast.unparse(n.test) for n in ast.walk(run)
+             if isinstance(n, ast.If) and asks(n) and id(n) not in direct]
+    assert not stray, f"requests outside the dispatch: {stray}"
+    for want in ("self._req_focus", "self._req_preset_data"):
+        assert any(want in ast.unparse(n.test) for n in locked[0].body
+                   if isinstance(n, ast.If)), want
+
+
 def auto_advance_moves_the_other_visual_too():
     """Everything a person does goes to the focused visual alone. The clock
     is the exception: a second visual stuck on one preset all night is not

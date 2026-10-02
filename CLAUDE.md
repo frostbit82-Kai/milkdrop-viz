@@ -390,18 +390,42 @@ There is no display in an agent shell and SDL needs one, so:
   whatever this machine has been rebound to -- which is what made the previous
   key-bindings shot disagree with the guide's own table.
 
-- **The visual behind an open menu is frozen, so you cannot wait out an ugly
-  background.** 16 Sep 2026: four grabs nine seconds apart, with the right-click
-  menu open, were pixel-identical -- the render loop does not advance while the
-  popup holds the grab. To get a different backdrop, close the menu, let it run,
-  and reopen. Hovering a different row inside the menu re-renders the menu but
-  not the picture behind it.
+- **The visual behind an open menu was frozen once, and is not in general.**
+  16 Sep 2026: four grabs nine seconds apart, with the right-click menu open,
+  were pixel-identical. 2 Oct 2026, same rig, muffin instead of xfwm4: with the
+  menu held open, two clicks on Next visual gave two "Now playing" lines and
+  three grabs of the uncovered strip differed every time -- the loop runs
+  under the popup's grab. The first sighting's cause was never established
+  (the idle pause parks on a still frame after 20 s of silence and is the
+  likeliest suspect). If a backdrop will not change, check for `[idle] paused`
+  in the log before blaming the menu.
 
 - **A run from the source tree rewrites the repo's own `config.json`.** Back it
   up with `cp -p`, restore it afterwards and check the md5 -- the window size,
   position and any switch the rig flips are all written back on exit. Seed
   per-run data (collections, ratings) through `XDG_DATA_HOME` instead, which
   keeps it out of the user's real profile entirely.
+
+- **A rig wallpaper run writes to the user's real dconf.** `gsettings` is
+  per-user, not per-display, so the app's Nemo fix-up
+  (`nemo_allow_desktop_window`) appends the rig's WM_CLASS -- `python3.14`
+  from a source run -- to the real `org.nemo.desktop ignored-desktop-handlers`.
+  Harmless, and still somebody else's setting: read it before the run and put
+  it back after.
+
+- **Under muffin, `xdotool windowactivate` does not give SDL the keyboard.** A
+  key sent after it was dropped every time; a click on the window first, then
+  the key, works. A rig that presses `d` and sees nothing has not tested the
+  key.
+
+- **`mawk` buffers its input**, so `python -u ... | awk '{print strftime(), $0}'`
+  shows nothing until kilobytes have piled up -- an empty log from a running
+  app. `mawk -W interactive`.
+
+- **`kill -USR1 <pid>` prints every thread's stack, from any build.** main.py
+  registers it with faulthandler (and enables the crash dump), so a freeze no
+  longer needs a wrapper script to diagnose: on Linux the dump lands in the
+  journal, and in the rig in the app's log.
 
 - **Grab with `-draw_mouse 0`.** The pointer sat over a notes cell in the first
   frame and had to be reshot.
@@ -1822,5 +1846,126 @@ There is no display in an agent shell and SDL needs one, so:
   sizeless frame is now skipped. **The distinguishing evidence is the missing
   reason line** — a real failure prints `[dual] <why>` first, so `[dual] off`
   on its own was never the user.
+
+- **A Linux install logs to the systemd journal, and the journal is where
+  "it crashed the OS" turns into a cause.** Launched from the app grid, the
+  app's stdout goes to the journal as `bomsai-visualizer.desktop[<pid>]`, next
+  to the kernel's own lines. 2 Oct 2026's report -- wallpaper mode asked for
+  straight after launch froze the app and sometimes the desktop -- was 16
+  seconds in that order: `[dual] on`, then `amdgpu ... VM fault (0x02, vmid 7)
+  at page 3072, write from 48`, `ring gfx timeout ... Process BomsAIVisualize
+  ... thread BomsAIVisu:cs0`, `GPU reset begin!`, `VRAM is lost due to GPU
+  reset!` -- and gnome-shell aborting on the lost context, which ended the
+  session (the user manager's pid changes across it). `journalctl -b -1` for
+  the boot before a reboot; `coredumpctl` had nothing. The fault itself is in
+  the driver and was not reproduced -- the rig runs llvmpipe on purpose, and
+  reproducing it on the real card would cost the user their session again.
+  What the app controls is *when*: startup is the GPU's busiest moment here
+  (two projectM instances, first shader compiles, every texture directory
+  scanned) and the wallpaper switch unmaps, resizes and remaps the GL window on
+  top of it. `wallpaper_may_start` holds the switch until the loop has run two
+  seconds with no pass slower than `SLOW_PASS_S`, capped at twenty, and the
+  switch now runs outside the request lock. `[wallpaper] on/off` is logged,
+  because nothing in that journal said when the key had been pressed.
+
+- **Under Wayland the desktop icons can be a window X cannot see.** Ubuntu's
+  default desktop draws them with Desktop Icons NG, a native Wayland window, so
+  `_NET_CLIENT_LIST_STACKING` on Ubuntu 26.04 / GNOME 50 held one entry, an
+  unrelated X application -- the icons were not in it at all, so in wallpaper
+  mode it holds the visualiser and nothing it competes with. Being first in it
+  was taken as being at the bottom, so
+  nothing was lowered, and mutter, which maps a window at the top of its layer,
+  left the visuals over every icon and under every window: exactly the report.
+  Three things make it work, all read off source rather than guessed:
+  - **`_NET_RESTACK_WINDOW` with no sibling is "bottom (or top) of your
+    layer"**, and mutter's `handle_net_restack_window` honours it from a pager
+    (source 2) with **no focus-stealing check**. A plain `XLowerWindow` goes
+    through `meta_window_x11_configure_request`, which ignores it whenever
+    another application has the newer user time -- i.e. nearly always for a
+    wallpaper. `x11_restack(lib, dpy, win)` sends the first.
+  - **DING lowers itself to the bottom of the desktop layer whenever any
+    window maps or closes** (`emulateX11WindowType.js`: `map` and `destroy`
+    handlers, plus `lower()` on its own `raised`), so getting under it once is
+    lost at the next tooltip. Where `x11_stack_is_partial()` -- a Wayland
+    session -- the hold asks blind every `WP_HOLD_BLIND_EVERY` (0.5 s), which
+    costs nothing when nothing moved (`meta_stack_lower` returns early), and
+    at once when the pointer enters the window, since that only happens when
+    it is over the icons.
+  - **Measured against muffin in the rig** with the partial path forced
+    (`XDG_SESSION_TYPE=wayland`): under nemo-desktop with Caps Lock off, over
+    it with Caps Lock on, back under on off. DING itself cannot run in Xephyr,
+    so the GNOME half is the source reading above plus the user's machine.
+
+- **Caps Lock decides whose menu the desktop opens in wallpaper mode.** Off:
+  the desktop's own, icons on top. On: ours. On X11 that is the visualiser
+  held at the *top* of the desktop layer -- over the icons, under every window
+  -- so the click is its; under Wayland there is no other way for an X client
+  to receive a click on a Wayland window. On Windows a low-level mouse hook
+  (`_DesktopRightClick`, its own thread, installed only while Caps Lock is on)
+  takes the click from Explorer and leaves the icons alone. Caps Lock is read
+  off **`/sys/class/leds/*::capslock/brightness`** first: world-readable, and
+  the same on Xorg and Wayland, where the X server only hears about Caps Lock
+  while one of its windows has the keyboard. Two things that came with it:
+  the quit key does nothing in wallpaper mode (with Caps Lock on the window can
+  hold the keyboard, and an Escape meant for nothing ended the app in the rig),
+  and fullscreen, frame and always-on-top refuse with a toast, since each
+  would stop the window being the desktop.
+
+- **SDL drops a click that focuses its window.** Any button press within 10 ms
+  of a FocusIn is discarded unless `SDL_MOUSE_FOCUS_CLICKTHROUGH` is set -- so
+  the first right-click on an unfocused visualiser did nothing, and with Caps
+  Lock on the wallpaper, which is never focused until clicked, *every* first
+  right-click vanished and only the second opened the menu. Found in the rig
+  2 Oct 2026 by tracing `_right_click_is_ours`: the first click never reached
+  it, the second did. The hint is set in `_init_sdl`.
+
+- **SDL sends `RESIZED` only for sizes somebody else chose.** Its own
+  `SDL_SetWindowSize` produces `SIZE_CHANGED` alone ("We didn't get a
+  SDL_WINDOWEVENT_RESIZED event (by design)", SDL_video.c), so a handler on
+  `RESIZED` never heard about the wallpaper fit, or leaving wallpaper mode:
+  visual 1 was resized by `_fit_to_wallpaper`'s own call and visual 2 went on
+  drawing at the old window size into the corner of a target built for the
+  new one. The handler is on `SIZE_CHANGED`, which follows both.
+
+- **A block dropped into the request dispatch can capture the requests after
+  it.** 2.1.7's crossfader added the fader's save between two `if
+  self._req_...` blocks, at an indent that made the next two -- the focus swap
+  and the code editor's "play this" -- its children. Tab, "Adjust the other
+  visual" and the editor's apply then ran only in the pass where a fader move
+  finished saving, for two releases, with no suite noticing because every
+  suite calls `_do_set_focus` directly. `test_dual.every_request_is_dispatched_
+  under_the_lock` walks `Renderer.run`'s AST and fails on any `if
+  self._req_...` that is not a direct child of the locked block.
+
+- **The right-click menu's categories are built after the menu, not into it.**
+  `_build` records where each entry's rows begin (`spans`); `_group` then moves
+  every row of a categorised entry into that category's submenu, inserted where
+  its first entry was. The builders know nothing about categories, so a new
+  entry needs nothing extra -- but every *unkeyed* row (Customize, Quit) must
+  close the span before it, or it is filed under the entry above. That
+  happened: About opens a span after Customize, and Quit went into whatever
+  category held About until `spans.append((None, ...))` went in before it.
+  `config["menu_groups"]` is `[{"name", "items"}]`, read through
+  `menu_groups()`, which drops unknown keys, duplicates and nameless entries.
+
+- **A menu row that stays open has to ignore a release it did not see
+  pressed.** `_MenuStaysOpen` triggers kept rows itself and eats the release
+  so QMenu does not close. QMenu ignores a release with no press in the same
+  menu, and the filter must too: the menu opens on the right button's
+  *press*, and its release would otherwise fire whatever row is under the
+  pointer. Rows opt in through `keep_menu_open()` -- an allowlist, so a new row
+  that opens a dialog closes the menu by default instead of leaving a popup
+  grab over a modal. A row whose text names a state (lock, the focus line)
+  flips its own text when clicked.
+
+- **A kept shuffle is a file, not a flag.** `shuffle.json` in the data
+  directory holds the order (relative to the preset folder) and exists only
+  while shuffle is on; `shuffle_at` in config.json is the place, written on
+  every preset change so a crash loses one preset. Not `config["shuffle"]`:
+  configs that went through older builds carry `"shuffle": true` meaning
+  something else -- the user's own repo config does -- and reading it as "a
+  kept order exists" printed a missing-file error on every launch. A preset
+  gone since is dropped, new ones go on the end shuffled, and a different
+  preset folder ignores the file. Only visual 1 moves the bookmark.
 
 See PORTING.md for port status and the Windows setup recipe.

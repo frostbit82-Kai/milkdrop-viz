@@ -3107,7 +3107,8 @@ for _mod, _names in (
                  "QFileDialog", "QSlider", "QWidget", "QWidgetAction",
                  "QListWidget", "QListWidgetItem", "QAbstractItemView",
                  "QProgressBar", "QSystemTrayIcon", "QInputDialog",
-                 "QTabWidget", "QScrollArea", "QPlainTextEdit")),
+                 "QTabWidget", "QScrollArea", "QPlainTextEdit",
+                 "QGridLayout")),
 ):
     for _n in _names:
         globals()[_n] = getattr(_mod, _n)
@@ -4328,8 +4329,8 @@ ACTION_NOTES = {
     "lock":             "Stops the timer; next / previous still work",
     "rate_down":        "Rating 0 excludes preset from random rotation",
     "record":           "Needs ffmpeg; clips land in the clips folder",
-    "toggle_wallpaper": "Leave it again from the tray icon — a desktop "
-                        "window gets no keys",
+    "toggle_wallpaper": "With Caps Lock on, right-click the desktop for the "
+                        "menu. The tray icon works too",
     "exclude":          "Hides it from rotation. Nothing is deleted",
     "snapshot":         "Replaces the picture the browser already has",
     "toggle_visual1":   "One of the two always stays on",
@@ -5055,17 +5056,103 @@ MENU_ENTRIES = (
 )
 
 
+def menu_groups(cfg: dict) -> list:
+    """The user's right-click categories as [(name, {keys})], in their order.
+
+    Stored as `menu_groups`: [{"name": "Player", "items": ["next", ...]}].
+    Read defensively, because it is a hand-editable file: a key that is not
+    an entry, or one already claimed by an earlier category, is dropped, and
+    so is a category with no name. Customize and Quit are never in a
+    category -- they are not entries at all (see MENU_ENTRIES).
+    """
+    known = {k for k, _l, _a in MENU_ENTRIES}
+    out, taken = [], set()
+    for g in cfg.get("menu_groups") or ():
+        try:
+            name = str(g.get("name", "")).strip()
+            keys = [k for k in g.get("items") or () if k in known
+                    and k not in taken]
+        except AttributeError:
+            continue
+        if name:
+            taken.update(keys)
+            out.append((name, set(keys)))
+    return out
+
+
+#: The dynamic property that marks a menu row as one to stay open on.
+_KEEP_OPEN = "bomsai_keep_open"
+
+
+def keep_menu_open(act):
+    """Mark a row the menu should stay open on, and hand it back.
+
+    The rows you press again and again -- next, previous, random, the sort
+    and lock and collection picks -- rather than the ones that open a window
+    or change the window itself, which still close it: a dialog under an
+    open popup cannot be clicked, and a menu left floating over a window
+    that just went fullscreen is somewhere it no longer belongs.
+    """
+    act.setProperty(_KEEP_OPEN, True)
+    return act
+
+
+class _MenuStaysOpen(QObject):
+    """Trigger a kept-open row without letting the menu close. Asked for on
+    2 Oct 2026: "would like menu to stay open when clicking on items".
+
+    QMenu closes the whole chain from its own mouseReleaseEvent, so the
+    release is caught first and the row triggered here instead. Only a
+    release that follows a press *in that same menu* counts -- QMenu has the
+    same rule, and without it the release of the right-click that opened the
+    menu lands on whatever row is under the pointer and fires it.
+    """
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._pressed = None
+
+    def eventFilter(self, menu, ev):
+        t = ev.type()
+        if t == QEvent.Type.MouseButtonPress:
+            self._pressed = menu
+            return False
+        if t == QEvent.Type.MouseButtonRelease:
+            pressed, self._pressed = self._pressed, None
+            if pressed is not menu:
+                return False
+            act = menu.actionAt(ev.position().toPoint())
+        elif t == QEvent.Type.KeyPress and ev.key() in (
+                Qt.Key.Key_Return, Qt.Key.Key_Enter):
+            act = menu.activeAction()
+        else:
+            return False
+        if (act is None or not act.isEnabled() or act.menu() is not None
+                or not act.property(_KEEP_OPEN)):
+            return False
+        act.trigger()
+        return True
+
+
 class MenuCustomiseDialog(QDialog):
-    """Which right-click entries to show.
+    """Which right-click entries to show, and which category each sits in.
 
     The menu has grown past a comfortable screenful, and nearly every line on
-    it is also a key -- so the useful thing to offer is not reordering but
-    switching off what you already have a key for. Each row carries its key
-    for exactly that reason: it is the answer to "can I lose this one?".
+    it is also a key -- so the useful thing to offer is switching off what you
+    already have a key for. Each row carries its key for exactly that reason:
+    it is the answer to "can I lose this one?".
+
+    Categories came second, asked for on 2 Oct 2026 from a low-resolution
+    install where the full menu is taller than the screen and Qt draws it in
+    two columns: any number of named categories, each a submenu that opens on
+    hover, and each entry either in one of them or on the menu itself.
 
     Hidden entries are stored, rather than shown ones, so that an entry added
     in a later version arrives visible instead of vanishing on an old config.
     """
+
+    #: What the "where" box calls the menu itself.
+    TOP = "Main menu"
 
     def __init__(self, cfg: dict, keymaps: dict, parent=None):
         super().__init__(parent)
@@ -5075,52 +5162,186 @@ class MenuCustomiseDialog(QDialog):
         keys = dict(DEFAULT_KEYMAPS)
         keys.update(keymaps or {})
 
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(16, 16, 16, 16)
-        layout.setSpacing(10)
+        #: [[uid, name]] in the user's order. A uid rather than the name, so a
+        #: rename does not lose track of which entries were in it.
+        self._cats = []
+        where = {}
+        for name, members in menu_groups(cfg):
+            uid = len(self._cats) + 1
+            self._cats.append([uid, name])
+            for k in members:
+                where[k] = uid
+
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(16, 16, 16, 16)
+        outer.setSpacing(10)
 
         info = QLabel(
-            "Tick what the right-click menu shows. Nothing is lost by clearing "
-            "one — an entry with a key still answers that key, and this dialog "
-            "stays on the menu whatever else is off."
+            "Tick what the right-click menu shows, and pick where each entry "
+            "goes: the menu itself, or a category of your own that opens on "
+            "hover. Nothing is lost by clearing one — an entry with a key "
+            "still answers that key, and this dialog stays on the menu "
+            "whatever else is off."
         )
         info.setWordWrap(True)
         info.setStyleSheet(f"color: {theme_colour('muted')}; font-size: 12px;")
-        layout.addWidget(info)
+        outer.addWidget(info)
 
-        # Two columns rather than one long list: twenty-three rows in a column
-        # is a dialog taller than some of the screens this runs on.
-        columns = QHBoxLayout()
-        columns.setSpacing(24)
+        cat_row = QHBoxLayout()
+        cat_row.setSpacing(8)
+        self._cat_list = QListWidget()
+        self._cat_list.setMaximumHeight(96)
+        self._cat_list.setToolTip("Double-click a category to rename it.")
+        for uid, name in self._cats:
+            self._add_cat_item(uid, name)
+        self._cat_list.itemChanged.connect(self._renamed)
+        cat_btns = QVBoxLayout()
+        add = QPushButton("New category")
+        add.setAutoDefault(False)
+        add.clicked.connect(self._new_category)
+        self._rm = QPushButton("Remove")
+        self._rm.setAutoDefault(False)
+        self._rm.clicked.connect(self._remove_category)
+        cat_btns.addWidget(add)
+        cat_btns.addWidget(self._rm)
+        cat_btns.addStretch()
+        cat_col = QVBoxLayout()
+        cat_col.setSpacing(4)
+        cat_col.addWidget(QLabel("Categories  (double-click one to rename it)"))
+        cat_col.addWidget(self._cat_list)
+        cat_row.addLayout(cat_col, 1)
+        cat_row.addLayout(cat_btns)
+        outer.addLayout(cat_row)
+
+        # Two columns rather than one long list: twenty-four rows in a column
+        # is a dialog taller than some of the screens this runs on. In a
+        # scroll area as well, for the screens where even two is too tall --
+        # the same reason Settings has one.
+        grid_host = QWidget()
+        grid = QGridLayout(grid_host)
+        grid.setContentsMargins(0, 0, 0, 0)
+        grid.setHorizontalSpacing(8)
+        grid.setVerticalSpacing(6)
+        grid.setColumnMinimumWidth(2, 24)
         half = (len(MENU_ENTRIES) + 1) // 2
-        self._boxes = {}
-        for start, end in ((0, half), (half, len(MENU_ENTRIES))):
-            col = QVBoxLayout()
-            col.setSpacing(6)
-            for key, label, action in MENU_ENTRIES[start:end]:
-                stroke = keys.get(action, "") if action else ""
-                box = QCheckBox(f"{label}    ({stroke})" if stroke else label)
-                box.setChecked(key not in hidden)
-                self._boxes[key] = box
-                col.addWidget(box)
-            col.addStretch()
-            columns.addLayout(col)
-        layout.addLayout(columns)
+        self._boxes, self._where = {}, {}
+        for i, (key, label, action) in enumerate(MENU_ENTRIES):
+            stroke = keys.get(action, "") if action else ""
+            box = QCheckBox(f"{label}    ({stroke})" if stroke else label)
+            box.setChecked(key not in hidden)
+            combo = QComboBox()
+            self._fill(combo, where.get(key, 0))
+            combo.setEnabled(box.isChecked())
+            box.toggled.connect(combo.setEnabled)
+            self._boxes[key], self._where[key] = box, combo
+            row, col = (i, 0) if i < half else (i - half, 3)
+            grid.addWidget(box, row, col)
+            grid.addWidget(combo, row, col + 1)
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.Shape.NoFrame)
+        scroll.setWidget(grid_host)
+        outer.addWidget(scroll, 1)
 
         btn_row = QHBoxLayout()
         show_all = QPushButton("Show everything")
+        show_all.setAutoDefault(False)
         show_all.clicked.connect(self._show_everything)
         btn_row.addWidget(show_all)
         btn_row.addStretch()
-        layout.addLayout(btn_row)
-
         btns = QDialogButtonBox(
             QDialogButtonBox.StandardButton.Ok |
             QDialogButtonBox.StandardButton.Cancel
         )
         btns.accepted.connect(self.accept)
         btns.rejected.connect(self.reject)
-        layout.addWidget(btns)
+        btn_row.addWidget(btns)
+        outer.addLayout(btn_row)
+        self._sync_remove()
+        self._cat_list.currentRowChanged.connect(lambda _r: self._sync_remove())
+
+        # Sized off the rows, not off the scroll area -- whose own hint ignores
+        # how big its widget wants to be -- and with the layout activated
+        # first. Both are traps Settings paid for; see the note there.
+        outer.activate()
+        need = grid_host.minimumSizeHint()
+        rest = outer.sizeHint().height() - scroll.sizeHint().height()
+        wide = need.width() + 32 + scroll.verticalScrollBar().sizeHint().width()
+        tall = need.height() + rest
+        self.setMinimumWidth(wide)
+        self.resize(wide, min(tall, max(320,
+                                        SettingsDialog._screen_height(self) - 80)))
+
+    # ── categories ────────────────────────────────────────────────────
+
+    def _add_cat_item(self, uid: int, name: str):
+        item = QListWidgetItem(name)
+        item.setData(Qt.ItemDataRole.UserRole, uid)
+        item.setFlags(item.flags() | Qt.ItemFlag.ItemIsEditable)
+        self._cat_list.addItem(item)
+        return item
+
+    def _fill(self, combo, uid: int):
+        """The "where" choices, with `uid` selected (0 is the menu itself)."""
+        combo.blockSignals(True)
+        combo.clear()
+        combo.addItem(self.TOP, 0)
+        for cat_uid, name in self._cats:
+            combo.addItem(name, cat_uid)
+        combo.setCurrentIndex(max(0, combo.findData(uid)))
+        combo.blockSignals(False)
+
+    def _name_free(self, name: str, uid: int = 0) -> bool:
+        return bool(name) and not any(
+            n.lower() == name.lower() and u != uid for u, n in self._cats)
+
+    def _new_category(self):
+        n, name = 1, "New category"
+        while not self._name_free(name):
+            n += 1
+            name = f"New category {n}"
+        uid = max((u for u, _n in self._cats), default=0) + 1
+        self._cats.append([uid, name])
+        for combo in self._where.values():
+            combo.addItem(name, uid)
+        self._cat_list.blockSignals(True)
+        item = self._add_cat_item(uid, name)
+        self._cat_list.blockSignals(False)
+        self._cat_list.setCurrentItem(item)
+        self._cat_list.editItem(item)         # straight into naming it
+
+    def _renamed(self, item):
+        uid = item.data(Qt.ItemDataRole.UserRole)
+        new = item.text().strip()
+        cat = next(c for c in self._cats if c[0] == uid)
+        if not self._name_free(new, uid):
+            # Empty, or the name of another category -- two submenus called
+            # the same thing is a menu nobody can read. Put the old one back.
+            self._cat_list.blockSignals(True)
+            item.setText(cat[1])
+            self._cat_list.blockSignals(False)
+            return
+        cat[1] = new
+        for combo in self._where.values():
+            combo.setItemText(combo.findData(uid), new)
+
+    def _remove_category(self):
+        item = self._cat_list.currentItem()
+        if item is None:
+            return
+        uid = item.data(Qt.ItemDataRole.UserRole)
+        self._cats = [c for c in self._cats if c[0] != uid]
+        # Its entries go back on the menu itself rather than out of sight.
+        for combo in self._where.values():
+            keep = combo.currentData()
+            self._fill(combo, 0 if keep == uid else keep)
+        self._cat_list.takeItem(self._cat_list.row(item))
+        self._sync_remove()
+
+    def _sync_remove(self):
+        self._rm.setEnabled(self._cat_list.currentItem() is not None)
+
+    # ── answers ───────────────────────────────────────────────────────
 
     def _show_everything(self):
         for box in self._boxes.values():
@@ -5130,6 +5351,14 @@ class MenuCustomiseDialog(QDialog):
         """The keys to leave out, in menu order."""
         return [k for k, _label, _action in MENU_ENTRIES
                 if not self._boxes[k].isChecked()]
+
+    def groups(self) -> list:
+        """config["menu_groups"]: every category in order, empty ones too --
+        a category made and not filled yet is still one the user made."""
+        return [{"name": name,
+                 "items": [k for k, _l, _a in MENU_ENTRIES
+                           if self._where[k].currentData() == uid]}
+                for uid, name in self._cats]
 
 
 class ContextMenu(QMenu):
@@ -5169,28 +5398,40 @@ class ContextMenu(QMenu):
         """
         return key not in self._hidden
 
+    #: The lock row's two faces. Flipped in place on a click, because the
+    #: menu stays open across it now (see keep_menu_open).
+    _LOCK_TEXT = ("\U0001f513  Lock visual", "\U0001f512  Unlock visual")
+
     def _build(self):
         self._hidden = set(self._cfg.get("menu_hidden") or ())
         locked = self._renderer.is_locked()
-        on = self._shown
+        #: (entry key, index of its first row). An entry's rows run up to the
+        #: next entry's first one, which is how _group finds them to move into
+        #: a category -- without each builder below having to know.
+        spans = []
 
+        def on(key):
+            spans.append((key, len(self.actions())))
+            return self._shown(key)
+
+        K = keep_menu_open
         if on("next"):
-            self.addAction("▶   Next visual",      lambda: self._renderer.request_next())
+            K(self.addAction("▶   Next visual",      lambda: self._renderer.request_next()))
         if on("prev"):
-            self.addAction("◀   Previous visual",  lambda: self._renderer.request_prev())
+            K(self.addAction("◀   Previous visual",  lambda: self._renderer.request_prev()))
         if on("random"):
-            self.addAction("⟳   Random visual",    lambda: self._renderer.request_random())
+            K(self.addAction("⟳   Random visual",    lambda: self._renderer.request_random()))
         self.addSeparator()
 
         if on("browser"):
             self.addAction("🗂   Preset browser",   lambda: self._renderer.request_toggle_browser())
         if on("sort_name"):
-            self.addAction("↕   Sort by name",     lambda: self._renderer.request_sort("name"))
+            K(self.addAction("↕   Sort by name",     lambda: self._renderer.request_sort("name")))
         if on("sort_rating"):
-            self.addAction("★   Sort by rating",   lambda: self._renderer.request_sort("rating"))
+            K(self.addAction("★   Sort by rating",   lambda: self._renderer.request_sort("rating")))
         if on("exclude"):
-            self.addAction("🚫   Exclude this visual (0★)",
-                           lambda: self._renderer.request_exclude())
+            K(self.addAction("🚫   Exclude this visual (0★)",
+                             lambda: self._renderer.request_exclude()))
         if on("delete_zero"):
             self.addAction("🗑   Delete 0★ presets…", self._confirm_delete_zero)
         if on("reset_ratings"):
@@ -5200,8 +5441,10 @@ class ContextMenu(QMenu):
         self.addSeparator()
 
         if on("lock"):
-            lock_text = "\U0001f512  Unlock visual" if locked else "\U0001f513  Lock visual"
-            self.addAction(lock_text, lambda: self._renderer.request_toggle_lock())
+            lock = K(self.addAction(self._LOCK_TEXT[bool(locked)],
+                                    lambda: self._renderer.request_toggle_lock()))
+            lock.triggered.connect(lambda: lock.setText(
+                self._LOCK_TEXT[lock.text() == self._LOCK_TEXT[0]]))
         if on("dual"):
             self._build_dual_menu()
         self.addSeparator()
@@ -5243,14 +5486,53 @@ class ContextMenu(QMenu):
         if on("settings"):
             self.addAction("⚙   Settings…",        self._open_settings)
         # Not hideable, and deliberately the entry above About: it is the only
-        # way back for anyone who switches everything else off.
+        # way back for anyone who switches everything else off. Not in any
+        # category either, for the same reason: the span closes here.
+        spans.append((None, len(self.actions())))
         self.addAction("🎛   Customize menu…",   self._open_customize)
         if on("about"):
             self.addAction("ℹ   About…",           self._open_about)
         self.addSeparator()
 
+        spans.append((None, len(self.actions())))      # nor is Quit
         self.addAction("✕   Quit",             QApplication.quit)
+        self._group(spans)
         self._tidy_separators()
+        # On every menu in the tree, categories and submenus included: the
+        # rows you would press twice are in them too.
+        self._stays_open = _MenuStaysOpen(self)
+        for menu in [self] + self.findChildren(QMenu):
+            menu.installEventFilter(self._stays_open)
+
+    def _group(self, spans):
+        """Move each category's entries into a submenu of its own.
+
+        Asked for on 2 Oct 2026: on a low-resolution screen the full menu is
+        taller than the display and Qt lays it out in two columns. A category
+        sits where its first entry would have been, and keeps its entries in
+        menu order. An entry with nothing to show (hidden, or not available
+        here) leaves its category; a category left with nothing is not drawn.
+        """
+        rows = self.actions()
+        owner = [None] * len(rows)
+        for i, (key, start) in enumerate(spans):
+            end = spans[i + 1][1] if i + 1 < len(spans) else len(rows)
+            for j in range(start, end):
+                if not rows[j].isSeparator():
+                    owner[j] = key
+        for name, keys in menu_groups(self._cfg):
+            members = [rows[j] for j in range(len(rows)) if owner[j] in keys]
+            if not members:
+                continue
+            # A lone "&" is a mnemonic marker to Qt and vanishes from the
+            # label -- the Backup menu once read "Back up ratings _collections".
+            sub = QMenu("\u25b8   " + name.replace("&", "&&"), self)
+            sub.setStyleSheet(self.styleSheet())
+            sub.setToolTipsVisible(True)
+            self.insertMenu(members[0], sub)
+            for act in members:
+                self.removeAction(act)
+                sub.addAction(act)
 
     def _tidy_separators(self):
         """Drop the rules that have nothing left on one side of them.
@@ -5307,10 +5589,20 @@ class ContextMenu(QMenu):
 
         if not self._renderer.dual_on():
             return
-        which = self._renderer.focus()
-        self.addAction("\u21c4   Adjust the first visual" if which
-                       else "\u21c4   Adjust the second visual",
-                       lambda: self._renderer.request_focus(1 - which))
+        # A toggle of its own rather than a fixed jump: the menu stays open
+        # across it, so a second click has to go back again.
+        focus = [self._renderer.focus()]
+        names = ("\u21c4   Adjust the second visual",
+                 "\u21c4   Adjust the first visual")
+        act = keep_menu_open(QAction(names[focus[0]], self))
+
+        def swap():
+            focus[0] = 1 - focus[0]
+            self._renderer.request_focus(focus[0])
+            act.setText(names[focus[0]])
+
+        act.triggered.connect(swap)
+        self.addAction(act)
 
     def _build_crossfade_row(self, live: bool):
         """The fader, in the menu rather than behind Settings.
@@ -5557,7 +5849,7 @@ class ContextMenu(QMenu):
         group = QActionGroup(sub)
         group.setExclusive(True)
         for name, label in [("", "All presets")] + [(n, n) for n in names]:
-            act = QAction(label, sub)
+            act = keep_menu_open(QAction(label, sub))
             act.setCheckable(True)
             act.setChecked(name == active)
             act.triggered.connect(
@@ -5767,8 +6059,9 @@ class ContextMenu(QMenu):
             devices, labels = [], {}
         for name in [""] + devices:
             text = labels.get(name, name)
-            act = QAction(text[:52] + ("…" if len(text) > 52 else "")
-                          if name else AudioCapture.AUTO_LABEL, sub)
+            act = keep_menu_open(QAction(
+                text[:52] + ("…" if len(text) > 52 else "")
+                if name else AudioCapture.AUTO_LABEL, sub))
             act.setToolTip(name)
             act.setCheckable(True)
             act.setChecked(name == current)
@@ -5947,6 +6240,7 @@ class ContextMenu(QMenu):
         dlg = MenuCustomiseDialog(self._cfg, self._keymaps)
         if dlg.exec() == QDialog.DialogCode.Accepted:
             self._cfg["menu_hidden"] = dlg.hidden()
+            self._cfg["menu_groups"] = dlg.groups()
             self._renderer._save_config(self._cfg)
 
     def _open_keymaps(self):
@@ -6520,6 +6814,202 @@ def wallpaper_box(displays, want, overhang=0):
             w + 2 * overhang, h + 2 * overhang)
 
 
+#: Where Linux publishes the keyboard LEDs. World-readable, and the same file
+#: whichever display server is running, which is the point: under Wayland the
+#: X server only hears about Caps Lock while one of its own windows has the
+#: keyboard, so asking X from a window behind the desktop gets a stale answer.
+_CAPS_LEDS = "/sys/class/leds/*::capslock/brightness"
+_X11_LOCK_MASK = 1 << 1
+
+
+def caps_lock_on(x11_display=None, leds=_CAPS_LEDS):
+    """Is Caps Lock on? True or False, or None when it cannot be told.
+
+    In wallpaper mode Caps Lock decides whose menu a right-click on the
+    desktop opens: off, the desktop's own; on, the visualiser's. Read from the
+    LED first on Linux (any keyboard lit counts), then from the X server's
+    lock modifier, which is right on Xorg and only maybe right under Wayland.
+    Windows answers through GetKeyState's toggle bit.
+    """
+    if sys.platform == "win32":
+        try:
+            return bool(ctypes.windll.user32.GetKeyState(0x14) & 1)
+        except Exception:                                # noqa: BLE001
+            return None
+    import glob
+    seen = None
+    for path in glob.glob(leds):
+        try:
+            with open(path, encoding="ascii") as f:
+                if int(f.read().strip() or 0) > 0:
+                    return True
+            seen = False
+        except (OSError, ValueError):
+            continue
+    if seen is not None or not x11_display:
+        return seen
+    try:
+        lib = _libx11()
+        u, c, n = ctypes.c_ulong(), ctypes.c_int(), ctypes.c_uint()
+        if lib.XQueryPointer(x11_display, lib.XDefaultRootWindow(x11_display),
+                             ctypes.byref(u), ctypes.byref(u),
+                             ctypes.byref(c), ctypes.byref(c),
+                             ctypes.byref(c), ctypes.byref(c),
+                             ctypes.byref(n)):
+            return bool(n.value & _X11_LOCK_MASK)
+    except Exception:                                    # noqa: BLE001
+        pass
+    return None
+
+
+def is_desktop_window_class(name: str) -> bool:
+    """Is a top-level window of this class Explorer's desktop? Windows.
+
+    The icons sit in SHELLDLL_DefView, whose top-level ancestor is Progman on
+    Windows 11 and a WorkerW on 7 to 10 (see pick_desktop_host). Anything
+    else under the pointer is somebody's window, and their right-click is
+    theirs.
+    """
+    return name in ("Progman", "WorkerW")
+
+
+class _DesktopRightClick:
+    """Windows: a right-click on the desktop opens the visualiser's menu.
+
+    Only while Caps Lock is on, and only in wallpaper mode -- the renderer
+    starts and stops it. The visualiser sits behind the icons, so the click
+    is Explorer's and never reaches our window; a low-level mouse hook sees
+    it first, keeps it from Explorer, and asks for our menu instead.
+
+    The hook has a thread of its own, because Windows calls a low-level hook
+    through the installing thread's message loop and drops the hook if that
+    thread is slow to answer -- neither the render thread nor the Qt thread
+    can promise to pump all the time. It is installed only while Caps Lock is
+    on, so the whole system's mouse is not run through Python for the life of
+    a wallpaper. Not exercised by any suite: this needs a Windows desktop.
+    """
+
+    _WH_MOUSE_LL, _HC_ACTION, _GA_ROOT = 14, 0, 2
+    _WM_RBUTTONDOWN, _WM_RBUTTONUP, _WM_QUIT = 0x0204, 0x0205, 0x0012
+
+    def __init__(self, on_click):
+        self._on_click = on_click
+        self._thread = None
+        self._tid = 0
+        self._armed = False
+
+    def start(self):
+        if self._thread is not None:
+            return
+        ready = threading.Event()
+        self._thread = threading.Thread(target=self._run, args=(ready,),
+                                        name="desktop-rclick", daemon=True)
+        self._thread.start()
+        ready.wait(2.0)
+
+    def stop(self):
+        if self._tid:
+            ctypes.windll.user32.PostThreadMessageW(self._tid, self._WM_QUIT,
+                                                    0, 0)
+        self._thread, self._tid, self._armed = None, 0, False
+
+    def _run(self, ready):
+        from ctypes import wintypes as wt
+        u = ctypes.WinDLL("user32", use_last_error=True)
+        k = ctypes.WinDLL("kernel32", use_last_error=True)
+
+        class MSLL(ctypes.Structure):
+            _fields_ = [("pt", wt.POINT), ("mouseData", wt.DWORD),
+                        ("flags", wt.DWORD), ("time", wt.DWORD),
+                        ("extra", ctypes.c_size_t)]
+
+        proc_t = ctypes.WINFUNCTYPE(wt.LPARAM, ctypes.c_int, wt.WPARAM,
+                                    wt.LPARAM)
+        u.CallNextHookEx.restype = wt.LPARAM
+        u.CallNextHookEx.argtypes = (ctypes.c_void_p, ctypes.c_int,
+                                     wt.WPARAM, wt.LPARAM)
+        u.SetWindowsHookExW.restype = ctypes.c_void_p
+        u.SetWindowsHookExW.argtypes = (ctypes.c_int, proc_t, ctypes.c_void_p,
+                                        wt.DWORD)
+        u.UnhookWindowsHookEx.argtypes = (ctypes.c_void_p,)
+        u.WindowFromPoint.restype = ctypes.c_void_p
+        u.WindowFromPoint.argtypes = (wt.POINT,)
+        u.GetAncestor.restype = ctypes.c_void_p
+        u.GetAncestor.argtypes = (ctypes.c_void_p, ctypes.c_uint)
+        u.GetClassNameW.argtypes = (ctypes.c_void_p, ctypes.c_wchar_p,
+                                    ctypes.c_int)
+        k.GetModuleHandleW.restype = ctypes.c_void_p
+        name = ctypes.create_unicode_buffer(64)
+
+        def over_desktop(pt) -> bool:
+            top = u.GetAncestor(u.WindowFromPoint(pt), self._GA_ROOT)
+            return bool(top) and u.GetClassNameW(top, name, 64) > 0 and \
+                is_desktop_window_class(name.value)
+
+        def hook(code, wparam, lparam):
+            # Short and allocation-free on purpose: every mouse event on the
+            # machine passes through here while it is installed. Down and up
+            # are both kept from Explorer, or it sees half a click.
+            if code == self._HC_ACTION:
+                if wparam == self._WM_RBUTTONDOWN:
+                    info = ctypes.cast(lparam, ctypes.POINTER(MSLL)).contents
+                    self._armed = over_desktop(info.pt)
+                    if self._armed:
+                        return 1
+                elif wparam == self._WM_RBUTTONUP and self._armed:
+                    self._armed = False
+                    self._on_click()
+                    return 1
+            return u.CallNextHookEx(None, code, wparam, lparam)
+
+        self._proc = proc_t(hook)            # kept, or ctypes frees it under us
+        msg = wt.MSG()
+        u.PeekMessageW(ctypes.byref(msg), None, 0, 0, 0)   # make the queue
+        handle = u.SetWindowsHookExW(self._WH_MOUSE_LL, self._proc,
+                                     k.GetModuleHandleW(None), 0)
+        self._tid = k.GetCurrentThreadId()
+        ready.set()
+        if not handle:
+            print(f"[wallpaper] no desktop right-click hook "
+                  f"(error {ctypes.get_last_error()})", flush=True)
+            return
+        try:
+            while u.GetMessageW(ctypes.byref(msg), None, 0, 0) > 0:
+                pass
+        finally:
+            u.UnhookWindowsHookEx(handle)
+
+
+#: How long the render loop has to run without a slow pass before it becomes
+#: the wallpaper, and the longest it is ever kept waiting.
+WP_SETTLE_S, WP_SETTLE_CAP_S = 2.0, 20.0
+
+
+def wallpaper_may_start(now, started, slow_at, quiet=WP_SETTLE_S,
+                        cap=WP_SETTLE_CAP_S):
+    """May the visualiser become the wallpaper yet? All times monotonic.
+
+    Not in the first seconds. Reported 2 Oct 2026: wallpaper mode asked for
+    straight after launch froze the app and sometimes the desktop with it,
+    and the same request a little later worked. The journal of the box it was
+    reported from (Radeon HD 7870, amdgpu, GNOME on Wayland) has the second
+    half in full: a GPU page fault 16 seconds after launch, a ring timeout
+    naming this app's command-submission thread, a GPU reset with VRAM lost --
+    and gnome-shell aborting on the lost context, which ended the session.
+    Startup is the busiest the GPU ever is here -- two projectM instances
+    built, their first shaders compiled, every texture directory scanned --
+    and the switch then unmaps, resizes and remaps the GL window and makes
+    projectM reallocate everything at the new size, on top of all of it.
+
+    So the switch waits for `quiet` seconds of ordinary passes, which is
+    exactly what waiting a bit by hand did. `cap` stops a machine where every
+    pass is slow (llvmpipe at 3 fps) from waiting for ever.
+    """
+    if now - started >= cap:
+        return True
+    return now - started >= quiet and now - slow_at >= quiet
+
+
 # ─── desktop wallpaper (X11) ──────────────────────────────────────────────────
 
 #: EWMH is the whole of what X11 offers here. A window whose _NET_WM_WINDOW_TYPE
@@ -6598,6 +7088,9 @@ def _libx11():
                                  ctypes.POINTER(ctypes.c_uint),
                                  ctypes.POINTER(ctypes.c_uint),
                                  ctypes.POINTER(ctypes.c_uint)]
+    lib.XQueryPointer.argtypes = [ptr, ulong, ctypes.POINTER(ulong),
+                                  ctypes.POINTER(ulong)] + \
+        [ctypes.POINTER(i)] * 4 + [ctypes.POINTER(ctypes.c_uint)]
     lib.XSendEvent.restype = i
     lib.XSendEvent.argtypes = [ptr, ulong, i, ctypes.c_long,
                                ctypes.POINTER(_XEvent)]
@@ -6831,13 +7324,26 @@ def nemo_allow_desktop_window(wm_class: str, run=None) -> str:
             f"({_NEMO_SCHEMA} {_NEMO_KEY})")
 
 
-def x11_restack_below(lib, dpy, win, sibling):
-    """Ask the window manager to put `win` directly below `sibling`.
+#: _NET_RESTACK_WINDOW's detail field, which is the X stack mode.
+_X11_ABOVE, _X11_BELOW = 0, 1
+
+
+def x11_restack(lib, dpy, win, sibling=0, detail=_X11_BELOW):
+    """Ask the window manager to put `win` directly below (or above) `sibling`
+    -- or, with no sibling, at the bottom (or top) of its own layer.
 
     XLowerWindow talks to the X server. A compositing window manager keeps its
     own stack and paints from that, so a raw lower is either undone on its
     next restack or simply never reaches the screen. `_NET_RESTACK_WINDOW` is
     the EWMH way to ask the window manager itself.
+
+    **The no-sibling form is the one that works against a window X cannot
+    see.** Read off mutter's `handle_net_restack_window`: from a pager (source
+    2) it goes straight to `meta_window_lower` / `meta_window_raise`, with no
+    focus-stealing check -- unlike a plain XLowerWindow, which mutter ignores
+    whenever another application has been used more recently. That matters
+    under Wayland, where the desktop icons can belong to a Wayland window
+    that has no X id to name as a sibling at all. See x11_stack_is_partial.
     """
     ev = _XEvent()
     ev.xclient.type = _X11_CLIENT_MESSAGE
@@ -6850,12 +7356,33 @@ def x11_restack_below(lib, dpy, win, sibling):
     ev.xclient.format = 32
     ev.xclient.data.l[0] = 2          # source indication: a pager, near enough
     ev.xclient.data.l[1] = sibling
-    ev.xclient.data.l[2] = 1          # Below
+    ev.xclient.data.l[2] = detail
     return bool(lib.XSendEvent(dpy, lib.XDefaultRootWindow(dpy), False,
                                _X11_WM_EVENT_MASK, ctypes.byref(ev)))
 
 
-def x11_lower_to_bottom(lib, dpy, win, timeout=1.0):
+def x11_stack_is_partial(env=None) -> bool:
+    """Can the window drawing the desktop icons be invisible to X11?
+
+    Under a Wayland compositor it can, and on Ubuntu's default desktop it is:
+    the icons are Desktop Icons NG, a native Wayland window with no X id, so
+    `_NET_CLIENT_LIST_STACKING` holds the visualiser and nothing it is
+    competing with. Measured 2 Oct 2026, GNOME 50 on Wayland: that list was a
+    single entry long, so the visualiser was "already at the bottom" of
+    everything it could see, nothing was ever lowered -- and mutter, which
+    puts a newly mapped window at the top of its layer, had it over every
+    icon. Reported as "desktop mode covers icons, but remains behind open
+    windows", which is exactly a desktop-layer window above the icon one.
+
+    Where this is True the stack cannot be measured, only asked for -- see
+    x11_restack and _hold_wallpaper_bottom.
+    """
+    env = os.environ if env is None else env
+    return bool(env.get("WAYLAND_DISPLAY")) or \
+        env.get("XDG_SESSION_TYPE", "").lower() == "wayland"
+
+
+def x11_lower_to_bottom(lib, dpy, win, timeout=1.0, partial=False):
     """Lower the window until it is below everything the desktop draws.
 
     One XLowerWindow straight after the map gets thrown away. A window manager
@@ -6884,8 +7411,17 @@ def x11_lower_to_bottom(lib, dpy, win, timeout=1.0):
 
     Falls back to the old behaviour where no client stack is published.
 
+    `partial` is x11_stack_is_partial(): the stack can hold everything X can
+    see and still not the icons, so being first in it proves nothing, and one
+    blind "bottom of your layer" goes to the window manager regardless. The
+    caller's hold repeats it, because whatever draws the icons may re-lower
+    itself afterwards -- Desktop Icons NG does, every time any window maps.
+
     Returns True if it got there.
     """
+    if partial:
+        x11_restack(lib, dpy, win)
+        lib.XSync(dpy, False)
     deadline = time.monotonic() + timeout
     stale, was = 0, -1
     while True:
@@ -6906,7 +7442,7 @@ def x11_lower_to_bottom(lib, dpy, win, timeout=1.0):
             if stale >= 3:
                 return False
             # EWMH takes the client window, not the frame.
-            x11_restack_below(lib, dpy, win, stack[0])
+            x11_restack(lib, dpy, win, stack[0])
         lib.XLowerWindow(dpy, top)     # for a window manager with no EWMH restack
         lib.XSync(dpy, False)
         if not stack and x11_bottom_child(lib, dpy) == top:
@@ -6963,6 +7499,28 @@ def wallpaper_support(env=None):
 
 def thumbs_dir() -> str:
     return os.path.join(user_data_dir(), "thumbs")
+
+
+def shuffle_path() -> str:
+    """Where a shuffled playlist order is kept between runs."""
+    return os.path.join(user_data_dir(), "shuffle.json")
+
+
+def restored_order(saved: list, on_disk: list, preset_dir: str,
+                   rng=None) -> list:
+    """Last run's shuffle, brought up to date with what is on disk now.
+
+    `saved` is relative to the preset folder, `on_disk` absolute. A preset
+    that has gone since is dropped -- delete-0★ removes files from inside
+    this very app -- and one that has arrived since goes on the end, in an
+    order of its own, rather than all landing at the front in folder order.
+    """
+    rng = rng or _random
+    by_rel = {os.path.relpath(p, preset_dir): p for p in on_disk}
+    kept = [by_rel.pop(r) for r in saved if r in by_rel]
+    new = list(by_rel.values())
+    rng.shuffle(new)
+    return kept + new
 
 
 def collections_path() -> str:
@@ -8200,7 +8758,20 @@ class Renderer:
         self._screensaver         = False
         self._ss_origin           = None    # first pointer position seen
         self._menu_open           = False   # host's context menu is on screen
+        #: Startup bookkeeping for wallpaper_may_start: when the loop began,
+        #: when its last slow pass was, and when this pass began.
+        self._loop_start = self._slow_at = self._loop_tick = _time.monotonic()
+        self._wp_wait_told = False
+        #: Wallpaper mode with Caps Lock on: the visualiser's menu answers a
+        #: right-click on the desktop instead of the desktop's own.
+        self._wp_front = False
+        self._caps_at = 0.0
+        #: True where the icon window may be invisible to X11 -- see
+        #: x11_stack_is_partial. Set on the way into wallpaper mode.
+        self._wp_partial = False
+        self._rclick = None        # _DesktopRightClick, Windows only
         self._shuffle             = False  # list order is as loaded
+        self._shuffled_paths      = []     # that order, when it is shuffled
         self._running             = False
         self._target_y            = None
 
@@ -8371,6 +8942,15 @@ class Renderer:
             sdl2.SDL_SetHint(b"SDL_VIDEO_X11_NET_WM_BYPASS_COMPOSITOR", b"1")
             sdl2.SDL_SetHint(b"SDL_VIDEODRIVER", b"x11")
 
+        # A click that focuses the window is a click, not just a focus. SDL
+        # drops any button press within 10 ms of the window gaining focus
+        # unless told otherwise, and a wallpaper is never focused until it is
+        # clicked -- so with Caps Lock on, the first right-click on the
+        # desktop vanished every time and only the second opened the menu.
+        # Measured in the rig on 2 Oct 2026 (muffin + nemo-desktop). The same
+        # was true of the first right-click on any unfocused window.
+        sdl2.SDL_SetHint(b"SDL_MOUSE_FOCUS_CLICKTHROUGH", b"1")
+
         flags = (sdl2.SDL_WINDOW_OPENGL |
                  sdl2.SDL_WINDOW_SHOWN  |
                  sdl2.SDL_WINDOW_RESIZABLE)
@@ -8504,6 +9084,8 @@ class Renderer:
         else:
             count = self._pm.load_preset_dir(preset_dir)
             print(f"[renderer] Loaded {count} presets from {preset_dir}")
+            if count:
+                self._restore_shuffle()
 
         if count == 0:
             # Nothing bundles presets, so this is the normal first run -- and
@@ -8905,6 +9487,7 @@ class Renderer:
         cur = self.current_preset_stem()
         self._rebuild_playlist([f for f, _ in files])
         self._shuffle = False
+        self._remember_shuffle()
         self._rated_history.clear()      # native indices changed
         self._seek_to_stem(cur)
         self._bridge.status_message.emit(
@@ -9222,6 +9805,9 @@ class Renderer:
         _fps_n = 0
 
         self._emit_current_preset()
+        # From here, not from __init__: everything above is startup too, and
+        # the wallpaper switch is held off until the loop has run smoothly.
+        self._loop_start = self._slow_at = self._loop_tick = _time.monotonic()
 
         while self._running:
 
@@ -9263,10 +9849,13 @@ class Renderer:
                 elif event.type == sdl2.SDL_MOUSEBUTTONDOWN:
                     btn = event.button.button
                     if btn == sdl2.SDL_BUTTON_RIGHT:
-                        # Forward to Qt host via stdout — host shows context menu
-                        print("RCLICK", flush=True)
-                        # Standalone: also open our own context menu locally.
-                        self.request_context_menu()
+                        if self._right_click_is_ours():
+                            # Forward to Qt host via stdout — host shows
+                            # context menu
+                            print("RCLICK", flush=True)
+                            # Standalone: also open our own context menu
+                            # locally.
+                            self.request_context_menu()
                     elif btn == sdl2.SDL_BUTTON_LEFT:
                         token = self._keymaps.get("fullscreen_mouse", "DBLCLICK")
                         if token.upper() == "DBLCLICK":
@@ -9278,13 +9867,30 @@ class Renderer:
                                 self._last_click = now
 
                 elif event.type == sdl2.SDL_WINDOWEVENT:
-                    if event.window.event == sdl2.SDL_WINDOWEVENT_RESIZED:
+                    # SIZE_CHANGED, not RESIZED. SDL sends RESIZED only for a
+                    # size somebody *else* chose -- the window manager, a
+                    # drag -- and deliberately not for its own
+                    # SDL_SetWindowSize ("We didn't get a RESIZED event (by
+                    # design)", SDL_video.c). SIZE_CHANGED follows both. So
+                    # every resize the app made itself -- the wallpaper fit,
+                    # leaving wallpaper mode -- reached visual 1 through
+                    # _fit_to_wallpaper's own call and never reached visual
+                    # 2, which went on drawing at the old window size into
+                    # the corner of a target sized for the new one.
+                    if event.window.event == sdl2.SDL_WINDOWEVENT_SIZE_CHANGED:
                         nw = event.window.data1
                         nh = event.window.data2
                         glViewport(0, 0, nw, nh)
                         for pm in self._pms:
                             if pm is not None:
                                 pm.set_window_size(nw, nh)
+                    elif (event.window.event == sdl2.SDL_WINDOWEVENT_ENTER
+                          and self._wallpaper and not self._wp_front):
+                        # The pointer can only reach a wallpaper that is over
+                        # the icons. Under Wayland that is how we hear the
+                        # icon window re-lowered itself, which nothing on the
+                        # X side reports -- so hold now, not in half a second.
+                        self._wp_hold_at = 0.0
                     # Any window event may have moved or resized us: this one
                     # branch covers moves, fullscreen, restore and maximise
                     # without a case for each.
@@ -9292,6 +9898,18 @@ class Renderer:
 
             if not self._running:
                 break
+
+            # ── How busy the loop still is ────────────────────────────────
+            # A pass that took longer than a frame should is startup still
+            # going on -- shaders compiling, a second visual being built,
+            # textures being scanned -- and the wallpaper switch waits until
+            # those have stopped. See wallpaper_may_start.
+            now = _time.monotonic()
+            if now - self._loop_tick > self.SLOW_PASS_S:
+                self._slow_at = now
+            self._loop_tick = now
+            settled = wallpaper_may_start(now, self._loop_start, self._slow_at)
+            wp_want = wp_where = None
 
             # ── Dispatch thread-safe requests ─────────────────────────────
             with self._lock:
@@ -9316,14 +9934,23 @@ class Renderer:
                 if self._req_fullscreen:
                     self._req_fullscreen = False
                     self._toggle_fullscreen()
-                if self._req_wallpaper is not None:
-                    want = self._req_wallpaper
-                    self._req_wallpaper = None
-                    self._set_wallpaper_mode(want)
-                if self._req_wp_display is not None:
-                    where = self._req_wp_display
-                    self._req_wp_display = None
-                    self._wallpaper_on_display(where)
+                # Taken off the queue here and acted on below, outside the
+                # lock: the switch waits on the window manager and on Explorer,
+                # and every request the Qt thread makes in the meantime would
+                # wait on it too.
+                if (self._req_wallpaper is not None
+                        or self._req_wp_display is not None):
+                    if settled:
+                        wp_want, self._req_wallpaper = self._req_wallpaper, None
+                        wp_where, self._req_wp_display = \
+                            self._req_wp_display, None
+                        self._wp_wait_told = False
+                    elif not self._wp_wait_told:
+                        self._wp_wait_told = True
+                        print("[wallpaper] waiting for startup to settle",
+                              flush=True)
+                        self._bridge.status_message.emit(
+                            "Wallpaper mode in a moment — still starting up")
                 if self._req_record is not None:
                     kind = self._req_record
                     self._req_record = None
@@ -9447,10 +10074,6 @@ class Renderer:
                     where = self._req_fullscreen_on
                     self._req_fullscreen_on = None
                     self._do_fullscreen_on(where)
-            if self._fade_dirty and \
-                    _time.monotonic() - self._fade_dirty > self.FADE_SETTLE_S:
-                self._fade_dirty = 0.0
-                self._save_config(self._cfg)
                 if self._req_focus is not None:
                     which = self._req_focus
                     self._req_focus = None
@@ -9459,6 +10082,20 @@ class Renderer:
                     text = self._req_preset_data
                     self._req_preset_data = None
                     self._do_load_preset_data(text)
+            # Below the dispatch, never inside it. 2.1.7 put this block in the
+            # middle of the list, and the two requests after it -- the focus
+            # swap and the editor's "play this" -- were then only seen in the
+            # pass where a fader move finished saving: Tab and "Adjust the
+            # other visual" did nothing unless the fader had just moved.
+            # test_dual.every_request_is_dispatched_under_the_lock holds this.
+            if self._fade_dirty and \
+                    _time.monotonic() - self._fade_dirty > self.FADE_SETTLE_S:
+                self._fade_dirty = 0.0
+                self._save_config(self._cfg)
+            if wp_want is not None:
+                self._set_wallpaper_mode(wp_want)
+            if wp_where is not None:
+                self._wallpaper_on_display(wp_where)
 
             # ── Wallpaper: stay at the bottom, and stay the right size ────
             # Above the idle pause, not below it. A wallpaper spends most of
@@ -9469,6 +10106,8 @@ class Renderer:
             # off the bottom edge while parked stayed there until sound came
             # back. One property read every two seconds is cheap enough to do
             # in a loop that is otherwise asleep.
+            if self._wallpaper:
+                self._follow_caps_lock()
             if self._wallpaper and sys.platform != "win32":
                 self._hold_wallpaper_bottom()
 
@@ -9601,7 +10240,12 @@ class Renderer:
     def _handle_key(self, sym: int, scancode: int):
         km = self._km
         if km("quit", sym, scancode):
-            self._running = False
+            # Not as the wallpaper. With Caps Lock on it can hold the
+            # keyboard, and an Escape meant for the desktop -- or for nothing
+            # in particular -- would end it with no way to tell what happened.
+            # The menu's Quit and the tray's still do.
+            if not self._wallpaper:
+                self._running = False
         elif km("next", sym, scancode):
             self._do_next(hard=True)
         elif km("prev", sym, scancode):
@@ -9625,9 +10269,9 @@ class Renderer:
         elif km("exclude", sym, scancode):
             self.request_exclude()
         elif km("toggle_wallpaper", sym, scancode):
-            # Only ever turns it on from here: once the window is a desktop
-            # child it gets no keyboard, so the key cannot toggle it back --
-            # the tray icon does that, same as the menu entry.
+            # Both ways on X11 now: with Caps Lock on the wallpaper sits over
+            # the icons and can take the keyboard. On Windows it never can, so
+            # the tray icon stays the way out there.
             self.request_wallpaper()
         elif km("fullscreen", sym, scancode) or km("fullscreen_alt", sym, scancode):
             self._toggle_fullscreen()
@@ -9802,6 +10446,7 @@ class Renderer:
             cur = self._pm.current_preset_name()
             self._rebuild_playlist([p for p, _ in files])
             self._shuffle = False
+            self._remember_shuffle()
             self._rated_history.clear()   # native indices changed
             self._seek_to_stem(cur)
             label = "rating" if by == "rating" else "name"
@@ -9830,10 +10475,77 @@ class Renderer:
             return False
         _random.shuffle(files)
         cur = self._pm.current_preset_name()
-        self._rebuild_playlist([p for p, _ in files])
+        self._shuffled_paths = [p for p, _ in files]
+        self._rebuild_playlist(self._shuffled_paths)
         self._rated_history.clear()      # native indices changed
         self._seek_to_stem(cur)
         print(f"[renderer] Shuffled {len(files)} presets")
+        return True
+
+    def _remember_shuffle(self, paths=()):
+        """Keep a shuffled order for the next run, or forget it. Render thread.
+
+        Asked for on 2 Oct 2026: the shuffle reset every time the app closed,
+        back to folder order from the top. The order is written once, when it
+        is made; where in it you were goes in config.json as `shuffle_at`, on
+        every preset change, so a crash or a pulled plug loses one preset and
+        not the place. Anything that unshuffles -- turning it off, a sort, a
+        collection, a new folder -- calls this with nothing and the file goes.
+
+        The file being there *is* the setting. Not a config key: older builds
+        left a `"shuffle": true` in config.json that meant something else, and
+        it is still sitting in configs that went through them.
+        """
+        path = shuffle_path()
+        try:
+            if self._shuffle and paths:
+                folder = self._cfg.get("preset_dir", "")
+                data = {"preset_dir": folder, "collection": self._collection,
+                        "order": [os.path.relpath(p, folder) for p in paths]}
+                os.makedirs(os.path.dirname(path), exist_ok=True)
+                tmp = path + ".tmp"
+                with open(tmp, "w", encoding="utf-8") as f:
+                    json.dump(data, f)
+                os.replace(tmp, path)
+            elif not self._shuffle and os.path.exists(path):
+                os.remove(path)
+        except (OSError, ValueError) as e:
+            print(f"[renderer] could not remember the shuffle: {e}", flush=True)
+
+    def _restore_shuffle(self) -> bool:
+        """Put last run's shuffle back, and the preset it was on. Startup.
+
+        Only for the folder it was made in, and with the collection it was
+        made in -- a shuffle of one collection laid over the whole library
+        would be a list of the wrong things.
+        """
+        try:
+            with open(shuffle_path(), encoding="utf-8-sig") as f:
+                data = json.load(f)
+        except FileNotFoundError:
+            return False                   # it was not shuffled last time
+        try:
+            folder = self._cfg.get("preset_dir", "")
+            if data.get("preset_dir") != folder:
+                return False
+            name = str(data.get("collection") or "")
+            if name in self.collections():
+                self._collection = name
+            files = [p for p, _ in self._all_preset_files()]
+            if not files:
+                self._collection = ""
+                return False
+            paths = restored_order(list(data.get("order") or ()), files, folder)
+            self._rebuild_playlist(paths)
+            self._shuffle = True
+            self._shuffled_paths = paths
+            self._seek_to_stem(str(self._cfg.get("shuffle_at", "")))
+        except (OSError, ValueError, TypeError, AttributeError) as e:
+            print(f"[renderer] last run's shuffle is not usable: {e}",
+                  flush=True)
+            return False
+        print(f"[renderer] Kept last run's shuffle: {len(paths)} presets",
+              flush=True)
         return True
 
     def _do_goto(self, index: int):
@@ -9871,6 +10583,7 @@ class Renderer:
                 self._pm.set_playlist_position(0, hard_cut=True)
             self._rated_history.clear()          # native indices changed
             self._shuffle = False                # a fresh list, in load order
+            self._remember_shuffle()
             self._preset_start = _time.monotonic()
             print(f"[renderer] Loaded {count} presets from {d}", flush=True)
             self._bridge.status_message.emit(f"Loaded {count} presets")
@@ -9912,6 +10625,8 @@ class Renderer:
             paths = [p for p, _ in self._all_preset_files()]
             if self._shuffle:
                 _random.shuffle(paths)   # a rebuild must not silently unshuffle
+                self._shuffled_paths = paths
+                self._remember_shuffle(paths)
             self._rebuild_playlist(paths)
             self._rated_history.clear()   # native indices changed
             if cur and cur not in ("Unknown", WELCOME_NAME):
@@ -9985,6 +10700,7 @@ class Renderer:
             if want and not self._do_shuffle_playlist():
                 return                  # nothing to shuffle -- stay as we were
             self._shuffle = want
+            self._remember_shuffle(self._shuffled_paths if want else ())
             label = "ON" if want else "OFF (order kept)"
             print(f"[renderer] Shuffle: {label}")
             self._bridge.status_message.emit(f"Shuffle: {label}")
@@ -10018,9 +10734,17 @@ class Renderer:
         return self._wallpaper
 
     def request_wallpaper(self, on: bool = None):
-        """Become the desktop wallpaper, or stop (render thread)."""
+        """Become the desktop wallpaper, or stop (render thread).
+
+        A toggle flips the request still waiting, not the mode: the switch
+        can be held back for a few seconds at startup, and pressing the key
+        twice in that time should cancel it rather than ask for it twice.
+        """
         with self._lock:
-            self._req_wallpaper = (not self._wallpaper) if on is None else bool(on)
+            if on is None:
+                pending = self._req_wallpaper
+                on = not (self._wallpaper if pending is None else pending)
+            self._req_wallpaper = bool(on)
 
     def request_wallpaper_on(self, display: int):
         """Be the desktop on a named monitor, -1 for the whole desktop. Qt
@@ -10043,6 +10767,10 @@ class Renderer:
         if not ok:
             self._bridge.show_toast.emit(why)
             return
+        # Caps Lock is read afresh on the next pass either way: on the way in
+        # it may already be on, and on the way out the hook has to go.
+        self._set_wallpaper_front(False, quiet=True)
+        self._caps_at = 0.0
         # Switching this on counts as activity, so the idle pause gets its
         # whole silence window from here rather than from whenever the last
         # sound was. Without it the pause is already overdue the moment the
@@ -10153,9 +10881,13 @@ class Renderer:
             print(f"[wallpaper] {e}", flush=True)
             self._bridge.show_toast.emit(f"Wallpaper mode failed: {e}")
             return
+        # In the log as well as on screen. 2 Oct 2026's report could only be
+        # matched to a GPU fault in the journal by guessing when the key was
+        # pressed, because nothing here said the mode had changed.
+        print(f"[wallpaper] {'on' if self._wallpaper else 'off'}", flush=True)
         self._bridge.wallpaper_changed.emit(self._wallpaper)
         self._bridge.status_message.emit(
-            "Wallpaper mode ON — use the tray icon to leave it"
+            "Wallpaper mode ON — Caps Lock + right-click for the menu"
             if self._wallpaper else "Wallpaper mode OFF")
 
     def _wallpaper_on_display(self, idx: int):
@@ -10214,6 +10946,7 @@ class Renderer:
         dpy, win = self._x11_display, self._native_handle
         sdl2.SDL_HideWindow(self._window)
         if on:
+            self._wp_partial = x11_stack_is_partial()
             self._track_window()
             self._wp_restore = (self._win_rect, self._borderless, 0, 0)
             x11_set_atoms(lib, dpy, win, _X11_TYPE, [_X11_DESKTOP])
@@ -10262,7 +10995,7 @@ class Renderer:
         lib.XSync(dpy, False)
         sdl2.SDL_ShowWindow(self._window)
         if on:
-            if not x11_lower_to_bottom(lib, dpy, win):
+            if not x11_lower_to_bottom(lib, dpy, win, partial=self._wp_partial):
                 # Not fatal: the visuals are up, they are just in front of the
                 # icons. Say so rather than let it look like the feature works.
                 print("[wallpaper] could not get below the desktop icons",
@@ -10284,10 +11017,23 @@ class Renderer:
         lib.XSync(dpy, False)
         self._track_window()
 
+    #: A loop pass slower than this is the app still starting up rather than
+    #: drawing frames. Ten times a 40 ms frame; a shader compiling on an old
+    #: card is seconds.
+    SLOW_PASS_S = 0.25
+
     #: How often the wallpaper window re-checks that it is still the bottom
     #: one. Long enough that the cost is nothing (one property read off the
     #: root), short enough that nobody sits looking at covered icons.
     WP_HOLD_EVERY = 2.0
+
+    #: The same, where it cannot measure and can only ask: a Wayland session,
+    #: or Caps Lock holding the visuals in front of the icons. Asking costs a
+    #: message the window manager drops on the floor when nothing moved
+    #: (mutter's meta_stack_lower returns early), and Desktop Icons NG
+    #: re-lowers itself every time *any* window maps, so two seconds of
+    #: covered icons after every tooltip is too long.
+    WP_HOLD_BLIND_EVERY = 0.5
 
     def _hold_wallpaper_bottom(self):
         """Keep the window under the desktop icons for as long as it is the
@@ -10306,7 +11052,11 @@ class Renderer:
         pass and nothing on the wire at all unless the answer is wrong.
         """
         now = _time.monotonic()
-        if now - self._wp_hold_at < self.WP_HOLD_EVERY:
+        front = getattr(self, "_wp_front", False)
+        partial = getattr(self, "_wp_partial", False)
+        every = self.WP_HOLD_BLIND_EVERY if front or partial \
+            else self.WP_HOLD_EVERY
+        if now - self._wp_hold_at < every:
             return
         self._wp_hold_at = now
         if not (self._native_handle and self._x11_display):
@@ -10326,13 +11076,21 @@ class Renderer:
                     self._wp_box_moaned = True
                     print(f"[wallpaper] could not hold the geometry: {e}",
                           flush=True)
+            if front or partial:
+                # Caps Lock on: the top of the desktop layer -- over the icons,
+                # under every window. Otherwise the bottom of it, asked for
+                # blind because the stack cannot see what draws the icons.
+                x11_restack(lib, dpy, win, 0,
+                            _X11_ABOVE if front else _X11_BELOW)
+                lib.XSync(dpy, False)
+                return
             stack = x11_client_stack(lib, dpy)
             if not stack or stack[0] == win or win not in stack:
                 # Bottom already, or a window manager that publishes no client
                 # stack -- there is nothing to measure against, and lowering on
                 # a hunch every two seconds is how a window ends up fighting.
                 return
-            x11_restack_below(lib, dpy, win, stack[0])
+            x11_restack(lib, dpy, win, stack[0])
             lib.XLowerWindow(dpy, x11_toplevel_of(lib, dpy, win))
             lib.XSync(dpy, False)
         except Exception as e:
@@ -10340,6 +11098,62 @@ class Renderer:
             # for as long as the app is up.
             self._wp_hold_at = now + 60.0
             print(f"[wallpaper] could not hold the bottom: {e}", flush=True)
+
+    #: How often Caps Lock is read while the visualiser is the wallpaper.
+    CAPS_POLL_S = 0.2
+
+    def _follow_caps_lock(self):
+        """Wallpaper mode: Caps Lock picks whose menu the desktop answers with.
+
+        Off is the desktop's own -- the icons stay on top and get the click.
+        On is the visualiser's: on X11 the window is held over the icon layer
+        (still under every ordinary window) so the click reaches it, and on
+        Windows a mouse hook takes the click away from Explorer instead.
+        Asked for on 2 Oct 2026, so that the menu can be reached from the
+        desktop itself rather than only from the tray.
+        """
+        now = _time.monotonic()
+        if now - self._caps_at < self.CAPS_POLL_S:
+            return
+        self._caps_at = now
+        on = caps_lock_on(self._x11_display)
+        if on is not None and on != self._wp_front:
+            self._set_wallpaper_front(on)
+
+    def _right_click_is_ours(self) -> bool:
+        """Does a right-click on the visualiser's own window open its menu?
+
+        Always, except as the wallpaper with Caps Lock off: then a click on
+        the desktop is the desktop's, and one reaching us means we are over
+        the icons -- so the answer is to go back under them, not a menu.
+        """
+        if self._wallpaper and not self._wp_front:
+            self._wp_hold_at = 0.0
+            return False
+        return True
+
+    def _set_wallpaper_front(self, on: bool, quiet: bool = False):
+        """Render thread. See _follow_caps_lock."""
+        if bool(on) == self._wp_front:
+            return
+        self._wp_front = bool(on)
+        if sys.platform == "win32":
+            if on:
+                if self._rclick is None:
+                    # No lock: this runs inside a mouse hook, and every
+                    # mouse on the machine waits while it does. A plain
+                    # assignment is all the dispatch needs to see.
+                    self._rclick = _DesktopRightClick(
+                        lambda: setattr(self, "_req_context_menu", True))
+                self._rclick.start()
+            elif self._rclick is not None:
+                self._rclick.stop()
+        else:
+            self._wp_hold_at = 0.0          # restack on this very pass
+        if not quiet:
+            self._bridge.status_message.emit(
+                "Caps Lock on — right-click the desktop for this menu"
+                if on else "Caps Lock off — the desktop has its menu back")
 
     #: How many times running the geometry may be put back before the window
     #: manager is taken to have meant it. Without a stop, a window manager that
@@ -11600,7 +12414,17 @@ class Renderer:
                                      sdl2.SDL_WINDOW_FULLSCREEN_DESKTOP)
         self._overhang_display()
 
+    def _not_as_wallpaper(self) -> bool:
+        """True, with a toast, when the window is the desktop. A wallpaper
+        made fullscreen, framed or kept on top is no longer the desktop, and
+        with Caps Lock on its keys and its double-click do reach it now."""
+        if self._wallpaper:
+            self._bridge.status_message.emit("Leave wallpaper mode first")
+        return self._wallpaper
+
     def _toggle_fullscreen(self):
+        if self._not_as_wallpaper():
+            return
         flags = sdl2.SDL_GetWindowFlags(self._window)
         if flags & sdl2.SDL_WINDOW_FULLSCREEN_DESKTOP:
             sdl2.SDL_SetWindowFullscreen(self._window, 0)
@@ -11614,6 +12438,8 @@ class Renderer:
             self._overhang_display()
 
     def _toggle_borderless(self):
+        if self._not_as_wallpaper():
+            return
         self._borderless = not self._borderless
         sdl2.SDL_SetWindowBordered(
             self._window,
@@ -11628,6 +12454,8 @@ class Renderer:
         return self._borderless
 
     def _toggle_on_top(self):
+        if self._not_as_wallpaper():
+            return
         self._on_top = not self._on_top
         sdl2.SDL_SetWindowAlwaysOnTop(
             self._window,
@@ -11683,6 +12511,12 @@ class Renderer:
     def _emit_current_preset(self):
         self._thumb_done = False        # a new preset is worth a new picture
         name     = self._pm.current_preset_name()
+        if (self._shuffle and self._pm is self._pms[0] and name
+                and name != WELCOME_NAME
+                and self._cfg.get("shuffle_at") != name):
+            # Where in the kept shuffle we are. See _remember_shuffle.
+            self._cfg["shuffle_at"] = name
+            self._save_config(self._cfg)
         rating   = get_preset_rating(self._ratings, name)
         excluded = is_excluded(self._ratings, name)
         tag      = " [excluded]" if excluded else ""

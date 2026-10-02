@@ -28,6 +28,19 @@ import os
 import signal
 import threading
 import argparse
+import faulthandler
+
+# A native crash prints every thread's Python stack, and on Linux
+# `kill -USR1 <pid>` prints them on demand without stopping anything -- so a
+# freeze can be read off a running app, and on Linux both land in the journal
+# (`journalctl -b | grep -A40 "Thread 0x"`). Free while healthy. The
+# windowed Windows build has no stderr to write to, and skips it.
+try:
+    faulthandler.enable()
+    if hasattr(signal, "SIGUSR1"):
+        faulthandler.register(signal.SIGUSR1, all_threads=True)
+except (AttributeError, ValueError, RuntimeError, OSError):
+    pass
 
 # All Linux-only. Every name here is either an X11/PulseAudio driver or an ELF
 # loader path, and setting any of them on Windows or macOS stops SDL or Qt from

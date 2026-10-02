@@ -56,9 +56,15 @@ class MenuHost:
     def audio_devices(self):  return []
     def audio_device(self):   return ""
     def _save_config(self, cfg): self.saved.append(dict(cfg))
+    # What the rows themselves call, counted, for the stay-open checks.
+    def __getattr__(self, name):
+        if not name.startswith("request_"):
+            raise AttributeError(name)
+        return lambda *a: self.asked.append((name,) + a)
+    asked = []
 
 
-def build(hidden=None):
+def build(hidden=None, groups=None):
     """The real menu, with the session checks stubbed out.
 
     wallpaper_support and the tray are pinned so the wallpaper row is the live
@@ -70,6 +76,8 @@ def build(hidden=None):
     v.QSystemTrayIcon = FakeTray
     try:
         cfg = {"menu_hidden": list(hidden or ())}
+        if groups is not None:
+            cfg["menu_groups"] = groups
         return v.ContextMenu(renderer=MenuHost(), cfg=cfg, ratings={},
                              keymaps=dict(v.DEFAULT_KEYMAPS))
     finally:
@@ -206,6 +214,205 @@ def a_rebound_key_is_the_one_shown():
     assert "F4" in dlg._boxes["record"].text(), dlg._boxes["record"].text()
 
 
+
+# --- categories (2 Oct 2026) ----------------------------------------------
+def _sub(menu, name):
+    hits = [a.menu() for a in menu.actions() if a.menu() is not None
+            and a.text().endswith(name)]
+    assert len(hits) == 1, (name, [a.text() for a in menu.actions()])
+    return hits[0]
+
+
+def a_category_is_a_submenu_where_its_first_entry_was():
+    """On a low-resolution screen the full menu outgrows the display and Qt
+    draws it in two columns; a category is how it gets short again."""
+    menu = build(groups=[{"name": "Player", "items": ["next", "prev", "random"]}])
+    top = rows(menu)
+    assert top[0].endswith("Player"), top[:3]
+    assert not any("Next visual" in t for t in top), "left a copy behind"
+    inner = rows(_sub(menu, "Player"))
+    assert [t.split("   ")[-1] for t in inner] == \
+        ["Next visual", "Previous visual", "Random visual"], inner
+    assert len(top) == len(rows(build())) - 3 + 1
+
+
+def an_entry_takes_every_row_it_draws_into_its_category():
+    """Visuals and crossfade is four rows: two switches, the fader -- a
+    widget, not a plain action -- and a submenu. All four move."""
+    menu = build(groups=[{"name": "Visuals", "items": ["dual"]}])
+    inner = _sub(menu, "Visuals").actions()
+    assert len([a for a in inner if not a.isSeparator()]) == MENU_ROWS["dual"]
+    assert any(isinstance(a, v.QWidgetAction) for a in inner), \
+        "the crossfader did not come with it"
+    assert len(rows(menu)) == len(rows(build())) - MENU_ROWS["dual"] + 1
+
+
+def a_category_with_nothing_to_show_is_not_drawn():
+    menu = build(["record"], groups=[{"name": "Clips", "items": ["record"]},
+                                     {"name": "Empty", "items": []}])
+    assert not any(t.endswith(("Clips", "Empty")) for t in rows(menu)), \
+        rows(menu)
+    assert not _separator_faults(menu), _separator_faults(menu)
+
+
+def customize_and_quit_never_go_into_a_category():
+    keys = [k for k, _l, _a in v.MENU_ENTRIES]
+    menu = build(groups=[{"name": "Everything", "items": keys}])
+    top = rows(menu)
+    assert len(top) == 3, top
+    assert any("customize" in t.lower() for t in top), top
+    assert any("quit" in t.lower() for t in top), top
+    assert not _separator_faults(menu), _separator_faults(menu)
+
+
+def an_ampersand_in_a_category_name_survives():
+    """Qt eats a lone & in a label -- the Backup menu once read "Back up
+    ratings _collections"."""
+    menu = build(groups=[{"name": "Rock & roll", "items": ["next"]}])
+    act = next(a for a in menu.actions() if a.menu() is not None
+               and "Rock" in a.text())
+    assert "&&" in act.text(), act.text()
+
+
+def a_hand_edited_category_list_is_read_defensively():
+    cfg = {"menu_groups": [
+        {"name": "A", "items": ["next", "nonsense", "next"]},
+        {"name": "B", "items": ["next", "prev"]},     # next is A's already
+        {"name": "   ", "items": ["random"]},          # no name
+        "not even a dict",
+    ]}
+    assert v.menu_groups(cfg) == [("A", {"next"}), ("B", {"prev"})], \
+        v.menu_groups(cfg)
+    assert v.menu_groups({}) == []
+
+
+def the_dialog_round_trips_categories():
+    cfg = {"menu_groups": [{"name": "Player", "items": ["next", "prev"]},
+                           {"name": "Later", "items": []}]}
+    dlg = v.MenuCustomiseDialog(cfg, dict(v.DEFAULT_KEYMAPS))
+    assert dlg.groups() == [{"name": "Player", "items": ["next", "prev"]},
+                            {"name": "Later", "items": []}], dlg.groups()
+    assert dlg._where["next"].currentText() == "Player"
+    assert dlg._where["random"].currentText() == dlg.TOP
+
+
+def a_new_category_gets_a_free_name_and_is_offered_everywhere():
+    dlg = v.MenuCustomiseDialog({}, dict(v.DEFAULT_KEYMAPS))
+    dlg._new_category()
+    dlg._new_category()
+    names = [n for _u, n in dlg._cats]
+    assert names == ["New category", "New category 2"], names
+    combo = dlg._where["random"]
+    combo.setCurrentIndex(combo.findText("New category 2"))
+    assert dlg.groups()[1] == {"name": "New category 2", "items": ["random"]}
+
+
+def renaming_keeps_the_entries_and_refuses_a_clash():
+    dlg = v.MenuCustomiseDialog(
+        {"menu_groups": [{"name": "Player", "items": ["next"]},
+                         {"name": "Other", "items": []}]},
+        dict(v.DEFAULT_KEYMAPS))
+    item = dlg._cat_list.item(0)
+    item.setText("Playback")
+    assert dlg.groups()[0] == {"name": "Playback", "items": ["next"]}
+    assert dlg._where["next"].currentText() == "Playback"
+    item.setText("other")                       # case-blind clash
+    assert item.text() == "Playback", "two categories may now share a name"
+    item.setText("  ")
+    assert item.text() == "Playback", "a category lost its name"
+
+
+def removing_a_category_puts_its_entries_back_on_the_menu():
+    dlg = v.MenuCustomiseDialog(
+        {"menu_groups": [{"name": "Player", "items": ["next", "prev"]}]},
+        dict(v.DEFAULT_KEYMAPS))
+    dlg._cat_list.setCurrentRow(0)
+    dlg._remove_category()
+    assert dlg.groups() == []
+    assert dlg._where["next"].currentText() == dlg.TOP
+    assert dlg._where["next"].count() == 1
+
+
+# --- staying open ---------------------------------------------------------
+def _click(menu, act, press=True):
+    """A real press and release on a row, through the menu itself, so QMenu's
+    own close-on-release is in play rather than a model of it."""
+    QME, P = v.QtGui.QMouseEvent, v.QtCore.QPointF
+    at = P(menu.actionGeometry(act).center())
+    glob = P(menu.mapToGlobal(menu.actionGeometry(act).center()))
+    left, none = v.Qt.MouseButton.LeftButton, v.Qt.MouseButton.NoButton
+    mods = v.Qt.KeyboardModifier.NoModifier
+    if press:
+        v.QApplication.sendEvent(menu, QME(
+            v.QEvent.Type.MouseButtonPress, at, glob, left, left, mods))
+    v.QApplication.sendEvent(menu, QME(
+        v.QEvent.Type.MouseButtonRelease, at, glob, left, none, mods))
+    _app.processEvents()
+
+
+def _row(menu, text):
+    return next(a for a in menu.actions() if text in a.text())
+
+
+def next_visual_leaves_the_menu_open():
+    MenuHost.asked.clear()
+    menu = build()
+    menu.popup(v.QPoint(40, 40))
+    _app.processEvents()
+    for _ in range(3):
+        _click(menu, _row(menu, "Next visual"))
+    assert MenuHost.asked.count(("request_next",)) == 3, MenuHost.asked
+    assert menu.isVisible(), "closed on a row meant to keep it open"
+    menu.close()
+
+
+def a_row_that_changes_the_window_still_closes_it():
+    MenuHost.asked.clear()
+    menu = build()
+    menu.popup(v.QPoint(40, 40))
+    _app.processEvents()
+    _click(menu, _row(menu, "Fullscreen"))
+    assert ("request_fullscreen",) in MenuHost.asked, MenuHost.asked
+    assert not menu.isVisible(), "stayed up over a window going fullscreen"
+
+
+def the_release_of_the_click_that_opened_it_fires_nothing():
+    """The menu opens under the pointer on the right button's press. Its
+    release then lands on a row, and must not trigger it."""
+    MenuHost.asked.clear()
+    menu = build()
+    menu.popup(v.QPoint(40, 40))
+    _app.processEvents()
+    _click(menu, _row(menu, "Next visual"), press=False)
+    assert not MenuHost.asked, MenuHost.asked
+    menu.close()
+
+
+def a_row_in_a_category_stays_open_too():
+    MenuHost.asked.clear()
+    menu = build(groups=[{"name": "Player", "items": ["next", "prev"]}])
+    sub = _sub(menu, "Player")
+    sub.popup(v.QPoint(60, 60))
+    _app.processEvents()
+    _click(sub, _row(sub, "Previous visual"))
+    assert ("request_prev",) in MenuHost.asked, MenuHost.asked
+    assert sub.isVisible(), "a category row closed the menu"
+    sub.close()
+
+
+def the_lock_row_says_what_the_next_click_does():
+    MenuHost.asked.clear()
+    menu = build()
+    menu.popup(v.QPoint(40, 40))
+    _app.processEvents()
+    lock = _row(menu, "Lock visual")
+    _click(menu, lock)
+    assert "Unlock" in lock.text(), lock.text()
+    _click(menu, lock)
+    assert "Unlock" not in lock.text(), lock.text()
+    assert MenuHost.asked.count(("request_toggle_lock",)) == 2
+    menu.close()
+
 results = []
 for fn in (every_key_in_the_table_switches_a_real_entry_off,
            nothing_is_hidden_by_default,
@@ -216,7 +423,22 @@ for fn in (every_key_in_the_table_switches_a_real_entry_off,
            the_dialog_shows_what_the_config_hid,
            show_everything_clears_the_lot,
            a_row_carries_the_key_that_does_the_same_job,
-           a_rebound_key_is_the_one_shown):
+           a_rebound_key_is_the_one_shown,
+           a_category_is_a_submenu_where_its_first_entry_was,
+           an_entry_takes_every_row_it_draws_into_its_category,
+           a_category_with_nothing_to_show_is_not_drawn,
+           customize_and_quit_never_go_into_a_category,
+           an_ampersand_in_a_category_name_survives,
+           a_hand_edited_category_list_is_read_defensively,
+           the_dialog_round_trips_categories,
+           a_new_category_gets_a_free_name_and_is_offered_everywhere,
+           renaming_keeps_the_entries_and_refuses_a_clash,
+           removing_a_category_puts_its_entries_back_on_the_menu,
+           next_visual_leaves_the_menu_open,
+           a_row_that_changes_the_window_still_closes_it,
+           the_release_of_the_click_that_opened_it_fires_nothing,
+           a_row_in_a_category_stays_open_too,
+           the_lock_row_says_what_the_next_click_does):
     results.append(check(fn.__name__, fn))
 
 print("all menu checks passed" if all(results) else "FAILURES")

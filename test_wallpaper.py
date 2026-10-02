@@ -7,7 +7,7 @@ geometry that follows. Parenting into the FIRST one is the classic mistake —
 it covers the desktop icons instead of sitting behind them.
 Run: QT_QPA_PLATFORM=offscreen python test_wallpaper.py
 """
-import os, sys, ctypes, time, ast, inspect, textwrap, io
+import os, sys, ctypes, time, ast, inspect, textwrap, io, tempfile, threading
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
@@ -112,6 +112,10 @@ def bare(cfg=None, displays=TWO):
     r._wp_fixes = 0
     r._wp_box_moaned = False
     r._wp_gave_up = False
+    r._wp_front = r._wp_partial = False
+    r._caps_at = 0.0
+    r._rclick = None
+    r._x11_display = None
     r._win_rect = (10, 20, 640, 480)
     r._bridge = FakeBridge()
     r._refresh_displays = lambda: None      # SDL is faked out from under it
@@ -409,7 +413,7 @@ def _x11_run(on, displays=TWO, cfg=None):
 
 
 def _lower(reraises, timeout=1.0, reparented=False, clients=None, floor=0,
-           refuses=False):
+           refuses=False, partial=False):
     lib = FakeXlib()
     lib.reraises = reraises
     lib.floor = floor
@@ -431,7 +435,8 @@ def _lower(reraises, timeout=1.0, reparented=False, clients=None, floor=0,
     viz_common.x11_client_stack = lambda l, _dpy: list(l.clients)
     try:
         return lib, viz_common.x11_lower_to_bottom(lib, 1, APP_WIN,
-                                                   timeout=timeout)
+                                                   timeout=timeout,
+                                                   partial=partial)
     finally:
         viz_common._x11_query_tree = real
         viz_common.x11_client_stack = real_stack
@@ -730,7 +735,8 @@ def the_holds_run_before_the_idle_pause_parks_the_loop():
 
 
 # --- staying at the bottom ------------------------------------------------
-def _hold(clients, wallpaper=True, hold_at=0.0, now=1000.0):
+def _hold(clients, wallpaper=True, hold_at=0.0, now=1000.0, front=False,
+          partial=False):
     """Run the real _hold_wallpaper_bottom against a fake server.
 
     Returns (renderer, lib) so a test can look at what went on the wire.
@@ -738,6 +744,7 @@ def _hold(clients, wallpaper=True, hold_at=0.0, now=1000.0):
     r = bare({"wallpaper_display": 0}, TWO)
     r._wallpaper = wallpaper
     r._wp_hold_at = hold_at
+    r._wp_front, r._wp_partial = front, partial
     r._native_handle, r._x11_display = APP_WIN, 1
     lib = FakeXlib()
     lib.clients = list(clients)
@@ -1406,6 +1413,154 @@ def becoming_the_desktop_asks_nemo_to_keep_the_icons():
 
 
 
+
+# --- startup, Wayland, and Caps Lock (2 Oct 2026) ---------------------------
+def the_switch_waits_for_startup_to_settle():
+    """Asked for in the first seconds, wallpaper mode froze the app and once
+    took the GPU and the session with it. Waiting a little by hand worked; so
+    does this, by measuring rather than by a fixed delay."""
+    may = viz_common.wallpaper_may_start
+    assert not may(1.0, 0.0, 0.0), "went at once"
+    assert not may(5.0, 0.0, 4.0), "went straight after a slow pass"
+    assert may(5.0, 0.0, 2.5), "still waiting after two quiet seconds"
+    assert may(21.0, 0.0, 20.9), "a machine that is always slow waits forever"
+
+
+def the_switch_is_not_made_under_the_request_lock():
+    """It waits on the window manager; the Qt thread would wait with it."""
+    run = ast.parse(textwrap.dedent(inspect.getsource(Renderer.run)))
+    locked = next(n for n in ast.walk(run) if isinstance(n, ast.With)
+                  and "self._lock" in ast.unparse(n.items[0].context_expr))
+    inside = ast.unparse(locked)
+    assert "_set_wallpaper_mode(" not in inside, "switched under the lock"
+    assert "_wallpaper_on_display(" not in inside, "moved under the lock"
+    assert "_set_wallpaper_mode(wp_want)" in ast.unparse(run)
+
+
+def pressing_the_key_twice_while_it_waits_cancels_it():
+    r = bare()
+    r._lock = threading.Lock()
+    r._req_wallpaper = None
+    r.request_wallpaper()
+    assert r._req_wallpaper is True
+    r.request_wallpaper()
+    assert r._req_wallpaper is False, "a second press asked for it again"
+
+
+def a_wayland_session_is_one_whose_stack_x_cannot_fully_see():
+    part = viz_common.x11_stack_is_partial
+    assert part({"WAYLAND_DISPLAY": "wayland-0", "DISPLAY": ":0"})
+    assert part({"XDG_SESSION_TYPE": "wayland", "DISPLAY": ":0"})
+    assert not part({"XDG_SESSION_TYPE": "x11", "DISPLAY": ":0"})
+    assert not part({"DISPLAY": ":0"})
+
+
+def first_in_a_partial_stack_still_asks_for_the_bottom():
+    """GNOME 50 on Wayland: the X stack was one entry long -- us -- so the old
+    code saw itself at the bottom and lowered nothing, and mutter left the
+    visuals over Desktop Icons NG, a Wayland window X has no id for."""
+    lib, ok = _lower(reraises=0, clients=[APP_WIN], partial=True)
+    assert ok
+    assert (APP_WIN, 0, viz_common._X11_BELOW) in lib.restacks, lib.restacks
+    lib, ok = _lower(reraises=0, clients=[APP_WIN], partial=False)
+    assert not lib.restacks, "asked blind where the stack can be measured"
+
+
+def a_partial_stack_is_held_blind_and_more_often():
+    """Desktop Icons NG lowers itself whenever any window maps, so the hold
+    asks again every half second instead of every two."""
+    r, lib = _hold([APP_WIN], partial=True)
+    assert lib.restacks == [(APP_WIN, 0, viz_common._X11_BELOW)], lib.restacks
+    r, lib = _hold([APP_WIN], partial=True, hold_at=999.4, now=1000.0)
+    assert lib.restacks, "waited two seconds where half a second was due"
+    r, lib = _hold([APP_WIN], partial=True, hold_at=999.8, now=1000.0)
+    assert not lib.restacks, "asked every frame"
+
+
+def caps_lock_holds_it_over_the_icons_and_under_the_windows():
+    r, lib = _hold([APP_WIN, ICONS], front=True)
+    assert lib.restacks == [(APP_WIN, 0, viz_common._X11_ABOVE)], lib.restacks
+    assert lib.lowered == 0, "lowered while Caps Lock wants it in front"
+
+
+def _leds(*values):
+    d = tempfile.mkdtemp(prefix="leds-")
+    for i, val in enumerate(values):
+        os.makedirs(os.path.join(d, f"input{i}::capslock"))
+        with open(os.path.join(d, f"input{i}::capslock", "brightness"),
+                  "w") as f:
+            f.write(f"{val}\n")
+    return os.path.join(d, "*::capslock", "brightness")
+
+
+def caps_lock_is_read_off_the_keyboard_light():
+    """Not off the X server: under Wayland it only hears Caps Lock while one
+    of its own windows has the keyboard, and a wallpaper never does."""
+    if sys.platform == "win32":
+        return True                         # GetKeyState there, not sysfs
+    on = viz_common.caps_lock_on
+    assert on(None, _leds(0)) is False
+    assert on(None, _leds(0, 1)) is True, "a second keyboard's light was missed"
+    assert on(None, _leds()) is None, "made up an answer with nothing to read"
+
+
+def caps_lock_moves_the_wallpaper_and_says_so():
+    r = bare()
+    r._wallpaper = True
+    real = viz_common.caps_lock_on
+    real_time = viz_common._time
+    viz_common._time = type("C", (), {"monotonic": staticmethod(lambda: 50.0)})
+    try:
+        viz_common.caps_lock_on = lambda *_a: True
+        r._follow_caps_lock()
+        assert r._wp_front and r._wp_hold_at == 0.0
+        said = [a for a in r._bridge.toasts if "Caps Lock" in str(a[0])]
+        assert said, "nothing said what Caps Lock just did"
+        viz_common.caps_lock_on = lambda *_a: False
+        r._follow_caps_lock()
+        assert r._wp_front, "read again inside the poll interval"
+        r._caps_at = 0.0
+        r._follow_caps_lock()
+        assert not r._wp_front
+        viz_common.caps_lock_on = lambda *_a: None
+        r._caps_at = 0.0
+        r._follow_caps_lock()
+        assert not r._wp_front, "an unreadable light switched it"
+    finally:
+        viz_common.caps_lock_on = real
+        viz_common._time = real_time
+
+
+def a_right_click_on_the_wallpaper_is_the_desktops_unless_caps_lock_is_on():
+    r = bare()
+    assert r._right_click_is_ours(), "an ordinary window lost its menu"
+    r._wallpaper, r._wp_hold_at = True, 5.0
+    assert not r._right_click_is_ours()
+    assert r._wp_hold_at == 0.0, "reached over the icons and did not go back"
+    r._wp_front = True
+    assert r._right_click_is_ours()
+
+
+def the_window_cannot_be_unmade_as_the_desktop_by_a_key():
+    """With Caps Lock on the keys reach it, and fullscreen, a frame or
+    always-on-top would each stop it being the desktop."""
+    r = bare()
+    r._wallpaper = True
+    with faked_sdl(FakeSDL()) as fake:
+        r._toggle_fullscreen()          # FakeSDL has no SDL_GetWindowFlags
+        r._toggle_borderless()
+        r._toggle_on_top()
+    assert fake.bordered is None and fake.on_top is None, "SDL was asked"
+    assert not r._borderless and not r._on_top
+    assert ("Leave wallpaper mode first",) in r._bridge.toasts
+
+
+def explorers_desktop_is_told_from_a_window():
+    assert viz_common.is_desktop_window_class("Progman")
+    assert viz_common.is_desktop_window_class("WorkerW")
+    assert not viz_common.is_desktop_window_class("CabinetWClass")
+    assert not viz_common.is_desktop_window_class("")
+
 for fn in (the_worker_behind_the_icons_is_chosen,
            a_desktop_with_no_defview_gives_nothing,
            a_defview_with_no_sibling_gives_nothing,
@@ -1485,7 +1640,19 @@ for fn in (the_worker_behind_the_icons_is_chosen,
            getting_it_right_again_buys_back_the_budget,
            the_geometry_cannot_stop_the_stacking_hold,
            the_holds_run_before_the_idle_pause_parks_the_loop,
-           a_window_with_no_wm_class_is_not_guessed_at):
+           a_window_with_no_wm_class_is_not_guessed_at,
+           the_switch_waits_for_startup_to_settle,
+           the_switch_is_not_made_under_the_request_lock,
+           pressing_the_key_twice_while_it_waits_cancels_it,
+           a_wayland_session_is_one_whose_stack_x_cannot_fully_see,
+           first_in_a_partial_stack_still_asks_for_the_bottom,
+           a_partial_stack_is_held_blind_and_more_often,
+           caps_lock_holds_it_over_the_icons_and_under_the_windows,
+           caps_lock_is_read_off_the_keyboard_light,
+           caps_lock_moves_the_wallpaper_and_says_so,
+           a_right_click_on_the_wallpaper_is_the_desktops_unless_caps_lock_is_on,
+           the_window_cannot_be_unmade_as_the_desktop_by_a_key,
+           explorers_desktop_is_told_from_a_window):
     results.append(check(fn.__name__, fn))
 
 print("all wallpaper checks passed" if all(results) else "FAILURES")
