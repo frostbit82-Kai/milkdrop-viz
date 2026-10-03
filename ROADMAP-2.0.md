@@ -322,7 +322,7 @@ back. One nit: Customize menu's placement box is narrower than "New
 category" and shows "New categor" -- the default is "New list" now, which
 fits (93px of a 99px box, "New list 10" included).
 
-**Fixed since 2.1.10, for the next installer** (2 Oct 2026, Windows):
+**Fixed in 2.1.11** (2 Oct 2026, Windows; the Linux tarball is still to build):
 
 - Entering wallpaper mode killed the render thread about one time in eight
   on this box's Radeon -- inside AMD's driver, 130 ms after the switch. No GL

@@ -2761,3 +2761,56 @@ fix survives the overhang. Pressing `d` again brought the window back and left
 Explorer's WorkerW exactly as it was found.
 
 The installer is the verified one from 2.1.6 and nothing here touches it.
+
+### The wallpaper switch crashed inside AMD's driver, and Quit lost a clip — 2.1.11, 2026-10-02
+
+Two defects found while checking smaller items, both fixed and both in
+`viz_common.py` / `main.py`, so **Linux wants this one too** -- and this time
+Windows went first, so the tarball can carry the same number. Build it at
+2.1.11 rather than bumping.
+
+**Entering wallpaper mode killed the render thread about one switch in
+eight** on this box (Radeon HD 7800, AMD legacy driver 27.20.1034.6): an
+access violation out of `render_frame`, visuals frozen, tray and menu still
+up, always **128-136 ms** after `[wallpaper] on`. A native vectored exception
+handler put it inside `atio6axx.dll`, under `opengl32!glDrawElements`, under
+projectM -- the driver drawing into a window that had just been reparented,
+made layered and resized. The render loop now leaves GL alone for
+`WP_GL_QUIET_S` (0.5 s) after a switch in either direction, events and
+requests still running. Source launches: 8 crashes in 34 before, 0 in 80
+after. **It is not Windows code**, so the Linux path gets the same pause: the
+amdgpu GPU reset in `wallpaper_may_start`'s note was the same chip family at
+the same moment, and may be the same race. It is also the first suspect for
+the slower laptop's crash if that machine has an AMD card and was in
+wallpaper mode -- if it still crashes on 2.1.11, run it from a terminal and
+keep the output, and `journalctl -b -1` for a GPU reset.
+
+**Quit from the right-click menu lost a clip being recorded.** The row is
+plain `QApplication.quit` and the render thread is a daemon, so the process
+ended under the render thread's cleanup: a recording was left as its
+`.audio.wav` and `.video.mp4` halves with no `.mp4`, and a quit from the
+desktop menu printed a bare `TypeError`. `App.run` now stops the loop and
+joins the thread after `exec()`, pumping Qt events while it waits.
+
+Smaller: the key-bindings dialog opens tall enough for all 24 rows (capped to
+the screen), and a new Customize-menu category is called "New list", which
+fits the placement box that used to show "New categor".
+
+#### The verified 2.1.11 Windows package
+
+**`BomsAIVisualizer-2.1.11-win64-setup.exe`**, 78.4 MB (82,258,077 bytes),
+sha256 `44e7b3d14a0f5338b1ee3418192d35bb4bc0e131e18096f77b1bd84cf1d257e0`.
+Built with the 2.1.10 outputs deleted first; `VERSION` inside reads 2.1.11
+and the bundled EULA agrees.
+
+691 zlib streams inflated, carrying `WP_GL_QUIET_S`, `_gl_quiet_until`,
+"New list" and `totalHeightForWidth`; three control names grepped absent from
+the repo first are absent from the package. The frozen build, on a scratch
+profile (`APPDATA` and `LOCALAPPDATA` both redirected, nothing reached the
+real one): record four seconds, Quit from the menu, and a finished 4.7 s
+`.mp4` with no halves left over; 24 `--wallpaper` launches, every one
+reparented into the desktop by 16 s and still drawing (3D engine at 18-29%
+for the process in each of the twelve sampled that way).
+
+Not done: installing it. That needs a UAC click, and the installed-vs-portable
+diff with it.
