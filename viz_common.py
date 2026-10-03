@@ -1456,7 +1456,8 @@ _PM_LOG_NAMES = {4: "warn", 5: "error", 6: "fatal"}
 #:   warp shader     PerPixelMesh.cpp:61,80    LOG_ERROR  (5)
 #:   composite       FinalComposite.cpp:49,87  LOG_WARN   (4)
 #:   the GLSL text   Shader.cpp:215            LOG_ERROR  (5)
-#:   per-pixel, per-frame, shape, wave         thrown, never logged above DEBUG
+#:   per-pixel, per-frame, shape, wave         thrown, then LOG_ERROR by the
+#:                                             catch in ProjectM::LoadPreset*
 #:
 #: So "ERROR and above" silently drops every composite-shader failure, which is
 #: what editing a comp shader produces. Matched on the text as well as the
@@ -1465,10 +1466,11 @@ _PM_LOG_NAMES = {4: "warn", 5: "error", 6: "fatal"}
 #: which stops nothing being drawn, and a red line under the editor on every
 #: other preset is worse than the silence it replaced.
 #:
-#: "could not compile" is the per-pixel and per-frame spelling. Those are
-#: thrown rather than logged, so they arrive through the failed-preset callback
-#: instead and this never matches them -- kept because it costs nothing and the
-#: two channels have swapped before.
+#: "could not compile" is the per-pixel, per-frame, shape and wave spelling.
+#: Those are thrown, so they reach the failed-preset callback as well, and the
+#: catch that calls it logs them at ERROR first -- measured 3 Oct 2026, so the
+#: level alone already keeps them. Kept because it costs nothing and the two
+#: channels have swapped before.
 _PM_COMPILE_FAIL = ("error compiling", "error translating",
                     "error loading", "could not compile")
 
@@ -1571,6 +1573,7 @@ class ProjectM4:
         self._pm       = None   # core handle  (c_void_p)
         self._pl       = None   # playlist handle (c_void_p)
         self._locked   = False
+        self._switch_cb = None  # take_switch_requests
 
         # Fallback preset list when no playlist .so
         self._preset_files: list = []
@@ -1997,9 +2000,9 @@ class ProjectM4:
     def _on_preset_failed(self, filename, message, _user):
         """projectM could not compile a preset. Render thread.
 
-        Fires for playlist switches as well as edits, which is why the name is
-        logged: on a 130,000-preset pack "some presets are black" is a report
-        we used to have no answer to.
+        Hears load_preset_data only (and every load when there is no playlist
+        library): a playlist switch that fails is the playlist's to skip and
+        prune, so the callback is handed straight back to it.
         """
         try:
             self.last_error = (message or b"").decode("utf-8",
@@ -2024,6 +2027,15 @@ class ProjectM4:
             return False
         self.last_error = _LAST_PM_ERROR = ""
         try:
+            # Connecting the playlist took the failed callback, so this one
+            # never heard of a bad edit -- and the playlist, which did, took
+            # its *next* switch for the failure: measured 3 Oct 2026, one typo
+            # in per-frame code and the next jump dropped that good preset from
+            # the playlist and played the one after. Ours for the load, then
+            # connect hands the playlist both callbacks back for its retries.
+            if self._fail_cb:
+                self._core.projectm_set_preset_switch_failed_event_callback(
+                    self._pm, self._fail_cb, None)
             self._core.projectm_load_preset_data(
                 self._pm, text.encode("utf-8", "replace"), bool(smooth))
             return True
@@ -2031,6 +2043,12 @@ class ProjectM4:
             print(f"[projectm_wrapper] load_preset_data failed: {e}",
                   flush=True)
             return False
+        finally:
+            if self._pl and self._playlist:
+                self._playlist.projectm_playlist_connect(self._pl, self._pm)
+                if self._switch_cb:              # see take_switch_requests
+                    self._core.projectm_set_preset_switch_requested_event_callback(
+                        self._pm, self._switch_cb, None)
 
     def reset_textures(self) -> bool:
         """Forget the scanned texture list. Render thread only."""

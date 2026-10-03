@@ -665,6 +665,84 @@ def the_rest_of_the_warn_channel_is_not_an_error():
         f"benign warning reported as an error: {viz_common._LAST_PM_ERROR!r}"
 
 
+class _FakeFn(_FakeLogFn):
+    """A ctypes function stand-in that does something when called."""
+
+    def __init__(self, body):
+        super().__init__()
+        self.body = body
+
+    def __call__(self, *args):
+        self.calls.append(args)
+        return self.body(*args)
+
+
+class _FakeProjectM:
+    """libprojectM's two callback slots and the playlist that takes them.
+
+    Connecting points both slots at the playlist, as PlaylistCWrapper.cpp:14-33
+    does, and a load that will not compile calls whoever holds the failed slot,
+    as the catch in ProjectM::LoadPresetData does. Every other entry point is
+    a no-op that takes restype and argtypes.
+    """
+    BAD = b"per_frame_1=zoom = (1 + ;"
+
+    def __init__(self):
+        self.failed = self.requested = None
+        self.playlist_heard = []
+        self.projectm_create = _FakeFn(lambda: 1)
+        self.projectm_playlist_create = _FakeFn(self._create)
+        self.projectm_playlist_connect = _FakeFn(self._connect)
+        self.projectm_set_preset_switch_failed_event_callback = _FakeFn(
+            lambda pm, cb, user: setattr(self, "failed", cb))
+        self.projectm_set_preset_switch_requested_event_callback = _FakeFn(
+            lambda pm, cb, user: setattr(self, "requested", cb))
+        self.projectm_load_preset_data = _FakeFn(self._load)
+
+    def __getattr__(self, name):
+        fn = _FakeLogFn()
+        setattr(self, name, fn)
+        return fn
+
+    def _create(self, pm):
+        self._connect(2, pm)
+        return 2
+
+    def _connect(self, pl, pm):
+        self.failed = self.requested = "playlist"
+
+    def _load(self, pm, data, smooth):
+        if self.BAD in data:
+            msg = b"[PerFrameContext] Could not compile per-frame code"
+            if self.failed == "playlist":
+                self.playlist_heard.append(msg)
+            else:
+                self.failed(b"", msg, None)
+
+
+def a_failed_edit_reaches_last_error_and_not_the_playlist():
+    """Measured 3 Oct 2026 against the pinned library: the playlist took the
+    failed callback when it connected, so last_error never filled -- and the
+    playlist, which heard the edit fail, took its *next* switch for the
+    failure, dropped that good preset from the playlist and played another.
+    Afterwards the playlist has to own the slot again (it skips and prunes a
+    broken file on a switch) and the clock request has to stay ours."""
+    lib = _FakeProjectM()
+    pm = viz_common.ProjectM4(lib, lib)
+    pm.create(320, 240)
+    pm.take_switch_requests(lambda hard: None)
+
+    assert pm.load_preset_data("[preset00]\n" + lib.BAD.decode() + "\n")
+    assert "Could not compile" in pm.last_error, repr(pm.last_error)
+    assert lib.playlist_heard == [], "the playlist heard the edit fail"
+    assert lib.failed == "playlist", "the playlist lost its failed callback"
+    assert lib.requested is pm._switch_cb, "the playlist got the clock back"
+
+    assert pm.load_preset_data("[preset00]\nzoom=1.0\n")
+    assert pm.last_error == ""
+    assert (lib.failed, lib.requested) == ("playlist", pm._switch_cb)
+
+
 def _colours(panel, line):
     """What the highlighter painted on one line, as {colour: "text"}."""
     panel._code.setPlainText(line)

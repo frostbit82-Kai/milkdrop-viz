@@ -736,8 +736,23 @@ There is no display in an agent shell and SDL needs one, so:
   told the duration, because presets read `progress` from it -- and because
   the timer request, once made and ignored, blocks hard cuts until the next
   preset loads. **The playlist also took the switch-*failed* callback**, so
-  `ProjectM4._on_preset_failed`, registered before it, has never fired; that
-  one is still open.
+  `ProjectM4._on_preset_failed`, registered before it, never fired -- and the
+  playlist, which did hear a bad edit, never clears the flag it sets
+  (`m_lastPresetSwitchFailed`, reset only inside its own retry loop). Measured
+  3 Oct 2026 against the vendored library: one typo in per-frame code, and the
+  next jump took the *good* preset it loaded for the failure, removed it from
+  the playlist and played another. The editor still showed the error, through
+  the log (`LoadPresetData`'s catch logs it at ERROR), which is why nobody
+  noticed. `projectm_playlist_set_preset_switch_failed_event_callback` is no
+  way out: the playlist forwards only from `PlayPresetIndex`, after 500
+  retries, and never for a direct `projectm_load_preset_data`.
+  `ProjectM4.load_preset_data` takes the failed slot for the one call, then
+  `projectm_playlist_connect` hands both slots back and the switch-requested
+  one is taken again. Measured after: `last_error` filled, the jump landed on
+  the right preset with nothing pruned, a genuinely broken file in the
+  playlist was still skipped and pruned, and the clock request still reached
+  the app (with the re-take left out, the playlist moved 0 -> 1 on its own).
+  `test_code_editor.a_failed_edit_reaches_last_error_and_not_the_playlist`.
 
 - **A stylesheet-drawn scroll bar handle has no minimum size, and on ten
   thousand presets it comes out one pixel tall.** Reported from Mint on
@@ -1814,7 +1829,7 @@ There is no display in an agent shell and SDL needs one, so:
   | warp shader load and compile | `PerPixelMesh.cpp:61,80` | `LOG_ERROR` (5) |
   | composite load and compile | `FinalComposite.cpp:49,87` | `LOG_WARN` (4) |
   | the GLSL compiler's own text | `Shader.cpp:215` | `LOG_ERROR` (5) |
-  | per-pixel, per-frame, shape, wave | thrown as `MilkdropCompileException` | never above `LOG_DEBUG` — they arrive through the failed-preset callback instead |
+  | per-pixel, per-frame, shape, wave | thrown as `MilkdropCompileException` | `LOG_ERROR` (5) from the catch in `ProjectM::LoadPreset*`, which also fires the failed-preset callback (measured 3 Oct 2026; this row used to say never above DEBUG) |
 
   So `_PM_COMPILE_FAIL` matches the message text as well as the level. Do not
   widen it back to the whole of WARN: most of that level is
