@@ -2864,3 +2864,30 @@ Not done: Caps Lock in the shipped build. The app reads the host keyboard's
 LED, so a rig cannot press it without pressing the user's; the branch is
 pinned by `test_wallpaper.caps_lock_makes_the_wallpaper_clickable_and_back`.
 `install.sh` unchanged and not exercised.
+
+### 2.1.13 — a failed edit no longer costs the playlist a preset — 2026-10-03
+
+`63ee2a1`, found by following up the open note in the 2.1.12 entry: the
+playlist held projectM's switch-failed callback, so a bad Apply in the code
+editor never reached `ProjectM4.last_error`, and the playlist took its *next*
+switch for the failure -- the jump after the typo removed the good preset it
+landed on and played another. `load_preset_data` now holds the failed slot
+for the one call and hands both back to the playlist with
+`projectm_playlist_connect`, then takes the switch-requested one again for
+the app's clock. Shared code, so this is the number **Windows builds next**;
+the 2.1.12 Linux tarball, which never left this machine, was deleted.
+
+**`BomsAIVisualizer-2.1.13-linux-x86_64.tar.gz`**, 86 MB (89,971,777 bytes),
+sha256 `690683ad9ed5bdae71485547a03b408830304db2c9fd732253596e7dc21181aa`.
+Built in `almalinux:9` from the clean tree at `a3bb40c`; floor
+**GLIBC_2.34**. `VERSION` and the bundled EULA read 2.1.13.
+
+The fix adds no new strings, so the archive was checked by its bytecode: the
+`viz_common` module unmarshalled out of the executable, and the shipped
+`ProjectM4.load_preset_data` names `projectm_set_preset_switch_failed_event_callback`,
+`projectm_playlist_connect` and `projectm_set_preset_switch_requested_event_callback`;
+`take_switch_requests` and `Renderer._take_beat_cuts` are there from 2.1.12.
+Stock `ubuntu:24.04`: `--help` exits 0, a plain start under Xvfb is alive at
+20 s (124). The shipped build in the rig on the defaults, no music: switches
+31 s and 39 s apart, none silent. The editor case itself was measured on the
+source against the vendored library (CLAUDE.md), not driven in the package.

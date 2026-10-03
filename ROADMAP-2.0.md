@@ -322,9 +322,19 @@ back. One nit: Customize menu's placement box is narrower than "New
 category" and shows "New categor" -- the default is "New list" now, which
 fits (93px of a 99px box, "New list 10" included).
 
-**Fixed in 2.1.12** (3 Oct 2026, Linux; **Windows has to build 2.1.12 too** --
-both fixes are in shared code, and the verified 2.1.11 Windows package has
-neither):
+**Fixed in 2.1.13** (3 Oct 2026, Linux; **Windows builds 2.1.13**, which
+carries this and everything under 2.1.12 below -- skip 2.1.12):
+
+- **A typo in the code editor cost the playlist a good preset.** The playlist
+  held projectM's failed-preset callback, so the editor's own reporter never
+  fired, and the playlist took its *next* switch for the failure: the jump
+  after a bad Apply removed the preset it landed on and played another. On
+  Windows, check: break a per-frame line, Apply (red line under the editor),
+  then Next -- the preset it lands on plays, and is still in the browser's
+  list afterwards. See CLAUDE.md.
+
+**Fixed in 2.1.12** (3 Oct 2026, Linux; both fixes in shared code, and the
+verified 2.1.11 Windows package has neither):
 
 - **projectM's own clock and its hard cuts moved the playlist behind the
   app's back**, since the first commit. On the shipped defaults a silent
