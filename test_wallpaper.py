@@ -1634,6 +1634,15 @@ def caps_lock_makes_the_wallpaper_clickable_and_back():
             r._set_wallpaper_front(True)
             r._set_wallpaper_front(False)
             assert seen == [False, True], seen
+            # Off with the menu up as well: closing the menu took the X11
+            # branch's `else` for a day, and the window stayed solid over the
+            # icons until Caps Lock went round again.
+            r._bridge = NamedBridge()
+            r._set_wallpaper_front(True)
+            r._menu_open = True
+            r._set_wallpaper_front(False)
+            assert seen == [False, True, False, True], seen
+            assert "close_context_menu" in r._bridge.sent, r._bridge.sent
     finally:
         viz_common.x11_input_passthrough = real
         viz_common._libx11 = real_x11

@@ -11281,17 +11281,17 @@ class Renderer:
                 self._rclick.start()
             elif self._rclick is not None:
                 self._rclick.stop()
-        if not on and self._menu_open:
-            # The desktop has its menu back, so ours goes. On Windows nothing
-            # else would close it now: the hook that saw clicks beside it is
-            # gone, and the app never had the foreground to begin with.
-            self._bridge.close_context_menu.emit()
         else:
             self._wp_hold_at = 0.0          # restack on this very pass
             if self._wallpaper and self._native_handle and self._x11_display:
                 # Clickable in front of the icons, click-through behind them.
                 x11_input_passthrough(_libx11(), self._x11_display,
                                       self._native_handle, not on)
+        if not on and self._menu_open:
+            # The desktop has its menu back, so ours goes. On Windows nothing
+            # else would close it now: the hook that saw clicks beside it is
+            # gone, and the app never had the foreground to begin with.
+            self._bridge.close_context_menu.emit()
         if not quiet:
             self._bridge.status_message.emit(
                 "Caps Lock on — right-click the desktop for this menu"
