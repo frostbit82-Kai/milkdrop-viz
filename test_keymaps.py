@@ -214,6 +214,20 @@ def the_dialog_opens_wide_enough_for_its_own_notes():
             f"{table.sizeHintForColumn(col)}px -- it will be elided"
 
 
+def the_dialog_opens_tall_enough_for_every_row():
+    """It opened at its 480px minimum, which showed 9 of 24 rows. Either every
+    row fits with no scroll range, or the dialog is as tall as the screen lets
+    it be -- the offscreen screen is 800px, so this run takes the second."""
+    dlg = _dialog()
+    dlg.show()
+    v.QApplication.processEvents()
+    cap = v.SettingsDialog._screen_height(dlg) - 80
+    scroll = dlg._table.verticalScrollBar().maximum()
+    assert scroll == 0 or dlg.height() >= cap, \
+        f"opened {dlg.height()}px tall with {scroll}px still to scroll " \
+        f"and {cap}px available"
+
+
 # ── The handler this is all about ────────────────────────────────────────
 
 def an_unbound_action_matches_no_key():

@@ -301,10 +301,10 @@ def a_new_category_gets_a_free_name_and_is_offered_everywhere():
     dlg._new_category()
     dlg._new_category()
     names = [n for _u, n in dlg._cats]
-    assert names == ["New category", "New category 2"], names
+    assert names == ["New list", "New list 2"], names
     combo = dlg._where["random"]
-    combo.setCurrentIndex(combo.findText("New category 2"))
-    assert dlg.groups()[1] == {"name": "New category 2", "items": ["random"]}
+    combo.setCurrentIndex(combo.findText("New list 2"))
+    assert dlg.groups()[1] == {"name": "New list 2", "items": ["random"]}
 
 
 def renaming_keeps_the_entries_and_refuses_a_clash():
@@ -414,6 +414,17 @@ def the_lock_row_says_what_the_next_click_does():
     menu.close()
 
 results = []
+def quit_from_the_menu_stops_the_render_thread_and_waits_for_it():
+    """The row is QApplication.quit and nothing else, and the render thread is
+    a daemon: a clip being recorded was left as two unmuxed halves, and a quit
+    from the desktop menu printed a bare "TypeError" from the teardown."""
+    import ast, inspect, textwrap, main
+    src = ast.unparse(ast.parse(textwrap.dedent(inspect.getsource(main.App.run))))
+    after = src[src.index("exec()"):]
+    assert "self._renderer._running = False" in after, "the loop is never told"
+    assert "self._render_thread.join(" in after, "nobody waits for it"
+
+
 for fn in (every_key_in_the_table_switches_a_real_entry_off,
            nothing_is_hidden_by_default,
            a_key_the_menu_has_never_heard_of_is_ignored,
@@ -438,7 +449,8 @@ for fn in (every_key_in_the_table_switches_a_real_entry_off,
            a_row_that_changes_the_window_still_closes_it,
            the_release_of_the_click_that_opened_it_fires_nothing,
            a_row_in_a_category_stays_open_too,
-           the_lock_row_says_what_the_next_click_does):
+           the_lock_row_says_what_the_next_click_does,
+           quit_from_the_menu_stops_the_render_thread_and_waits_for_it):
     results.append(check(fn.__name__, fn))
 
 print("all menu checks passed" if all(results) else "FAILURES")

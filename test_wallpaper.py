@@ -1719,6 +1719,38 @@ def quitting_takes_the_desktop_hook_down_first():
     assert "self._rclick.stop()" in ast.unparse(first), ast.unparse(first)
 
 
+def a_switch_leaves_gl_alone_for_a_moment_and_a_failed_one_does_not():
+    """About one switch in eight killed the render thread inside AMD's driver,
+    128-136 ms later, under projectM's glDrawElements."""
+    r = bare()
+    r._gl_quiet_until = 0.0
+    r._set_x11_wallpaper = lambda on: setattr(r, "_wallpaper", on)
+    with faked_sdl(FakeSDL()), as_platform("linux"), as_env(X11_ENV):
+        r._set_wallpaper_mode(True)
+    assert r._gl_quiet_until > time.monotonic(), "entered with no quiet period"
+    r._gl_quiet_until = 0.0
+    with faked_sdl(FakeSDL()), as_platform("linux"), as_env(X11_ENV):
+        r._set_wallpaper_mode(False)
+    assert r._gl_quiet_until > time.monotonic(), "left with no quiet period"
+    def fails(on):
+        raise RuntimeError("no window")
+    r._gl_quiet_until, r._set_x11_wallpaper = 0.0, fails
+    with faked_sdl(FakeSDL()), as_platform("linux"), as_env(X11_ENV):
+        r._set_wallpaper_mode(True)
+    assert r._gl_quiet_until == 0.0, "a switch that never happened went quiet"
+
+
+def the_quiet_period_skips_the_frame_before_anything_draws():
+    src = textwrap.dedent(inspect.getsource(Renderer.run))
+    quiet = [n for n in ast.walk(ast.parse(src)) if isinstance(n, ast.If)
+             and "self._gl_quiet_until" in ast.unparse(n.test)]
+    assert quiet, "the loop never looks at the quiet period"
+    assert isinstance(quiet[0].body[-1], ast.Continue), ast.unparse(quiet[0])
+    assert quiet[0].lineno < next(
+        i + 1 for i, line in enumerate(src.splitlines())
+        if "self._render_visuals()" in line), "checked after drawing"
+
+
 def stopping_the_hook_waits_for_it_to_unhook():
     joined = []
     class T:
@@ -1830,6 +1862,8 @@ for fn in (the_worker_behind_the_icons_is_chosen,
            a_right_click_elsewhere_closes_the_old_menu_before_opening_the_new,
            quitting_takes_the_desktop_hook_down_first,
            stopping_the_hook_waits_for_it_to_unhook,
+           a_switch_leaves_gl_alone_for_a_moment_and_a_failed_one_does_not,
+           the_quiet_period_skips_the_frame_before_anything_draws,
            the_way_in_lets_clicks_through_and_the_way_out_takes_them_back):
     results.append(check(fn.__name__, fn))
 

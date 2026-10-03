@@ -4442,14 +4442,24 @@ class KeymapDialog(QDialog):
         # the app's own, the widest total is ~800px, and the Store's smallest
         # accepted screenshot is 1366 wide. If these notes ever become user
         # text or get translated, cap it the way SettingsDialog does.
+        #
+        # And tall enough for every row, capped to the screen. It used to pass
+        # `self.height()` through -- the 480 minimum -- which showed 9 of 24
+        # rows. The header, the rows and the frame, plus the rest of the
+        # layout measured AT this width: its plain size hint wraps the info
+        # label narrower than the dialog opens, and over-asked by 36px.
         m = layout.contentsMargins()
-        self.resize(
-            self._table.sizeHintForColumn(0) + self._table.columnWidth(1)
-            + self._table.sizeHintForColumn(2)
-            + self._table.verticalScrollBar().sizeHint().width()
-            + 4 * self._table.frameWidth() + m.left() + m.right(),
-            self.height(),
-        )
+        wide = (self._table.sizeHintForColumn(0) + self._table.columnWidth(1)
+                + self._table.sizeHintForColumn(2)
+                + self._table.verticalScrollBar().sizeHint().width()
+                + 4 * self._table.frameWidth() + m.left() + m.right())
+        layout.activate()
+        rows = (self._table.horizontalHeader().sizeHint().height()
+                + self._table.verticalHeader().length()
+                + 2 * self._table.frameWidth())
+        rest = layout.totalHeightForWidth(wide) - self._table.sizeHint().height()
+        self.resize(wide, min(rows + rest,
+                              max(480, SettingsDialog._screen_height(self) - 80)))
 
     def eventFilter(self, obj, event):
         if obj is self._table and event.type() == QEvent.Type.KeyPress:
@@ -5296,10 +5306,10 @@ class MenuCustomiseDialog(QDialog):
             n.lower() == name.lower() and u != uid for u, n in self._cats)
 
     def _new_category(self):
-        n, name = 1, "New category"
+        n, name = 1, "New list"
         while not self._name_free(name):
             n += 1
-            name = f"New category {n}"
+            name = f"New list {n}"
         uid = max((u for u, _n in self._cats), default=0) + 1
         self._cats.append([uid, name])
         for combo in self._where.values():
@@ -6925,9 +6935,9 @@ class _DesktopRightClick:
             ctypes.windll.user32.PostThreadMessageW(tid, self._WM_QUIT, 0, 0)
         # Until that thread has unhooked, every mouse on the machine still
         # runs through it -- and on the way out of the app, through an
-        # interpreter being torn down: quitting from the menu with Caps Lock
-        # on printed a TypeError from inside the callback. It answers WM_QUIT
-        # at once, so the wait is the time it takes to unhook.
+        # interpreter being torn down. It answers WM_QUIT at once, so the
+        # wait is the time it takes to unhook. (The "TypeError" a quit from
+        # the menu printed was not this: see App.run in main.py.)
         if thread is not None and thread is not threading.current_thread():
             thread.join(1.0)
 
@@ -7014,6 +7024,9 @@ class _DesktopRightClick:
 #: How long the render loop has to run without a slow pass before it becomes
 #: the wallpaper, and the longest it is ever kept waiting.
 WP_SETTLE_S, WP_SETTLE_CAP_S = 2.0, 20.0
+#: How long the render loop keeps its hands off GL after the window changes
+#: into or out of the wallpaper. See Renderer._set_wallpaper_mode.
+WP_GL_QUIET_S = 0.5
 
 
 def wallpaper_may_start(now, started, slow_at, quiet=WP_SETTLE_S,
@@ -8845,6 +8858,9 @@ class Renderer:
         #: when its last slow pass was, and when this pass began.
         self._loop_start = self._slow_at = self._loop_tick = _time.monotonic()
         self._wp_wait_told = False
+        #: No GL until then: the driver is still catching up with a window
+        #: that just became, or stopped being, the wallpaper.
+        self._gl_quiet_until = 0.0
         #: Wallpaper mode with Caps Lock on: the visualiser's menu answers a
         #: right-click on the desktop instead of the desktop's own.
         self._wp_front = False
@@ -10200,6 +10216,13 @@ class Renderer:
             if self._wallpaper and sys.platform != "win32":
                 self._hold_wallpaper_bottom()
 
+            # ── Hands off GL just after a wallpaper switch ────────────────
+            # See _set_wallpaper_mode. Events and requests still run above.
+            if _time.monotonic() < self._gl_quiet_until:
+                self._audio.get_chunk()
+                _time.sleep(0.02)
+                continue
+
             # ── Idle pause ────────────────────────────────────────────────
             # Above auto-advance, not below it: a paused wallpaper that still
             # rotates is worse than one that does not pause at all -- it comes
@@ -10975,6 +10998,17 @@ class Renderer:
             print(f"[wallpaper] {e}", flush=True)
             self._bridge.show_toast.emit(f"Wallpaper mode failed: {e}")
             return
+        # Then no GL for a moment. Measured on Windows 2 Oct 2026, Radeon
+        # HD 7800 on AMD's legacy 27.20 driver: about one switch in eight
+        # killed the render thread with an access violation inside
+        # atio6axx.dll, under projectM's glDrawElements -- always 128-136 ms
+        # after the switch, which is the driver or the compositor catching up
+        # with a window that was just reparented, made layered and resized,
+        # while frames go on being drawn into it. The render thread dies, the
+        # visuals freeze, the tray and the menu stay up. The Linux GPU reset
+        # in wallpaper_may_start's note was the same chip family at the same
+        # moment, and may well be the same race.
+        self._gl_quiet_until = _time.monotonic() + WP_GL_QUIET_S
         # In the log as well as on screen. 2 Oct 2026's report could only be
         # matched to a GPU fault in the journal by guessing when the key was
         # pressed, because nothing here said the mode had changed.

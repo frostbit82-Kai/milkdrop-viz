@@ -239,12 +239,14 @@ A1, then A2. Those two are the release. A3 and A4 are cheap once the editor is
 there; A5 only if the splitter's round-trip test comes out clean. C1 done.
 B after A, because it is the one item that can cost frame rate. C2 last, or never.
 
-**Everything on this page is done except three things**, as of 2026-09-16:
+**Everything on this page is done except two things**, as of 2026-10-02:
 
 - **C2, spanning multiple monitors.** Still "last, or never".
 - **D's microphone.** Needs a person and a headset; nothing here can stand in
   for it.
-- **The key-bindings dialog opens too short.** It comes up 512px tall and shows
+- ~~**The key-bindings dialog opens too short.**~~ **Fixed 2 Oct 2026**: it
+  opens tall enough for every row, capped to the screen -- 932px and all 24
+  rows here, no scroll bar. Was: it came up 512px tall and showed
   9 of its 24 rows, so everything added since 2.1.7 -- Visual 1, Visual 2, both
   Crossfade keys and Adjust the other visual -- is below the fold on first open.
   Found 16 Sep 2026 while shooting it for the site: the window had to be dragged
@@ -298,15 +300,6 @@ off. (On Windows the icons can stay visible with Caps Lock on too.)
   CLAUDE.md, Caps Lock.
 - ~~**`GetKeyState(VK_CAPITAL)` from the render thread.**~~ **Proven** in the
   same pass: it follows the key with the wallpaper never focused.
-
-Also run on Windows the same day, and all as described: wallpaper waits for
-startup (about 10 s, "[wallpaper] waiting for startup to settle"), the first
-right-click on an unfocused window opens the menu, Next keeps the menu open,
-a category made in Customize menu becomes a submenu that opens on hover, a
-shuffle and the place in it come back after a restart, Tab flips which visual
-the controls adjust, and visual 2 follows the window into fullscreen and
-back. One nit: Customize menu's placement box is narrower than "New
-category" and shows "New categor".
 - **The icons on other Windows 11 builds.** The WorkerW-child route was
   measured on 26200. Wallpaper apps that broke on 24H2's "raised desktop"
   (Lively, kirie, rexpaper) moved to Microsoft's guidance instead: a layered
@@ -318,6 +311,27 @@ category" and shows "New categor".
   works by holding the visualiser over the icon layer, because under Wayland
   an X client cannot take a click away from a Wayland window -- there is no
   other way to receive it there. On Windows the hook leaves the icons alone.
+
+Also run on Windows the same day, and all as described: wallpaper waits for
+startup (about 10 s, "[wallpaper] waiting for startup to settle"), the first
+right-click on an unfocused window opens the menu, Next keeps the menu open,
+a category made in Customize menu becomes a submenu that opens on hover, a
+shuffle and the place in it come back after a restart, Tab flips which visual
+the controls adjust, and visual 2 follows the window into fullscreen and
+back. One nit: Customize menu's placement box is narrower than "New
+category" and shows "New categor" -- the default is "New list" now, which
+fits (93px of a 99px box, "New list 10" included).
+
+**Fixed since 2.1.10, for the next installer** (2 Oct 2026, Windows):
+
+- Entering wallpaper mode killed the render thread about one time in eight
+  on this box's Radeon -- inside AMD's driver, 130 ms after the switch. No GL
+  for half a second after a switch now; 0 in 80 launches since, 8 in 34
+  before. See CLAUDE.md.
+- Quit from the right-click menu lost a clip being recorded (two unmuxed
+  halves, no .mp4) and printed a stray "TypeError". The menu's Quit never
+  stopped the render thread, and the process ended under it.
+- The key-bindings dialog height, and "New list", above.
 
 **Mint is done, 9 Sep 2026.** Section A and C1 were exercised on real hardware
 — Mint 21.3, Cinnamon 6.0.5, AMD Pitcairn, the 9,795-preset pack, audio off a

@@ -1185,6 +1185,13 @@ There is no display in an agent shell and SDL needs one, so:
   asks to quit through `_on_quit`. Do not remove it, and do not add a second
   call — a Windows session spent a while blaming this for a "clicking Settings
   quits the app" symptom that turned out to be the synthetic-mouse trap below.
+  **The other direction needs a wait.** The menu's Quit row is plain
+  `QApplication.quit`, and the render thread is a daemon, so until 2 Oct 2026
+  the process ended under the render thread's cleanup: a clip being recorded
+  was left as its `.audio.wav` and `.video.mp4` halves with no `.mp4`, and a
+  quit from the desktop menu printed a bare `TypeError` (cut off mid-word,
+  which is the tell). `App.run` now stops the loop and joins the thread after
+  `exec()` returns, pumping Qt events while it waits.
 - **The theme setting drives two different mechanisms.** `theme` in config.json
   is `dark`, `light` or `system`, and one control has to move both:
   `dialog_qss()`/`menu_qss()`/`browser_qss()` restyle the Qt widgets, and
@@ -1975,6 +1982,26 @@ There is no display in an agent shell and SDL needs one, so:
     and cleanup stops it first.
   Keyboard navigation of a menu opened this way does not work -- the app is
   not foreground, so the keys go elsewhere. The mouse does everything.
+
+- **Entering wallpaper mode killed the render thread inside AMD's driver,
+  one time in eight.** 2 Oct 2026, this box (Radeon HD 7800, legacy driver
+  27.20.1034.6): `OSError: access violation writing 0x0000000B00000074` out of
+  `render_frame`, the visuals frozen, tray and menu still up -- always
+  **128-136 ms** after `[wallpaper] on`, which is what made it a race rather
+  than a bad preset. A native vectored exception handler (`veh.c` in the
+  session scratchpad: `AddVectoredExceptionHandler`, `RtlVirtualUnwind`,
+  `GetModuleHandleEx` -- no Python in it) named `atio6axx.dll` under
+  `opengl32!glDrawElements` under projectM. ctypes turns the fault into an
+  OSError, so nothing reaches the event log and the address alone says
+  nothing; this is how to get the module. The fix is `WP_GL_QUIET_S`: no GL
+  for half a second after the switch, either way. Plain launches crashed 8 in
+  34 before it and 0 in 40 after (0 in 80 counting logged ones, over twenty
+  minutes in which every earlier ten had produced at least one crash).
+  Logged ones crashed 1 in 41 before it, and the logger was briefly blamed for
+  hiding it -- the crashes come in **bursts**, so a short run of zeros means
+  nothing and only a long alternating batch tells a real difference from
+  luck. The Linux GPU reset under `wallpaper_may_start` was the same chip
+  family at the same moment.
 
 - **SDL drops a click that focuses its window.** Any button press within 10 ms
   of a FocusIn is discarded unless `SDL_MOUSE_FOCUS_CLICKTHROUGH` is set -- so

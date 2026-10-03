@@ -27,6 +27,7 @@ import sys
 import os
 import signal
 import threading
+import time
 import argparse
 import faulthandler
 
@@ -167,7 +168,21 @@ class App:
         self._render_thread.start()
         if self._start_wallpaper:
             self._renderer.request_wallpaper(True)
-        return self._qt_app.exec()
+        code = self._qt_app.exec()
+        # Quit from the menu or the tray ends Qt here at once, with the render
+        # thread still on its way out -- finishing a clip, stopping ffmpeg,
+        # taking the desktop hook down -- and it is a daemon, so returning cut
+        # all that off. Measured 2 Oct 2026: a clip being recorded was left as
+        # its two unmuxed halves and no .mp4, and a quit from the desktop menu
+        # printed a bare "TypeError" every time. Stop it -- the menu's Quit is
+        # QApplication.quit and nothing else -- and wait for it, pumping:
+        # tearing down the SDL window can send to windows Qt still owns.
+        self._renderer._running = False
+        deadline = time.monotonic() + 15
+        while self._render_thread.is_alive() and time.monotonic() < deadline:
+            self._qt_app.processEvents()
+            self._render_thread.join(0.05)
+        return code
 
     def _on_wallpaper_changed(self, on: bool):
         """Raise a tray icon while the window is the desktop.
