@@ -6887,13 +6887,24 @@ class _DesktopRightClick:
     can promise to pump all the time. It is installed only while Caps Lock is
     on, so the whole system's mouse is not run through Python for the life of
     a wallpaper. Not exercised by any suite: this needs a Windows desktop.
+
+    `on_away` hears every button pressed over a window that is not this
+    process's, and is how the menu it opened gets closed again. Measured on
+    Windows 11, 2 Oct 2026: a menu opened from the desktop stayed up through
+    any number of clicks on the desktop beside it. The click that opened it
+    never reached this app -- the hook took it -- so the app never became the
+    foreground one, and Windows routes clicks outside a popup to its owner
+    only when it is. The hook sees those clicks anyway; it passes them on.
     """
 
     _WH_MOUSE_LL, _HC_ACTION, _GA_ROOT = 14, 0, 2
     _WM_RBUTTONDOWN, _WM_RBUTTONUP, _WM_QUIT = 0x0204, 0x0205, 0x0012
+    #: Left, right, middle and X button down.
+    _DOWNS = (0x0201, 0x0204, 0x0207, 0x020B)
 
-    def __init__(self, on_click):
+    def __init__(self, on_click, on_away=None):
         self._on_click = on_click
+        self._on_away = on_away
         self._thread = None
         self._tid = 0
         self._armed = False
@@ -6908,10 +6919,17 @@ class _DesktopRightClick:
         ready.wait(2.0)
 
     def stop(self):
-        if self._tid:
-            ctypes.windll.user32.PostThreadMessageW(self._tid, self._WM_QUIT,
-                                                    0, 0)
+        thread, tid = self._thread, self._tid
         self._thread, self._tid, self._armed = None, 0, False
+        if tid:
+            ctypes.windll.user32.PostThreadMessageW(tid, self._WM_QUIT, 0, 0)
+        # Until that thread has unhooked, every mouse on the machine still
+        # runs through it -- and on the way out of the app, through an
+        # interpreter being torn down: quitting from the menu with Caps Lock
+        # on printed a TypeError from inside the callback. It answers WM_QUIT
+        # at once, so the wait is the time it takes to unhook.
+        if thread is not None and thread is not threading.current_thread():
+            thread.join(1.0)
 
     def _run(self, ready):
         from ctypes import wintypes as wt
@@ -6938,8 +6956,18 @@ class _DesktopRightClick:
         u.GetAncestor.argtypes = (ctypes.c_void_p, ctypes.c_uint)
         u.GetClassNameW.argtypes = (ctypes.c_void_p, ctypes.c_wchar_p,
                                     ctypes.c_int)
+        u.GetWindowThreadProcessId.argtypes = (ctypes.c_void_p,
+                                               ctypes.POINTER(wt.DWORD))
         k.GetModuleHandleW.restype = ctypes.c_void_p
         name = ctypes.create_unicode_buffer(64)
+        me, owner = os.getpid(), wt.DWORD()
+
+        def ours(pt) -> bool:
+            # The menu, its submenus, a dialog: anything of this process's.
+            # The wallpaper itself never answers here -- the icons are over it.
+            u.GetWindowThreadProcessId(u.WindowFromPoint(pt),
+                                       ctypes.byref(owner))
+            return owner.value == me
 
         def over_desktop(pt) -> bool:
             top = u.GetAncestor(u.WindowFromPoint(pt), self._GA_ROOT)
@@ -6951,11 +6979,14 @@ class _DesktopRightClick:
             # machine passes through here while it is installed. Down and up
             # are both kept from Explorer, or it sees half a click.
             if code == self._HC_ACTION:
-                if wparam == self._WM_RBUTTONDOWN:
+                if wparam in self._DOWNS:
                     info = ctypes.cast(lparam, ctypes.POINTER(MSLL)).contents
-                    self._armed = over_desktop(info.pt)
-                    if self._armed:
-                        return 1
+                    if self._on_away is not None and not ours(info.pt):
+                        self._on_away()
+                    if wparam == self._WM_RBUTTONDOWN:
+                        self._armed = over_desktop(info.pt)
+                        if self._armed:
+                            return 1
                 elif wparam == self._WM_RBUTTONUP and self._armed:
                     self._armed = False
                     self._on_click()
@@ -8773,6 +8804,7 @@ class Renderer:
         self._req_lock                   = False
         self._req_lock_v                 = False
         self._req_context_menu           = False
+        self._req_close_menu             = False   # from the desktop hook
         self._req_borderless             = False
         self._req_on_top                 = False
         self._req_settings_updates       = None
@@ -9976,6 +10008,12 @@ class Renderer:
                 if self._req_lock:
                     self._req_lock = False
                     self._do_set_lock(self._req_lock_v)
+                # Close before open: a right-click elsewhere on the desktop
+                # sets both, and the menu should move there, not stack.
+                if self._req_close_menu:
+                    self._req_close_menu = False
+                    if self._menu_open:
+                        self._bridge.close_context_menu.emit()
                 if self._req_context_menu:
                     self._req_context_menu = False
                     # The menu lists monitors and is about to be built on the
@@ -10260,6 +10298,11 @@ class Renderer:
                 _time.sleep(sleep_t)
 
         # ── Cleanup ───────────────────────────────────────────────────────
+        # The desktop mouse hook first: quitting from the menu Caps Lock
+        # opened leaves it installed, and the rest of this is slow.
+        if self._rclick is not None:
+            self._rclick.stop()
+            self._rclick = None
         # Before the GL context goes: an unfinished recording leaves a
         # zero-byte file that no player will open.
         if self._rec is not None:
@@ -11199,10 +11242,16 @@ class Renderer:
                     # mouse on the machine waits while it does. A plain
                     # assignment is all the dispatch needs to see.
                     self._rclick = _DesktopRightClick(
-                        lambda: setattr(self, "_req_context_menu", True))
+                        lambda: setattr(self, "_req_context_menu", True),
+                        lambda: setattr(self, "_req_close_menu", True))
                 self._rclick.start()
             elif self._rclick is not None:
                 self._rclick.stop()
+        if not on and self._menu_open:
+            # The desktop has its menu back, so ours goes. On Windows nothing
+            # else would close it now: the hook that saw clicks beside it is
+            # gone, and the app never had the foreground to begin with.
+            self._bridge.close_context_menu.emit()
         else:
             self._wp_hold_at = 0.0          # restack on this very pass
             if self._wallpaper and self._native_handle and self._x11_display:

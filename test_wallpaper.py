@@ -115,6 +115,8 @@ def bare(cfg=None, displays=TWO):
     r._wp_front = r._wp_partial = False
     r._caps_at = 0.0
     r._rclick = None
+    r._menu_open = False
+    r._req_close_menu = r._req_context_menu = False
     r._x11_display = r._native_handle = None
     r._win_rect = (10, 20, 640, 480)
     r._bridge = FakeBridge()
@@ -1636,6 +1638,98 @@ def caps_lock_makes_the_wallpaper_clickable_and_back():
         viz_common.x11_input_passthrough = real
         viz_common._libx11 = real_x11
 
+class NamedBridge:
+    """Records which signal was emitted, not just its arguments."""
+    def __init__(self): self.sent = []
+    def __getattr__(self, name):
+        sent = self.sent
+        class _Sig:
+            def emit(self, *a): sent.append(name)
+        return _Sig()
+
+
+def turning_caps_lock_off_closes_the_menu_the_desktop_opened():
+    """Windows, 2 Oct 2026: a menu opened from the desktop stayed up through
+    clicks beside it, because the app never had the foreground. Caps Lock off
+    takes the hook away too, so nothing else would ever close it."""
+    class Hook:
+        stopped = False
+        def stop(self): Hook.stopped = True
+    r = bare()
+    r._bridge = NamedBridge()
+    r._wallpaper, r._wp_front, r._menu_open, r._rclick = True, True, True, Hook()
+    r._set_wallpaper_front(False)
+    assert "close_context_menu" in r._bridge.sent, r._bridge.sent
+    if sys.platform == "win32":
+        assert Hook.stopped, "the hook outlived Caps Lock"
+    r2 = bare()
+    r2._bridge = NamedBridge()
+    r2._wallpaper, r2._wp_front, r2._rclick = True, True, Hook()
+    r2._set_wallpaper_front(False)
+    assert "close_context_menu" not in r2._bridge.sent,         "closed a menu that was not open"
+
+
+def the_desktop_hook_can_close_the_menu_it_opened():
+    """The hook is handed a second callback, for a press anywhere that is not
+    this app's -- which is all a click "outside the menu" can be from here."""
+    if sys.platform != "win32":
+        return
+    made = []
+    class Hook:
+        def __init__(self, *cbs): made.append(cbs)
+        def start(self): pass
+        def stop(self): pass
+    real = viz_common._DesktopRightClick
+    viz_common._DesktopRightClick = Hook
+    try:
+        r = bare()
+        r._wallpaper = True
+        r._set_wallpaper_front(True)
+    finally:
+        viz_common._DesktopRightClick = real
+    assert made and len(made[0]) == 2, made
+    on_click, on_away = made[0]
+    on_away()
+    assert r._req_close_menu and not r._req_context_menu
+    on_click()
+    assert r._req_context_menu
+
+
+def a_right_click_elsewhere_closes_the_old_menu_before_opening_the_new():
+    """Both requests can land in one pass. Opened first, the new menu would
+    be built while the old one's exec() was still running under it."""
+    src = inspect.getsource(Renderer.run)
+    close = src.index("if self._req_close_menu:")
+    open_ = src.index("if self._req_context_menu:")
+    assert close < open_, "the dispatch opens before it closes"
+
+
+def quitting_takes_the_desktop_hook_down_first():
+    """Quitting from the menu Caps Lock opened left the hook installed for the
+    whole teardown, so every mouse on the machine ran through an interpreter
+    being taken apart."""
+    import ast
+    src = textwrap.dedent(inspect.getsource(Renderer.run))
+    loop = next(n for n in ast.walk(ast.parse(src)) if isinstance(n, ast.While))
+    body = ast.parse(src).body[0].body
+    after = body[body.index(next(n for n in body
+                                 if ast.dump(n) == ast.dump(loop))) + 1:]
+    first = after[0]
+    assert isinstance(first, ast.If) and         ast.unparse(first.test) == "self._rclick is not None",         "the first thing after the render loop is not the hook check"
+    assert "self._rclick.stop()" in ast.unparse(first), ast.unparse(first)
+
+
+def stopping_the_hook_waits_for_it_to_unhook():
+    joined = []
+    class T:
+        def join(self, t=None): joined.append(t)
+    h = viz_common._DesktopRightClick(lambda: None)
+    h._thread, h._tid = T(), 0
+    h.stop()
+    assert joined and joined[0], "stop() returned with the hook maybe still in"
+    assert h._thread is None
+
+
 for fn in (the_worker_behind_the_icons_is_chosen,
            a_desktop_with_no_defview_gives_nothing,
            a_defview_with_no_sibling_gives_nothing,
@@ -1731,6 +1825,11 @@ for fn in (the_worker_behind_the_icons_is_chosen,
            behind_the_icons_every_click_falls_through_to_the_desktop,
            a_server_without_shape_is_not_sent_a_shape_request,
            caps_lock_makes_the_wallpaper_clickable_and_back,
+           turning_caps_lock_off_closes_the_menu_the_desktop_opened,
+           the_desktop_hook_can_close_the_menu_it_opened,
+           a_right_click_elsewhere_closes_the_old_menu_before_opening_the_new,
+           quitting_takes_the_desktop_hook_down_first,
+           stopping_the_hook_waits_for_it_to_unhook,
            the_way_in_lets_clicks_through_and_the_way_out_takes_them_back):
     results.append(check(fn.__name__, fn))
 

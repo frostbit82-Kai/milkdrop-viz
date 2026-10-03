@@ -878,10 +878,24 @@ There is no display in an agent shell and SDL needs one, so:
   faulthandler**, which is what settled the 2026-09-14 one: a six-line wrapper
   that calls `faulthandler.enable(file=log)` and
   `dump_traceback_later(10, repeat=True, exit=False, file=log)` and then
-  `runpy.run_path("main.py", run_name="__main__")`. It costs nothing while the
-  app is healthy and it names the line in every thread the moment it is not.
-  Keep a copy in the session scratchpad; rebuild it from this sentence if the
-  scratchpad has gone.
+  `runpy.run_path("main.py", run_name="__main__")`. It names the line in
+  every thread the moment the app stops. Keep a copy in the session
+  scratchpad; rebuild it from this sentence if the scratchpad has gone.
+
+  **It is not free, though: the repeating dump can crash the app itself.**
+  Measured on Windows, 2 Oct 2026. The watchdog reads every thread's frames
+  *without the GIL*, and the WASAPI capture callback creates and destroys a
+  Python thread state about 86 times a second, so now and then a dump reads
+  one that is being freed: `Windows fatal exception: access violation`,
+  faulting module **python314.dll**, no thread marked "Current thread" (the
+  watchdog is a C thread with no Python state of its own), and the dump file
+  last written in the very second the process died. It read as a hook bug for
+  an hour. Settled by turning the interval down to 0.02 s: the process died
+  inside its first imports, with one thread and `<invalid frame>` in the
+  dump. So use the repeating dump only to catch a hang, use a long interval,
+  and **never read a crash under it as the app's until it reproduces
+  without** -- plain `-X faulthandler` (fatal errors only, no watchdog) is the
+  setting for a crash hunt.
 
 - **A minimised window is still `isVisible()`, so a show/hide toggle throws it
   away.** 2026-09-15, found by driving the shipped 2.1.3 build on Windows.
@@ -1246,6 +1260,12 @@ There is no display in an agent shell and SDL needs one, so:
   last saw the cursor — the menu closes without triggering and it looks exactly
   like the item being broken. Follow every `SetCursorPos` with
   `mouse_event(MOUSEEVENTF_MOVE)`, or drive the menu with arrow keys.
+- **Synthetic keys need a real scan code, and arrows the extended flag.** SDL
+  on Windows takes a letter's keysym from the scan code, so `keybd_event('R',
+  0, ...)` reaches the window and does nothing -- the shuffle key looked
+  broken. Fill it with `MapVirtualKey(vk, 0)`. The arrows, Home/End, PgUp/PgDn
+  and Ins/Del share scan codes with the numpad, so without
+  `KEYEVENTF_EXTENDEDKEY` RIGHT arrives as keypad 6 and next does nothing.
 - **A frozen app's stdout is block-buffered when redirected, and `PYTHONUNBUFFERED`
   does not always reach it.** A test that redirects to a file and sees only the
   first line has proved nothing: the app may be running fine and holding the rest.
@@ -1932,6 +1952,29 @@ There is no display in an agent shell and SDL needs one, so:
   hold the keyboard, and an Escape meant for nothing ended the app in the rig),
   and fullscreen, frame and always-on-top refuse with a toast, since each
   would stop the window being the desktop.
+
+  **Proven on Windows 11 (26200), 2 Oct 2026, from source in wallpaper mode.**
+  Caps Lock off: Explorer's own desktop menu. On: the visualiser's, on the
+  first right-click. A right-click in another application with Caps Lock on
+  gets that application's menu, and the taskbar keeps its own.
+  `GetKeyState(VK_CAPITAL)` from the render thread follows the key with the
+  wallpaper never focused. The hook costs about 0.1 ms per mouse event with
+  the visuals running (500 injected moves: 205-225 ms without it, 250-285 ms
+  with), and the cursor never falls behind. Two things it needed:
+  - **A menu opened from the desktop did not close on a click beside it.**
+    The hook took the click that opened it, so the app never became the
+    foreground one, and Windows only routes an outside click to a popup's
+    owner when it is. The hook sees every press anyway: `on_away` fires for
+    any button pressed over a window that is not this process's, and the
+    render loop closes the menu -- before it opens a new one, so a right-click
+    elsewhere on the desktop moves the menu rather than stacking another.
+    Caps Lock off closes it too: the hook that would have seen the click goes
+    with it.
+  - **Quitting from that menu left the hook installed** through the whole of
+    the app's teardown. `_DesktopRightClick.stop()` now waits for the unhook,
+    and cleanup stops it first.
+  Keyboard navigation of a menu opened this way does not work -- the app is
+  not foreground, so the keys go elsewhere. The mouse does everything.
 
 - **SDL drops a click that focuses its window.** Any button press within 10 ms
   of a FocusIn is discarded unless `SDL_MOUSE_FOCUS_CLICKTHROUGH` is set -- so

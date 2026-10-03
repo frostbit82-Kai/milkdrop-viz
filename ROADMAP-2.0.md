@@ -292,16 +292,21 @@ off. (On Windows the icons can stay visible with Caps Lock on too.)
 
 **Windows still has to prove:**
 
-- **The desktop right-click hook (`_DesktopRightClick`).** A low-level mouse
-  hook on a thread of its own, installed only while Caps Lock is on in
-  wallpaper mode. Unrun on any machine. Check that the menu opens over the
-  desktop with Caps Lock on, that Explorer's menu is untouched with it off,
-  that a right-click inside any other application still reaches that
-  application with Caps Lock on, and that the mouse does not lag.
-- **`GetKeyState(VK_CAPITAL)` from the render thread.** The toggle bit is
-  per-thread input state on paper, and the render thread's window never has
-  the keyboard in wallpaper mode. Background Caps Lock indicators rely on it
-  working, which is the evidence -- not a measurement.
+- ~~**The desktop right-click hook (`_DesktopRightClick`).**~~ **Proven
+  2 Oct 2026**, with two fixes: the menu it opened did not close on a click
+  beside it, and quitting from that menu left the hook installed. See
+  CLAUDE.md, Caps Lock.
+- ~~**`GetKeyState(VK_CAPITAL)` from the render thread.**~~ **Proven** in the
+  same pass: it follows the key with the wallpaper never focused.
+
+Also run on Windows the same day, and all as described: wallpaper waits for
+startup (about 10 s, "[wallpaper] waiting for startup to settle"), the first
+right-click on an unfocused window opens the menu, Next keeps the menu open,
+a category made in Customize menu becomes a submenu that opens on hover, a
+shuffle and the place in it come back after a restart, Tab flips which visual
+the controls adjust, and visual 2 follows the window into fullscreen and
+back. One nit: Customize menu's placement box is narrower than "New
+category" and shows "New categor".
 - **The icons on other Windows 11 builds.** The WorkerW-child route was
   measured on 26200. Wallpaper apps that broke on 24H2's "raised desktop"
   (Lively, kirie, rexpaper) moved to Microsoft's guidance instead: a layered
