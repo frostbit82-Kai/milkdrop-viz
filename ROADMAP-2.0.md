@@ -322,7 +322,23 @@ back. One nit: Customize menu's placement box is narrower than "New
 category" and shows "New categor" -- the default is "New list" now, which
 fits (93px of a 99px box, "New list 10" included).
 
-**Fixed in 2.1.11** (2 Oct 2026, Windows; the Linux tarball is still to build):
+**Fixed in 2.1.12** (3 Oct 2026, Linux; **Windows has to build 2.1.12 too** --
+both fixes are in shared code, and the verified 2.1.11 Windows package has
+neither):
+
+- **projectM's own clock and its hard cuts moved the playlist behind the
+  app's back**, since the first commit. On the shipped defaults a silent
+  switch at 30 s, then the app's own at 30-45 s: every other preset was up
+  for a few seconds, never named, title stale, outside rated play. Seen as
+  "sort jumps to a different preset". Hard cuts now go through the app and
+  are announced. On Windows, check: on the defaults with music playing, every
+  change of picture has a `Now playing` line, and with hard cuts off the
+  gaps are 30-45 s, never 30 exactly. See CLAUDE.md.
+- Linux only, but the same file: Caps Lock off **with the menu open** left
+  the wallpaper solid over the icons (d8258e8 put the menu close between the
+  Windows branch and its `else`).
+
+**Fixed in 2.1.11** (2 Oct 2026, Windows; Linux built it, then moved to 2.1.12):
 
 - Entering wallpaper mode killed the render thread about one time in eight
   on this box's Radeon -- inside AMD's driver, 130 ms after the switch. No GL

@@ -2814,3 +2814,53 @@ for the process in each of the twelve sampled that way).
 
 Not done: installing it. That needs a UAC click, and the installed-vs-portable
 diff with it.
+
+### Linux caught up with 2.1.11, and found projectM keeping its own time — 2.1.12, 2026-10-03
+
+Linux built 2.1.11 from `eef4671` first and verified it -- then a site
+screenshot session turned up a defect old enough to be in every package
+ever shipped, in shared code, so the number moved: **Windows has to build
+2.1.12 as well.** The 2.1.11 Linux tarball was deleted.
+
+**What 2.1.11 needed on Linux.** One fix, `eef4671`: d8258e8 put "close the
+desktop menu" between `_set_wallpaper_front`'s Windows branch and its `else`,
+so on X11 Caps Lock off *with the menu open* skipped the click-through, and
+the icons stayed under a solid window. Windows was not affected. Everything
+else carried over as shared code and was seen working in the shipped build:
+**Quit from the menu mid-recording** left one finished `.mp4` (37 s, then
+18.8 s on 2.1.12; H.264 and AAC; no halves) and exit 0; **wallpaper mode**
+waited for startup, went on, and was still drawing after the half-second GL
+rest. The key-bindings dialog opens at 968x937 with all 24 rows, no scroll
+bar.
+
+**projectM was a second clock.** `projectm_playlist_create(pm)` hands the
+playlist projectM's switch-requested callback, and the playlist then played
+the next preset on projectM's own 30 s default and on every hard cut, with
+the app none the wiser. Shipped defaults, rig, playlist position printed
+every pass: silent switches at 30.5, 73.3, 104.6 and 136.1 s, each followed
+by the app's own one to thirteen seconds later. Found because sorting
+appeared to jump preset -- sort keeps the position, which had already moved.
+`a31155f` takes the callback back (`ProjectM4.take_switch_requests`): the
+timer request is ignored, a hard cut goes through `_do_next` after the frame.
+After: every position change has its `Now playing`; with hard cuts off, gaps
+of 42.6 and 34.4 s. The shipped 2.1.12 build, defaults, music on: a
+`Now playing` every 19-22 s -- hard cuts, now announced, which 2.1.11 never
+logged at all.
+
+#### The verified 2.1.12 Linux package
+
+**`BomsAIVisualizer-2.1.12-linux-x86_64.tar.gz`**, 86 MB (89,967,429 bytes),
+sha256 `df6b9304be1e947887648f4287b6bc192618e64a29632ea0f0ff28496755e376`.
+Built in `almalinux:9` from the clean tree at `dfb5a5b`, projectM at the pin;
+floor **GLIBC_2.34**, unchanged. `VERSION` and the bundled EULA read 2.1.12.
+
+688 zlib streams inflated: `take_switch_requests`, `_take_beat_cuts`,
+`_note_switch_request`, `WP_GL_QUIET_S`, `_req_close_menu` and "New list"
+present; a never-written control name and 2.1.10's "Leave it again from the
+tray icon" absent. Stock `ubuntu:24.04` with `libgl1 libglib2.0-0t64 libegl1`:
+`--help` exits 0, a plain start under Xvfb is alive at 20 s (124).
+
+Not done: Caps Lock in the shipped build. The app reads the host keyboard's
+LED, so a rig cannot press it without pressing the user's; the branch is
+pinned by `test_wallpaper.caps_lock_makes_the_wallpaper_clickable_and_back`.
+`install.sh` unchanged and not exercised.
