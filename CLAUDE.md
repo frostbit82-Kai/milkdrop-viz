@@ -707,6 +707,28 @@ There is no display in an agent shell and SDL needs one, so:
   and pulls the auto-advance `if` out of `Renderer.run` with `ast` so that
   losing the guard fails the test rather than a copy of it.
 
+- **projectM had a clock of its own, and its playlist obeyed it behind the
+  app's back -- from the first commit until 3 Oct 2026.** Connecting a
+  playlist (`projectm_playlist_create(pm)` does it) hands the playlist the
+  core's "switch requested" callback, and the playlist plays the next preset
+  itself: on projectM's own timer, 30 s unless `projectm_set_preset_duration`
+  says otherwise (it was never called), and on every hard cut. Nothing above
+  it hears -- no "Now playing", no title, no reset of the app's timer -- so on
+  the shipped defaults a silent switch at 30 s was followed by the app's own
+  at 30-45 s, every other preset was up for one to thirteen seconds, and rated
+  play never chose those. Seen as **sort jumping to a different preset**: the
+  sort keeps the playlist position, and the position had already moved on
+  while the title still named the old one. Found by printing
+  `playlist_position()` every pass in a rig copy: it moved at 30.5 s with no
+  log line. `ProjectM4.take_switch_requests` takes the callback back after
+  the playlist has it; the timer request is ignored and a hard cut goes
+  through `_do_next` after the frame (`_take_beat_cuts`). projectM is still
+  told the duration, because presets read `progress` from it -- and because
+  the timer request, once made and ignored, blocks hard cuts until the next
+  preset loads. **The playlist also took the switch-*failed* callback**, so
+  `ProjectM4._on_preset_failed`, registered before it, has never fired; that
+  one is still open.
+
 - **A stylesheet-drawn scroll bar handle has no minimum size, and on ten
   thousand presets it comes out one pixel tall.** Reported from Mint on
   10 Sep 2026 as "there either isn't a vertical scrollbar adjuster, or the

@@ -1562,6 +1562,9 @@ class _TextureLoadData(ctypes.Structure):
 
 class ProjectM4:
 
+    #: projectm_preset_switch_requested_event: (is_hard_cut, user_data).
+    _SWITCH_PROTO = ctypes.CFUNCTYPE(None, ctypes.c_bool, ctypes.c_void_p)
+
     def __init__(self, core: ctypes.CDLL, playlist):
         self._core     = core
         self._playlist = playlist
@@ -1789,13 +1792,10 @@ class ProjectM4:
         except AttributeError:
             self.can_start_clean = False
 
-        # Preset-switched callback (used to track current name)
+        # projectM asking for another preset. See take_switch_requests.
         C.projectm_set_preset_switch_requested_event_callback.restype  = None
         C.projectm_set_preset_switch_requested_event_callback.argtypes = [
-            ctypes.c_void_p,   # handle
-            ctypes.c_void_p,   # callback fn ptr (CFUNCTYPE)
-            ctypes.c_void_p,   # user_data
-        ]
+            ctypes.c_void_p, self._SWITCH_PROTO, ctypes.c_void_p]
 
     def _setup_playlist_signatures(self):
         P = self._playlist
@@ -2267,9 +2267,24 @@ class ProjectM4:
         self._core.projectm_set_hard_cut_sensitivity(self._pm, v)
 
     def set_preset_duration(self, seconds: float):
-        # projectM manages its own timer; we also manage ours in visualizer.py
-        # but setting this keeps projectM's internal state consistent
+        # Only what presets read as `progress` now: the request projectM makes
+        # when it runs out is not acted on. See take_switch_requests.
         self._core.projectm_set_preset_duration(self._pm, seconds)
+
+    def take_switch_requests(self, handler):
+        """Hear projectM's "time for another preset" here, not in its playlist.
+
+        Connecting a playlist hands it that request, and it plays the next
+        preset itself -- on projectM's own timer (30 s unless told otherwise)
+        and on every hard cut -- with nothing above it told. Measured 3 Oct
+        2026 on the shipped defaults: a silent switch at 30 s, then the app's
+        own at 30-45 s, so every other preset was up for a few seconds,
+        unnamed, and picked outside rated play. `handler(is_hard_cut)` runs
+        inside render_frame, so it may only take a note. After create().
+        """
+        self._switch_cb = self._SWITCH_PROTO(lambda hard, _u: handler(bool(hard)))
+        self._core.projectm_set_preset_switch_requested_event_callback(
+            self._pm, self._switch_cb, None)
 
     def set_soft_cut_duration(self, seconds: float):
         self._core.projectm_set_soft_cut_duration(self._pm, seconds)
@@ -9015,6 +9030,11 @@ class Renderer:
         base  = self._cfg.get("preset_duration", 30)
         extra = self._cfg.get("preset_random_extra", 15)
         self._preset_duration = base + _random.uniform(0, extra)
+        # Told to projectM for presets that read `progress`. See
+        # _note_switch_request for why its own timer moves nothing.
+        for pm in self._pms:
+            if pm is not None:
+                pm.set_preset_duration(self._preset_duration)
 
     # ── SDL2 / GL init ────────────────────────────────────────────────────
 
@@ -9273,6 +9293,30 @@ class Renderer:
         _fps = cfg.get("fps", 60)
         pm.set_fps(_fps if _fps and _fps > 0 else 120)
         pm.set_preset_start_clean(bool(cfg.get("preset_start_clean")))
+        pm.set_preset_duration(self._preset_duration)
+        pm.take_switch_requests(
+            lambda hard, pm=pm: self._note_switch_request(pm, hard))
+
+    def _note_switch_request(self, pm, hard: bool):
+        """projectM asking for another preset, from inside its render call.
+
+        Its own clock is ignored -- the app keeps one, random extra and all --
+        and a hard cut is noted for _take_beat_cuts to make after the frame.
+        """
+        if hard:
+            pm.beat_cut = True
+
+    def _take_beat_cuts(self):
+        """Make the hard cuts projectM heard in the music, the app's way: the
+        visual being adjusted through _do_next, so it is named, timed and
+        rated like any other move; the other one on its own playlist."""
+        for pm in self._pms:
+            if pm is not None and getattr(pm, "beat_cut", False):
+                pm.beat_cut = False
+                if pm is self._pm:
+                    self._do_next(hard=True)
+                else:
+                    pm.next_preset(hard_cut=True)
 
     # ── Public thread-safe requests ───────────────────────────────────────
 
@@ -10239,6 +10283,8 @@ class Renderer:
                 self._audio.get_chunk()
                 _time.sleep(0.15)
                 continue
+
+            self._take_beat_cuts()
 
             # ── Auto-advance ──────────────────────────────────────────────
             # The only thing the lock holds. Next, previous, random and a jump

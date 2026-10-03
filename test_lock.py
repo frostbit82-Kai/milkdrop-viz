@@ -77,6 +77,9 @@ class FakePM:
     def playlist_size(self):
         return len(self.names)
 
+    def set_preset_duration(self, s):
+        pass
+
     def playlist_item(self, i):
         return self.names[i]
 
@@ -230,13 +233,101 @@ def the_timer_is_the_one_thing_the_lock_holds():
     assert fired == [False], f"the timer did not fire once unlocked: {fired}"
 
 
+# --- the app is the only clock --------------------------------------------
+# 3 Oct 2026, shipped defaults: projectM's own 30 s timer asked its playlist
+# for the next preset, the playlist played it, and nothing above heard -- then
+# the app's 30-45 s timer moved again. Every other preset was up for a few
+# seconds, unnamed, and outside rated play. Hard cuts took the same road.
+class Settable(FakePM):
+    """Takes every setter _apply_pm_settings calls, and keeps the two that
+    matter here."""
+    def __init__(self):
+        super().__init__()
+        self.duration, self.handler = None, None
+
+    def set_preset_duration(self, s):
+        self.duration = s
+
+    def take_switch_requests(self, handler):
+        self.handler = handler
+
+    def __getattr__(self, name):
+        if name.startswith("set_"):
+            return lambda *a, **k: None
+        raise AttributeError(name)
+
+
+def projectms_own_clock_never_moves_the_playlist():
+    r = StubRenderer(locked=False)
+    r._note_switch_request(r._pm, False)
+    r._take_beat_cuts()
+    assert r._pm.pos == 0 and r._emitted == 0, "projectM's timer moved it"
+
+
+def a_hard_cut_is_the_apps_next_and_is_announced():
+    r = StubRenderer(locked=False)
+    r._note_switch_request(r._pm, True)
+    assert r._pm.pos == 0, "acted inside projectM's render call"
+    r._take_beat_cuts()
+    assert r._pm.pos == 1 and r._emitted == 1, (r._pm.pos, r._emitted)
+    assert r._preset_start > 0, "the app's clock was not restarted"
+    r._take_beat_cuts()
+    assert r._pm.pos == 1, "one beat cut taken twice"
+
+
+def a_hard_cut_on_the_other_visual_moves_only_that_one():
+    r = StubRenderer(locked=False)
+    other = FakePM()
+    r._pms[1] = other
+    r._note_switch_request(other, True)
+    r._take_beat_cuts()
+    assert other.pos == 1 and r._pm.pos == 0 and r._emitted == 0
+
+
+def both_visuals_hear_through_the_app_with_its_duration():
+    r = StubRenderer(locked=False)
+    one, two = Settable(), Settable()
+    r._pms = [one, two]
+    r._next_duration()
+    assert one.duration == two.duration == r._preset_duration, \
+        (one.duration, two.duration, r._preset_duration)
+    r._pm = one
+    r._apply_pm_settings(r._cfg, two)
+    assert two.handler is not None, "the second visual's requests go to its playlist"
+    two.handler(True)
+    r._take_beat_cuts()
+    assert two.pos == 1 and one.pos == 0
+    assert "self._take_beat_cuts()" in inspect.getsource(v.Renderer.run), \
+        "the render loop no longer makes the beat cuts it was told about"
+
+
+def the_wrapper_takes_the_request_from_the_playlist():
+    class FakeCore:
+        got = None
+        def projectm_set_preset_switch_requested_event_callback(self, pm, cb, u):
+            FakeCore.got = cb
+    pm = object.__new__(v.ProjectM4)
+    pm._core, pm._pm = FakeCore(), object()
+    heard = []
+    pm.take_switch_requests(heard.append)
+    assert FakeCore.got is not None, "nothing registered with projectM"
+    FakeCore.got(True, None)
+    FakeCore.got(False, None)
+    assert heard == [True, False], heard
+
+
 results = []
 for fn in (a_locked_preset_still_steps_forward,
            a_locked_preset_still_steps_back,
            a_locked_preset_still_answers_random,
            a_locked_preset_still_answers_a_jump_from_the_browser,
            the_wrapper_moves_the_playlist_while_the_core_is_locked,
-           the_timer_is_the_one_thing_the_lock_holds):
+           the_timer_is_the_one_thing_the_lock_holds,
+           projectms_own_clock_never_moves_the_playlist,
+           a_hard_cut_is_the_apps_next_and_is_announced,
+           a_hard_cut_on_the_other_visual_moves_only_that_one,
+           both_visuals_hear_through_the_app_with_its_duration,
+           the_wrapper_takes_the_request_from_the_playlist):
     check(fn.__name__, fn)
     results.append(True)
 
