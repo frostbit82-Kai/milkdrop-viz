@@ -418,6 +418,16 @@ There is no display in an agent shell and SDL needs one, so:
   the key, works. A rig that presses `d` and sees nothing has not tested the
   key.
 
+- **xfwm4 in the rig obeys the user's real Xfce shortcuts**, read over the
+  session bus: on 3 Oct 2026 every F9 sent to the app minimised it instead
+  (Iconic, `_NET_WM_STATE_HIDDEN`) and the presses were delivered in a burst
+  once it was mapped again -- four one-second clips and a filename reused.
+  For anything that is not about window management, run the rig with **no
+  window manager**: keys go to the window under the pointer, Qt's menus and
+  dialogs still work, and a dialog shot is cropped to its client area anyway.
+  `muffin --replace` refused to start nested the same day ("Could not take
+  control ... EBUSY").
+
 - **`mawk` buffers its input**, so `python -u ... | awk '{print strftime(), $0}'`
   shows nothing until kilobytes have piled up -- an empty log from a running
   app. `mawk -W interactive`.
