@@ -1,7 +1,7 @@
 BomsAI Visualizer — End User Licence Agreement
 ================================================
 
-BomsAI Software ("we", "us")     Applies to version 2.1.11 · terms of 8 September 2026
+BomsAI Software ("we", "us")     Applies to version 2.1.12 · terms of 8 September 2026
 
 Read this before installing. Installing or using BomsAI Visualizer (the
 "Software") means you accept it. If you do not accept it, do not install the
