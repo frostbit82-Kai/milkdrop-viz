@@ -2958,3 +2958,7 @@ no Application Error.
 
 Not done: installing it. That needs a UAC click, and the installed-vs-portable
 diff with it.
+
+**Installed by the user, 5 Oct 2026**, over the previous version, before the
+session moved on (the UAC click is theirs). The installed-vs-portable diff is
+still not done.
