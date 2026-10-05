@@ -2891,3 +2891,70 @@ Stock `ubuntu:24.04`: `--help` exits 0, a plain start under Xvfb is alive at
 20 s (124). The shipped build in the rig on the defaults, no music: switches
 31 s and 39 s apart, none silent. The editor case itself was measured on the
 source against the vendored library (CLAUDE.md), not driven in the package.
+
+### Windows builds 2.1.13, and both fixes hold here — 2026-10-05
+
+Pulled to `90b4584`; all 26 suites pass on Windows (PySide6, offscreen).
+Nothing needed changing. Both fixes are shared Python, and what only this box
+could get wrong is the native half: the MSVC-built library calling a
+`CFUNCTYPE(None, c_bool, c_void_p)` from inside `render_frame`, and the
+playlist taking its callbacks back through `projectm_playlist_connect` after
+every `load_preset_data`. So each was measured on the source against the
+vendored DLLs, with **2.1.11 (`d8882f9`) run through the same rig as the
+control**: both trees exported with `git archive`, a default config,
+`LOCALAPPDATA` redirected, and a wrapper that runs `main.py` untouched, logs
+any playlist move made *inside* `render_frame`, and feeds synthetic beats in
+place of the capture so nothing played on the speakers.
+
+- **projectM's own clock.** 2.1.11, 130 s with beats: four silent moves
+  (25.4, 49.5, 73.0, 102.0 s), and the presets they landed on were never
+  named. 2.1.13, 170 s with beats: seven hard cuts about 20 s apart, each
+  reaching Python as `hard=True` (a real `bool`) and each followed by its
+  `Now playing` within 0.4 s; nothing moved inside `render_frame`. Hard cuts
+  off, 230 s: gaps of 42.9, 42.2, 40.3, 42.3 and 31.0 s, every one named;
+  projectM's own timer request arrived twice (`hard=False`) and moved
+  nothing.
+- **A typo in the editor.** Three rounds of: break `per_frame_1` in the
+  preset on screen, apply it through `preview_preset`, then Next. 2.1.11:
+  `last_error` stayed empty every round (the text reached only the log
+  channel) and every Next dropped the good preset it had just loaded from
+  the playlist, then skipped the one after it as well (the skip below) --
+  11,223 became 11,220. 2.1.13: `last_error` read "Could not
+  compile per-frame code" every round, nothing was pruned, and each Next
+  landed on the next item.
+- **A genuinely broken file is still the playlist's to drop**: a three-preset
+  folder with a bad one in the middle went to two on the first Next.
+
+One thing seen there that is projectM's and was left alone: after dropping a
+broken file the playlist carries on from the position *after* it, so the
+good preset that followed the broken one is skipped once (not pruned).
+`PlaylistCWrapper::PlayPresetIndex` calls `RemoveItem(index)` and then
+`NextPresetIndex()`, which increments past the item that slid into the gap.
+Every build has done this.
+
+Not driven: the editor's red line itself (Qt, shared code) and Caps Lock,
+both unchanged on Windows since 2.1.11.
+
+#### The verified 2.1.13 Windows package
+
+**`BomsAIVisualizer-2.1.13-win64-setup.exe`**, 78.5 MB (82,262,422 bytes),
+sha256 `af894a166b3e978e0d125d36159fdb854fac8318baa31322bc34ffdf9c72fa91`.
+Built from the clean tree at `90b4584`; `VERSION` inside reads 2.1.13 and the
+bundled EULA agrees. The 2.1.11 outputs were deleted.
+
+691 zlib streams inflated, carrying `take_switch_requests`,
+`_take_beat_cuts`, `_note_switch_request`, `_SWITCH_PROTO` and
+`WP_GL_QUIET_S`; three control names grepped absent from the repo first are
+absent from the package. The fix itself adds no strings, so it was read off
+the bytecode, as on Linux: the shipped `ProjectM4.load_preset_data` names
+`projectm_set_preset_switch_failed_event_callback`,
+`projectm_playlist_connect` and
+`projectm_set_preset_switch_requested_event_callback`, and
+`Renderer._apply_pm_settings` names `take_switch_requests`. The frozen build
+on a scratch profile (`APPDATA` and `LOCALAPPDATA` both redirected; nothing
+reached the real ones), windowed, the defaults and the real preset library:
+responding and drawing for 75 s, 3D engine at 20-23% at every 15 s sample,
+no Application Error.
+
+Not done: installing it. That needs a UAC click, and the installed-vs-portable
+diff with it.

@@ -322,16 +322,16 @@ back. One nit: Customize menu's placement box is narrower than "New
 category" and shows "New categor" -- the default is "New list" now, which
 fits (93px of a 99px box, "New list 10" included).
 
-**Fixed in 2.1.13** (3 Oct 2026, Linux; **Windows builds 2.1.13**, which
-carries this and everything under 2.1.12 below -- skip 2.1.12):
+**Fixed in 2.1.13** (3 Oct 2026, Linux; **built on Windows 5 Oct**, which
+carries this and everything under 2.1.12 below -- 2.1.12 was skipped there):
 
 - **A typo in the code editor cost the playlist a good preset.** The playlist
   held projectM's failed-preset callback, so the editor's own reporter never
   fired, and the playlist took its *next* switch for the failure: the jump
-  after a bad Apply removed the preset it landed on and played another. On
-  Windows, check: break a per-frame line, Apply (red line under the editor),
-  then Next -- the preset it lands on plays, and is still in the browser's
-  list afterwards. See CLAUDE.md.
+  after a bad Apply removed the preset it landed on and played another.
+  ~~On Windows, check~~ **checked 5 Oct 2026**, with 2.1.11 as the control:
+  the error reaches the editor and Next lands on the next preset with nothing
+  pruned (2.1.11 dropped one per round). See CLAUDE.md, and PORTING.md.
 
 **Fixed in 2.1.12** (3 Oct 2026, Linux; both fixes in shared code, and the
 verified 2.1.11 Windows package has neither):
@@ -341,9 +341,10 @@ verified 2.1.11 Windows package has neither):
   switch at 30 s, then the app's own at 30-45 s: every other preset was up
   for a few seconds, never named, title stale, outside rated play. Seen as
   "sort jumps to a different preset". Hard cuts now go through the app and
-  are announced. On Windows, check: on the defaults with music playing, every
-  change of picture has a `Now playing` line, and with hard cuts off the
-  gaps are 30-45 s, never 30 exactly. See CLAUDE.md.
+  are announced. ~~On Windows, check~~ **checked 5 Oct 2026**: with beats,
+  a hard cut about every 20 s, each one named; with hard cuts off, gaps of
+  31-43 s; nothing moved the playlist inside `render_frame` (2.1.11, same
+  rig: four silent moves in 130 s). See CLAUDE.md, and PORTING.md.
 - Linux only, but the same file: Caps Lock off **with the menu open** left
   the wallpaper solid over the icons (d8258e8 put the menu close between the
   Windows branch and its `else`).
