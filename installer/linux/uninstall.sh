@@ -28,5 +28,5 @@ echo "Removed BomsAI Visualizer from $PREFIX."
 # goes for what the app saved for you: clips, thumbnails, fetched preset
 # packs, collections.
 [ -d "$CONFIG" ] && echo "Settings and ratings kept in $CONFIG (delete it yourself if you want them gone)."
-[ -d "$DATA" ] && echo "Clips, thumbnails, downloaded presets and collections kept in $DATA (the same goes for those)."
+[ -d "$DATA" ] && echo "Clips, thumbnails, downloaded presets and collections kept in $DATA (also yours to delete)."
 exit 0
