@@ -205,6 +205,6 @@ Still wanted there: the Linux key-bindings.webp retaken on the new defaults.
   folder icons still visible, right-click menu, keys after a desktop click.
 - Windows: pull, prove the keyboard hook (PORTING.md list), build, retake
   win-key-bindings.webp. Mint: Cinnamon pass with Caps Lock on.
-- FOUND, NOT FIXED: install.sh `rm -rf`s ~/.local/share/BomsAIVisualizer,
-  which is also user_data_dir() on Linux -- clips, thumbs and sprites are
-  wiped by every upgrade and by uninstall. Flagged as its own task.
+- FIXED 16 Nov (a0f119f, e6d9131): the installer deleted user data on
+  upgrade/uninstall. App now in ~/.local/lib/BomsAIVisualizer; package
+  rebuilt (89,978,269 bytes, sha256 175b53fc...6d9e65) and installed here.

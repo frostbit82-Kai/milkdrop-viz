@@ -3086,4 +3086,42 @@ back at its own size. Caps off again took the catcher out of the stack.
 The key-bindings dialog was photographed from this package for the site: all
 24 rows on the new defaults, the wallpaper row's note in full.
 
+**Superseded the same day by a rebuild -- see the next entry.** The tarball
+recorded above was deleted; the checks above were run on it and still
+describe the app inside the one that replaced it, which is the same code.
+
 **Windows builds 2.1.14 next**, after the list above.
+
+#### The Linux installer stops deleting user data — 2.1.14 rebuilt, 2026-11-16
+
+Found by reading `install.sh` before installing 2.1.14 on the Ubuntu box: it
+installed into `~/.local/share/BomsAIVisualizer` and began with `rm -rf` of
+it, and that folder is `user_data_dir()` -- so every upgrade and uninstall
+had deleted clips, thumbnails, fetched preset packs, sprites, collections and
+the shuffle order. CLAUDE.md has the whole story. `a0f119f` moves the app to
+`~/.local/lib/BomsAIVisualizer`, takes an old install out of the data folder
+by name and repoints a login entry; `test_installer.py` (27th suite) runs
+the real scripts on a scratch `HOME`. Shell scripts only, so the version
+stays 2.1.14 and the app inside is the same code.
+
+**`BomsAIVisualizer-2.1.14-linux-x86_64.tar.gz`**, 86 MB (89,978,269 bytes),
+sha256 `175b53fc01856bea32c48099e172afba8626b185f94b063f31348aff866d9e65`.
+Built in `almalinux:9` from the clean tree at `e6d9131`; floor
+**GLIBC_2.34**. Its `install.sh`, `uninstall.sh` and `README.txt` are
+byte-identical to the repo's, and the app's code markers are present.
+
+Run for real on a scratch `HOME` holding a copy of the old layout (the
+installed 2.1.13-era app in `share`, a launcher symlink, a menu entry and a
+`--wallpaper` login entry pointing at it, and one file of each kind of user
+data): install moved the app to `lib`, left the user data md5-identical,
+repointed the launcher, the menu entry and the login entry, and `bomsai-viz
+--help` exited 0; uninstall then removed `lib/BomsAIVisualizer` and left the
+user data md5-identical again, saying where it was.
+
+Installed on the Ubuntu box the same way. One thing the *old* installer did
+there first, while installing the earlier 2.1.14 tarball: it deleted the
+data folder's `sprites/`, which was empty (checked before, 0 files) -- so
+nothing of the user's was lost on this machine.
+
+**Windows is not affected** (Program Files and `%LOCALAPPDATA%`), and its
+build is unchanged by this.
