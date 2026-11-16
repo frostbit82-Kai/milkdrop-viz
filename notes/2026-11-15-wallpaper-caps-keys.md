@@ -182,3 +182,29 @@ runs it under `bwrap --dev-bind / / --bind <rig>/leds /sys/class/leds`, and
 Site (bomsai-software, NOT committed/deployed yet): guide key table + prose
 keys + Caps Lock paragraphs + apps.js wallpaper line are edited in the tree.
 Still wanted there: the Linux key-bindings.webp retaken on the new defaults.
+
+## DONE -- 16 Nov 2026
+
+- milkdrop-viz pushed: 47a139f (work), 437c2d4 (2.1.14), 38be25a (package
+  record). Package: installer/dist/BomsAIVisualizer-2.1.14-linux-x86_64.tar.gz,
+  89,973,634 bytes, sha256 d09c39a9...ab0a3d6e, GLIBC_2.34. PORTING.md has
+  the verification and the list Windows must prove before building.
+- Bomsai Player: d01b27b takes viz_common.py across (check_sync identical).
+- Site (bomsai-software): 8664968 pushed, NOT deployed -- guide keys, Caps
+  Lock text, Linux key-bindings.webp retaken. Deploy is the user's, after
+  Windows has built 2.1.14; win-key-bindings.webp is Windows' to retake.
+- 2.1.14 installed on this Ubuntu box (~/.local/share/BomsAIVisualizer);
+  the user's keymaps.json untouched.
+- Rig stopped, Xvfb :77 stopped, every ~/.cache/viz-* scratch folder deleted.
+  The rig rebuilds from notes/gnome-rig/ (it needs a folder of .milk files:
+  $VIZ_RIG_PRESETS, or copy a few into ~/.cache/viz-gnome-rig/presets).
+
+## Open after this
+
+- The user's own check on the real desktop: wallpaper mode, Caps Lock on ->
+  folder icons still visible, right-click menu, keys after a desktop click.
+- Windows: pull, prove the keyboard hook (PORTING.md list), build, retake
+  win-key-bindings.webp. Mint: Cinnamon pass with Caps Lock on.
+- FOUND, NOT FIXED: install.sh `rm -rf`s ~/.local/share/BomsAIVisualizer,
+  which is also user_data_dir() on Linux -- clips, thumbs and sprites are
+  wiped by every upgrade and by uninstall. Flagged as its own task.
