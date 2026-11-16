@@ -4,12 +4,12 @@
 #   app.sh src [args]      the visualiser from a COPY of this checkout's tracked
 #                          files (so the repo's own config.json is never written),
 #                          with Caps Lock read from the file $VIZ_RIG/caps
-#   app.sh frozen [args]   an installed build: $VIZ_FROZEN, or the one in ~/.local
+#   app.sh frozen [args]   an installed build: $VIZ_FROZEN, or the one in ~/.local/lib
 #   app.sh env cmd...      any command, with the rig's display, bus and HOME
 R="${VIZ_RIG:-$HOME/.cache/viz-gnome-rig}"
 HERE="$(cd "$(dirname "$0")" && pwd)"
 REPO="$(cd "$HERE/../.." && pwd)"
-FROZEN="${VIZ_FROZEN:-$HOME/.local/share/BomsAIVisualizer/BomsAIVisualizer}"
+FROZEN="${VIZ_FROZEN:-$HOME/.local/lib/BomsAIVisualizer/BomsAIVisualizer}"
 # mutter's auth file has wildcard entries, so the display number is not in it.
 XA=$(ls "$R"/run/.mutter-Xwaylandauth.* | head -1)
 RP=""; for p in $(pgrep -x gnome-shell); do

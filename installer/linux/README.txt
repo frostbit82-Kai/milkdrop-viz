@@ -26,6 +26,11 @@ launcher only runs the script sitting next to it:
 Installs to ~/.local, no root needed. It adds an applications-menu entry and a
 `bomsai-viz` command, then starts the app once to check it runs.
 
+To upgrade, install the new version the same way, over the old one. Your
+settings and ratings, and everything the app has saved for you -- recorded
+clips, thumbnails, preset packs fetched with Get presets, collections -- are
+kept. So are they if you remove it.
+
 To install somewhere else:   PREFIX=/opt ./install.sh    (may need sudo)
 To remove:                   double-click "Uninstall BomsAI Visualizer",
                              or run ./uninstall.sh

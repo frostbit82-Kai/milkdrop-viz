@@ -22,6 +22,16 @@ root, adds a menu entry and a `bomsai-viz` command, and starts the app once to
 check it runs before claiming success. `./uninstall.sh` reverses it and leaves
 settings and preset ratings alone.
 
+**The app goes in `$PREFIX/lib/BomsAIVisualizer`, and that folder is the only
+one either script deletes.** `~/.local/share/BomsAIVisualizer` is
+`user_data_dir()` -- clips, thumbnails, fetched preset packs, sprites,
+collections, the shuffle order -- and up to 2.1.14 `install.sh` installed
+*into* it and replaced it wholesale, so every upgrade and uninstall deleted the
+lot. An old install found there is taken out by name (the executable,
+`_internal`, `licenses`, `README.txt`) and a login entry naming the old path is
+pointed at the new one. `test_installer.py` runs both scripts against a scratch
+`HOME`; never try one against the real `~/.local` -- set `PREFIX` and `HOME`.
+
 **libprojectM is vendored, not built.** Upstream's release links have gone dead
 before now, and building from source needs a toolchain the packaging machine may
 not have — so a known-good `libprojectM-4.so.4` and `libprojectM-4-playlist.so.4`

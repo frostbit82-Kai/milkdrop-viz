@@ -142,7 +142,8 @@ the only way to see why a frozen build failed.
 `screensaver`, `wallpaper`, `packs`, `settings_diff`, `shuffle`, `theme`,
 `idle_pause`, `collections`, `backup`, `tweak`, `sprites`, `code_editor`,
 `vsync`, `audio_import`, `lock`, `menu`, `live_textures`, `dual`, `keymaps`,
-`browser_toggle`. All twenty-six must pass before a release.
+`browser_toggle`, `installer` (Linux; runs the real install and uninstall
+scripts against a scratch `HOME`). All twenty-seven must pass before a release.
 
 **Driving the shipped build, not the source.** A source checkout ignores
 `XDG_CONFIG_HOME` (`config.py:_base_dir` keeps state beside the code unless
@@ -1245,6 +1246,31 @@ There is no display in an agent shell and SDL needs one, so:
   ESCAPE does not emit `aboutToHide` either -- both measured. A short
   single-shot timer restarted on `valueChanged` is what actually covers every
   way a slider moves.
+- **The Linux installer deleted everything the user had made, on every
+  upgrade, for as long as there had been an installer.** Found 16 Nov 2026 by
+  reading `install.sh` before running it on the user's own machine.
+  `user_data_dir()` is `~/.local/share/BomsAIVisualizer` on Linux; `install.sh`
+  installed the app into `$PREFIX/share/BomsAIVisualizer` and opened with
+  `rm -rf "$APPDIR"`, and `uninstall.sh` did the same. One folder. Clips,
+  thumbnails, packs fetched through Get presets, sprites, texture stand-ins,
+  `collections.json` and `shuffle.json` all went with the old build -- while
+  the README said settings survive and the uninstall launcher's own comment
+  said "collections ... are left alone". Nobody reported it because ratings
+  and settings live in `~/.config` and did survive, and a wiped thumbnail
+  cache refills quietly. `user_data_dir`'s docstring had said "never the
+  install directory" since the day it was written: the invariant was stated
+  in one file and broken in another, and nothing compared the two.
+  The app is in `$PREFIX/lib/BomsAIVisualizer` now, replaced wholesale as
+  before; the data folder is never deleted by either script. An old install
+  is removed from it by name, only where the executable sits beside its
+  `_internal`, and a `~/.config/autostart` entry naming the old path is
+  rewritten (the move would otherwise turn "start at login" into an entry
+  that starts nothing, silently). `test_installer.py` holds all of it, the
+  two-file invariant included. **Windows was never exposed**: Inno installs
+  under Program Files and the data goes to `%LOCALAPPDATA%`.
+  **Read an install script before running it against a real profile, and
+  never test one there** -- `PREFIX` and `HOME` both pointed at a scratch
+  folder.
 - **A frozen build changes where three things live, and each broke separately.**
   `config.py` moves `BASE_DIR` to the OS config directory when `sys.frozen` is
   set, because the install directory is replaced wholesale on upgrade.
