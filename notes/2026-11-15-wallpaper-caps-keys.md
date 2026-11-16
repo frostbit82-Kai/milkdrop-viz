@@ -162,3 +162,23 @@ Still to do, in order:
    (~310-338). Linux key-bindings shot shows old defaults -> retake; the
    Windows one is the Windows session's.
 6. Memory: bomsai-milkdrop-port.md / MEMORY.md line for 2.1.14.
+
+## 16 Nov: committed, building
+
+Commits (local, not pushed yet): 47a139f (the work) and 437c2d4 (2.1.14:
+VERSION, EULA line, ROADMAP, PORTING). The first container build stopped on
+its own check -- "EULA.txt does not say Applies to version 2.1.14" -- so the
+version bump is VERSION *and* installer/licenses/EULA.txt line 4, as it was
+for 2.1.13.
+
+Measured in the rig: SDL's visual hint set back to "" really is unset -- a
+window made with it is depth 32, the plain and the GL window made after it
+are both depth 24. So visual 2's window cannot inherit the catcher's visual.
+
+A frozen build can have Caps Lock on in the rig after all: `app.sh frozen`
+runs it under `bwrap --dev-bind / / --bind <rig>/leds /sys/class/leds`, and
+`rig.sh caps on|off` writes that stand-in LED as well as the source run's file.
+
+Site (bomsai-software, NOT committed/deployed yet): guide key table + prose
+keys + Caps Lock paragraphs + apps.js wallpaper line are edited in the tree.
+Still wanted there: the Linux key-bindings.webp retaken on the new defaults.

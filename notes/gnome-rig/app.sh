@@ -37,7 +37,14 @@ CFG="{\"preset_dir\": \"${VIZ_RIG_PRESETS:-$R/presets}\", \"texture_dir\": \"\",
 case "$mode" in
   env)    exec "${E[@]}" "$@" ;;
   frozen) echo "$CFG" > "$R/home/.config/BomsAIVisualizer/config.json"
-          exec "${E[@]}" "$FROZEN" "$@" ;;
+          # A frozen build cannot be patched, so it is shown a keyboard light
+          # of the rig's own: /sys/class/leds replaced, for this process only,
+          # by a folder holding one capslock LED that `rig.sh caps` writes.
+          mkdir -p "$R/leds/input0::capslock"
+          [ -e "$R/leds/input0::capslock/brightness" ] ||
+            echo 0 > "$R/leds/input0::capslock/brightness"
+          exec "${E[@]}" bwrap --dev-bind / / --bind "$R/leds" /sys/class/leds \
+            "$FROZEN" "$@" ;;
   src)    mkdir -p "$R/src"
           ( cd "$REPO" && git ls-files -z '*.py' VERSION assets | tar --null -T - -cf - ) |
             tar -xf - -C "$R/src"

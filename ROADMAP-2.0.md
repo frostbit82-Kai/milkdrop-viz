@@ -322,8 +322,9 @@ back. One nit: Customize menu's placement box is narrower than "New
 category" and shows "New categor" -- the default is "New list" now, which
 fits (93px of a 99px box, "New list 10" included).
 
-**Changed in 2.1.14** (15 Nov 2026, Linux; **Windows builds 2.1.14 next**,
-and has one piece to prove first -- the last item):
+**Changed in 2.1.14** (15 Nov 2026, Linux, package verified 16 Nov;
+**Windows builds 2.1.14 next**, and has one piece to prove first -- the last
+item):
 
 - **Wallpaper mode with Caps Lock on no longer hides the desktop icons on
   Linux.** Reported from Ubuntu as "desktop mode hides the folder, but shows

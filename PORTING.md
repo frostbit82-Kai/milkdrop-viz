@@ -3048,4 +3048,42 @@ If 4 fails in any way, do not ship the hook: pass `None` for `on_key` in
 `_set_wallpaper_front` and build without it.
 
 Then retake the key-bindings screenshot for the site: the Windows one shows
-the old defaults.
+the old defaults. (The Linux one was retaken from the package below, and the
+guide's key table and Caps Lock paragraphs are already in the site repo,
+committed and not deployed.)
+
+#### The verified 2.1.14 Linux package — 2026-11-16
+
+**`BomsAIVisualizer-2.1.14-linux-x86_64.tar.gz`**, 86 MB (89,973,634 bytes),
+sha256 `d09c39a95d31dbb67e7c5d2e84e9133f656fcbf8d52f0fd31eec0cb9ab0a3d6e`.
+Built in `almalinux:9` from the clean tree at `437c2d4`; floor
+**GLIBC_2.34**. `VERSION` and the bundled EULA read 2.1.14, and the README
+inside carries the new CONTROLS block. The first build stopped on the
+script's own check that the EULA names the version -- the bump is `VERSION`
+and line 4 of `installer/licenses/EULA.txt`, both. The 2.1.13 tarball and its
+extracted folder were deleted from `installer/dist`.
+
+688 zlib streams inflated out of the executable: `_open_wallpaper_catcher`,
+`x11_is_composited`, `_NET_WM_USER_TIME`, `SDL_VIDEO_X11_WINDOW_VISUALID`,
+`win_vk_to_sdl`, `_desktop_key`, "no desktop key hook" and "Caps Lock is on"
+all present; the two 2.1.13 strings this release reworded ("right-click the
+desktop for this menu", "The tray icon works too") absent.
+
+Stock `ubuntu:24.04`, the recipe from 2.1.5: `--help` with `libgl1
+libglib2.0-0t64 libegl1` exits 0 with the usage text; a plain start with
+`libxcb-cursor0 libxkbcommon-x11-0` on top is alive when `timeout` ends it at
+20 s (124). The display was a throwaway `Xvfb :77 -ac`, not the host's `:0`.
+
+**The package itself in the GNOME rig**, Caps Lock by a stand-in LED (`bwrap
+--bind <rig>/leds /sys/class/leds`, which is how a frozen build can be given
+one): Caps off, one window in the stack and the icons up; Caps on, the
+catcher appears in layer 1, the icons stay up, a right-click logs `RCLICK`
+and shows the menu; then on the shipped defaults, from the desktop: `j` and
+`h` each a new `Now playing`, Up and Down `Rated ... 6/10` then `5/10`, `r`
+`Shuffle: ON`, `c` `Hard cuts: OFF`, `d` `[wallpaper] off` with the window
+back at its own size. Caps off again took the catcher out of the stack.
+
+The key-bindings dialog was photographed from this package for the site: all
+24 rows on the new defaults, the wallpaper row's note in full.
+
+**Windows builds 2.1.14 next**, after the list above.
