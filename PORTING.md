@@ -2962,3 +2962,90 @@ diff with it.
 **Installed by the user, 5 Oct 2026**, before the
 session moved on (the UAC click is theirs). The installed-vs-portable diff is
 still not done.
+
+### 2.1.14 — icons stay up with Caps Lock on, keys from the desktop, new default keys — 2026-11-15
+
+Three things asked for from the Ubuntu box, after a round of use there.
+
+**1. "Desktop mode hides the folder, but shows under opened windows."** Not
+the 2 Oct stacking bug back again, which is what it sounds like. The journal
+of the run (`journalctl --user | grep bomsai`) had `RCLICK` in it between
+`[wallpaper] on` and `off`, and that line is only printed with Caps Lock on;
+the installed 2.1.13, run in a headless GNOME session with Caps Lock off, kept
+every icon up. So it was the Caps Lock state, where Linux raised the visuals
+over the icon layer on purpose -- the price, as it was understood, of a
+right-click reaching an X window at all under Wayland. It only has to reach
+*a* window of ours: `_open_wallpaper_catcher` puts a fully transparent one
+over the icons to take the clicks and the keyboard, and the visuals stay
+underneath in both states. Where nothing composites it falls back to the old
+raise. CLAUDE.md has the mechanism and its four side conditions.
+
+Measured in the rig (`notes/gnome-rig`, GNOME 50.1, mutter 50.1-0ubuntu2.5,
+Desktop Icons NG, llvmpipe), source build, Caps Lock by the rig's own switch:
+
+| | |
+|---|---|
+| Caps on | icons and visuals both on screen; the catcher is in mutter's layer 1, the visuals in layer 0 |
+| Right-click the desktop | `RCLICK`, and the visualiser's menu on screen |
+| Click the desktop, then Right and `j` | two new `Now playing` lines |
+| Double-click an icon | toast "Caps Lock is on — turn it off to use the desktop icons"; the icon does nothing |
+| Caps off | catcher gone from the stack; right-click gives Desktop Icons NG's own menu, no `RCLICK` |
+| Typing in another window while Caps goes on | that window keeps the keyboard: typed `a`, Caps on, `j`, Right, `b` -- the entry read "ajb" and no preset changed |
+| Click the desktop, `d` | leaves wallpaper mode, catcher dropped, window back at its old size; `d` again goes back in and the catcher reopens |
+
+**Not measured: Cinnamon, and a real GPU.** `x11_is_composited` says yes on
+Cinnamon by name, because muffin was measured not to own `_NET_WM_CM_S0`
+while plainly compositing; that is an inference until Mint has run it.
+
+**2. Key bindings from the desktop, with Caps Lock on.** Linux already had
+them (the raised window took the keyboard when clicked; the catcher does
+now). Windows did not and could not: the wallpaper is a child of WorkerW and
+is never focused. `_DesktopRightClick` takes a third callback, `on_key`, and
+installs a WH_KEYBOARD_LL hook on the thread the mouse hook already runs on.
+`Renderer._desktop_key` answers "is this key bound" through `win_vk_to_sdl`
+and queues the ones that are; the render loop plays them through the same
+`_handle_key` an SDL key reaches. **None of the Windows half has run.** It
+was written here, and the parts with decisions in them are covered by
+`test_keymaps` (virtual key to SDL, on a stand-in US layout) and
+`test_wallpaper` (which keys are taken, where the queue is drained).
+
+**3. New default keys**: hard cut `h` (was SPACE), random `j` (`r`), hard
+cuts on/off `c` (`h`), rate up/down the arrow keys (`+`/`-`), shuffle `r`
+(`m`), snapshot `s` (`c`). These are the author's own keymaps.json. A fresh
+install gets them; a saved file is not touched. Both README CONTROLS blocks
+moved with the table.
+
+Also found on the way: `import sounddevice` raises `PortAudioError` when no
+sound server can be reached, which the guard did not catch -- a source run in
+the rig died on it. `except Exception` now.
+
+26 suites pass on Linux (the wallpaper suite gained eleven checks, the key
+suite seven, the audio-import one two); each new check was shown to fail
+against the code with the fix taken back out.
+
+#### What Windows has to prove before it builds 2.1.14
+
+The keyboard hook sees every key on the machine while Caps Lock is on in
+wallpaper mode. Prove it from source first, with wallpaper mode on:
+
+1. **Caps Lock off: nothing is different.** Type in Notepad, rename an icon.
+2. **Caps Lock on, desktop clicked**: `j` picks a random preset (a `Now
+   playing` line), Right and Left move, Up and Down rate, `d` leaves
+   wallpaper mode. Each key acts once per press and repeats while held.
+3. **Caps Lock on, Notepad in front**: everything typed lands in Notepad, in
+   capitals, and no preset moves.
+4. **Not taken, with the desktop clicked**: Caps Lock itself (it must still
+   turn off -- this is the one that matters most), Alt+Tab, Win+D, Ctrl+Z,
+   F2 on a selected icon (renames), Delete on a selected icon, F5.
+5. **The menu still opens** on a right-click, and a key pressed while it is
+   up closes it rather than acting.
+6. **Quit from that menu**: no key is stuck afterwards -- the hook is gone
+   (type in Notepad with Caps Lock still on).
+7. If the hook cannot be installed the log says `[wallpaper] no desktop key
+   hook (error N)` and the menu half still works.
+
+If 4 fails in any way, do not ship the hook: pass `None` for `on_key` in
+`_set_wallpaper_front` and build without it.
+
+Then retake the key-bindings screenshot for the site: the Windows one shows
+the old defaults.

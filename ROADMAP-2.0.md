@@ -322,6 +322,33 @@ back. One nit: Customize menu's placement box is narrower than "New
 category" and shows "New categor" -- the default is "New list" now, which
 fits (93px of a 99px box, "New list 10" included).
 
+**Changed in 2.1.14** (15 Nov 2026, Linux; **Windows builds 2.1.14 next**,
+and has one piece to prove first -- the last item):
+
+- **Wallpaper mode with Caps Lock on no longer hides the desktop icons on
+  Linux.** Reported from Ubuntu as "desktop mode hides the folder, but shows
+  under opened windows". The visuals used to be raised over the icons so a
+  right-click could reach them; now a see-through window takes the clicks and
+  the visuals stay underneath. The icons show but do not answer while Caps
+  Lock is on (a double-click on one says so). Measured in a headless GNOME
+  50.1 session with Desktop Icons NG; **not yet seen on Cinnamon** -- on Mint,
+  check with Caps Lock on that the Nemo icons stay up, the menu opens on a
+  right-click and `d` leaves the mode.
+- **The key bindings work from the desktop in wallpaper mode, with Caps Lock
+  on.** Asked for the same day. On Linux they already did once the desktop
+  had been clicked, and still do. On Windows they could not -- the wallpaper
+  never has the keyboard -- so a keyboard hook beside the mouse one hands
+  bound keys to the app while the desktop is the foreground window.
+- **New default keys**, the author's own set: hard cut `h`, random `j`, hard
+  cuts on/off `c`, rate with the up and down arrows, shuffle `r`, snapshot
+  `s`. A saved keymaps.json is left exactly as it is.
+- The app starts on a machine with no sound server (it died at import).
+- **On Windows, prove before building** (PORTING.md has the list): the
+  keyboard hook has never run. Caps Lock on + desktop clicked: `j`, the
+  arrows and `d` act; typing in any other window is untouched; Caps Lock
+  itself, Alt+Tab, Win+D and Ctrl shortcuts still work; F2 on a selected
+  icon still renames it.
+
 **Fixed in 2.1.13** (3 Oct 2026, Linux; **built on Windows 5 Oct**, which
 carries this and everything under 2.1.12 below -- 2.1.12 was skipped there):
 
