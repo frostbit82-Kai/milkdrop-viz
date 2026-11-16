@@ -448,6 +448,33 @@ There is no display in an agent shell and SDL needs one, so:
   database answers "was there one before today"), move it out straight away,
   and never leave one behind.
 
+- **GNOME with Desktop Icons NG can be had headless, and that is the rig for
+  anything about Ubuntu's desktop.** `notes/gnome-rig/`, built 15 Nov 2026.
+  `start.sh` runs `gnome-shell --headless --wayland --virtual-monitor
+  1920x1080` under `dbus-run-session` with its own `HOME`, `XDG_RUNTIME_DIR`
+  and dconf (in `~/.cache/viz-gnome-rig`), software rendering, and DING
+  enabled next to a probe extension; `app.sh src|frozen|env` runs the app or
+  anything else inside it; `rig.sh` asks the probe for a screenshot
+  (`Shell.Screenshot`), the window stack as mutter has it (title, type, layer,
+  focus), or a click or key from Clutter's virtual devices. Nothing reaches
+  the real session: not the display, not the bus, not the settings -- and the
+  user's desktop is never the test bench. What it taught on its first day:
+  - **Caps Lock there is a file** (`rig.sh caps on`). The LED the app reads
+    is the real keyboard's, so `rigrun.py` swaps `caps_lock_on` for a file
+    test -- which is also why only a *source* run can have Caps Lock on.
+  - **Xwayland starts on first use.** Until then the X sockets belong to the
+    shell (`ss -xlp`, by the rig shell's pid) and afterwards to the rig's own
+    Xwayland; and mutter's auth file has wildcard entries with no display
+    number in them. `app.sh` reads both. Getting this wrong is Qt aborting
+    with "could not connect to display :", which looks like an app crash.
+  - **`global.get_window_actors()` does not list DING's window** -- the
+    extension hides it -- so "is it under the icons" is a screenshot, not a
+    stack dump.
+  - **No PulseAudio in there**, which is what found the third way
+    `import sounddevice` fails (below, under the audio traps).
+  - Stop it with `rig.sh stop`, which finds its processes by `RIG_DIR` in
+    their environment. Never `pkill -f`.
+
 - **Grab with `-draw_mouse 0`.** The pointer sat over a notes cell in the first
   frame and had to be reshot.
 
@@ -796,6 +823,18 @@ There is no display in an agent shell and SDL needs one, so:
   bare `raise`. The wheel carries a working library on Windows, so the import
   cannot fail there; on Linux it carries none, and the import is one
   `find_library` miss away from taking the process down.
+
+  **And a third exception from the same line, 15 Nov 2026: the library is
+  there and there is no sound server to reach.** PortAudio's PulseAudio host
+  fails to initialise and the import raises `sounddevice.PortAudioError`
+  ("PulseAudio_Initialize: Can't connect to server") -- a plain `Exception`,
+  and a name that cannot even be written before the import has succeeded. A
+  source run in the headless GNOME rig, which has no PulseAudio socket, died
+  on that line; the frozen build did not, only because it cannot find the
+  library at all and takes the `OSError` path. The guard is `except
+  Exception` now, and `test_audio_import` has the case as a stand-in
+  `sounddevice` that raises on import. A session with no PulseAudio is a
+  login over ssh, a container, a display manager's own session -- not exotic.
 
   **Proven against the shipped artifact, and it was shipping broken.** The
   2.0.0 tarball built before the fix was extracted in a stock `ubuntu:24.04`
@@ -1148,10 +1187,12 @@ There is no display in an agent shell and SDL needs one, so:
 - **A source run and an installed run do not read the same settings.** From a
   checkout, `BASE_DIR` is the repo, so the app uses the developer's own
   `config.json` and `keymaps.json`; frozen, it uses a clean per-user config
-  directory and therefore `DEFAULT_KEYMAPS`. The repo's keymaps.json rebinds
-  `toggle_mode` from `m` to `r`, so the same keypress does different things in
-  the two builds. A UI difference between source and installed is not
-  automatically a packaging bug.
+  directory and therefore `DEFAULT_KEYMAPS`. Until 2.1.14 the repo's
+  keymaps.json disagreed with the defaults on seven keys (`toggle_mode` on `r`
+  rather than `m`, and so on), so the same keypress did different things in
+  the two builds; the defaults are that set now, but the file is still the
+  older and shorter of the two and can drift again. A UI difference between
+  source and installed is not automatically a packaging bug.
 - **The context menu is 236x473** — most of a 640x480 window. An automated
   "click outside the menu" has to be outside the *menu's* rectangle, which is
   not where it was opened. Clicking at what looked like empty visualiser landed
@@ -1877,6 +1918,17 @@ There is no display in an agent shell and SDL needs one, so:
   elif chain's order, which is not the table's order, and guessing wrong is
   worse than showing both. A fixture with both keys written out is how this was
   briefly mistaken for a live bug.
+
+  **The defaults themselves moved in 2.1.14**, to the set the author had been
+  running: hard cut `h` (was SPACE), random `j` (`r`), hard cuts on/off `c`
+  (`h`), rate up/down the arrow keys (`+`/`-`), shuffle `r` (`m`), snapshot
+  `s` (`c`). So the "c" in the story above is now hard cuts' own default and
+  `test_keymaps` names the contested key as "whatever snapshot defaults to"
+  rather than a letter. Only an install with no keymaps.json sees the change;
+  a file saved under the old defaults keeps all 24 of its keys, which the
+  suite pins. Three places list the defaults for people and have to move
+  with the table: both `installer/*/README.txt` CONTROLS blocks, and the
+  site's guide.
 - **Two switches that are each right on their own can be wrong together, and
   a suite with a test for each will not see it.** 2.1.7 shipped a crossfader
   and "give visual 2 a monitor of its own", with a check for each: switching
@@ -1992,13 +2044,75 @@ There is no display in an agent shell and SDL needs one, so:
     the GNOME half was run live on the user's desktop with
     `LIBGL_ALWAYS_SOFTWARE=1`, so a driver fault could not end their session.
 
-- **Caps Lock decides whose menu the desktop opens in wallpaper mode.** Off:
-  the desktop's own, icons on top. On: ours. On X11 that is the visualiser
-  held at the *top* of the desktop layer -- over the icons, under every window
-  -- so the click is its; under Wayland there is no other way for an X client
-  to receive a click on a Wayland window. On Windows a low-level mouse hook
-  (`_DesktopRightClick`, its own thread, installed only while Caps Lock is on)
-  takes the click from Explorer and leaves the icons alone. Caps Lock is read
+- **Caps Lock decides whose menu the desktop opens in wallpaper mode -- and,
+  since 2.1.14, whose keys.** Off: the desktop's own, icons on top. On: ours.
+  On Windows a low-level mouse hook (`_DesktopRightClick`, its own thread,
+  installed only while Caps Lock is on) takes the click from Explorer and
+  leaves the icons alone.
+
+  **On X11 the click is taken by a second, see-through window, not by raising
+  the visuals.** Until 15 Nov 2026 the visualiser itself was held at the top
+  of the desktop layer while Caps Lock was on, on the reasoning that under
+  Wayland an X client has no other way to receive a click on a Wayland
+  window. True, and it hid every icon for as long as Caps Lock was on --
+  reported from Ubuntu as "desktop mode hides the folder, but shows under
+  opened windows", which read like the 2 Oct stacking bug come back and was
+  not: the journal of that run had `RCLICK` in it, which
+  `_right_click_is_ours` only prints with Caps Lock on, and the installed
+  2.1.13 kept the icons up in the rig with it off. **Read the log for which
+  Caps Lock state a wallpaper report is about before touching the stacking.**
+  The click only has to land on *an* X window of ours.
+  `_open_wallpaper_catcher` makes one: an SDL window on the 32-bit TrueColor
+  visual (`x11_argb_visual`, handed to SDL through
+  `SDL_VIDEO_X11_WINDOW_VISUALID` and taken straight back off, or visual 2's
+  window inherits it), desktop type and the usual states set before the map,
+  background pixel 0 and one `XClearWindow`. The compositor blends it to
+  nothing; the icons and the visuals show through; the clicks, and the
+  keyboard once it has been clicked, are its own and arrive in the ordinary
+  SDL loop. The visuals stay at the bottom and click-through in both states.
+  What goes with it:
+  - **`_NET_WM_USER_TIME` = 0 before the map**, EWMH for "do not focus me for
+    appearing". Caps Lock goes on while somebody is typing far more often
+    than for this, and a catcher that took the keyboard would turn their
+    typing into key bindings. Measured in the rig: a text entry kept every
+    key typed across Caps Lock going on.
+  - **Only where something composites** (`x11_is_composited`): a Wayland
+    session, a screen whose `_NET_WM_CM_Sn` has an owner, or Cinnamon (which
+    cannot run uncomposited and was measured *not* to own that selection).
+    An ARGB window with nothing blending it is an opaque black sheet --
+    that is the nemo-desktop-in-the-bare-rig entry further up. Anywhere else
+    `_set_wallpaper_front` falls back to raising the visuals, exactly as
+    before, and `_hold_wallpaper_bottom`'s `raised` is that case.
+  - **The icons are visible and inert** while Caps Lock is on -- every click
+    is the catcher's, left ones included -- so a double-click there toasts
+    why (`_double_clicked`) instead of fullscreen's "Leave wallpaper mode
+    first". Windows does not have this limit: its hook takes only
+    right-clicks.
+  - **The catcher's window events are dropped by window id** in the event
+    loop. It is the wallpaper's size today; a size event of its own reaching
+    `glViewport` is the bug that would follow the day it is not.
+  - mutter reports the catcher in layer 1 (BOTTOM) and the visuals in layer
+    0 (DESKTOP), both type DESKTOP. Above the icons, under every window.
+  **Not yet seen on real Cinnamon or on a real GPU**: the rig is GNOME 50.1
+  with llvmpipe. Mint's pass is: Caps Lock on, are the Nemo icons still
+  there, does the menu open, does `d` leave.
+
+  **The keys, on Windows, are a second low-level hook on the same thread**
+  (`on_key`, WH_KEYBOARD_LL). The wallpaper is a child of WorkerW and is
+  never focused, so with the desktop clicked the keys go to Explorer;
+  the hook sees each one first, `Renderer._desktop_key` says whether it is
+  bound (`win_vk_to_sdl` turns the virtual key into the `(sym, scancode)`
+  `_token_matches` already understands), and a bound one is queued on
+  `_hook_keys` for the render loop and kept from Explorer, down and up.
+  Never taken: a key with any window but Progman/WorkerW in the foreground;
+  a key with Ctrl, Alt or a Windows key held; Alt combinations at all (they
+  are WM_SYSKEYDOWN); and Caps Lock, which has no name in `win_vk_to_sdl` --
+  it is what removes the hook. The queue is drained beside the SDL events,
+  above the idle pause, or a parked wallpaper would sit on its keys until
+  the music came back. **Written on Linux and not yet run on Windows** --
+  see PORTING.md's 2.1.14 entry for what has to be proven there.
+
+  Caps Lock is read
   off **`/sys/class/leds/*::capslock/brightness`** first: world-readable, and
   the same on Xorg and Wayland, where the X server only hears about Caps Lock
   while one of its windows has the keyboard. Two things that came with it:

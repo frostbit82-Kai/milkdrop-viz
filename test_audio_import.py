@@ -21,6 +21,13 @@ poison below costs nothing and the right answer is that the backend is there.
 Checked in a subprocess with `find_library` poisoned, because viz_common is
 already imported by the time a test could ask, and because the failure is at
 import time -- there is nothing to call.
+
+A third way to fail turned up on 15 Nov 2026, with the library present: no
+sound server to reach. PortAudio's PulseAudio host then fails to initialise
+and the import raises `sounddevice.PortAudioError` -- a plain Exception, and
+a name that cannot be spelled before the import has worked. Found by running
+the app in a headless session with no PulseAudio socket, where a source run
+died on its first line.
 Run: QT_QPA_PLATFORM=offscreen python test_audio_import.py
 """
 import glob, importlib.util, os, sys, subprocess
@@ -49,6 +56,23 @@ import ctypes.util, sys
 _real = ctypes.util.find_library
 ctypes.util.find_library = lambda n: None if "portaudio" in n else _real(n)
 sys.path.insert(0, {HERE!r})
+import viz_common
+print("SD_AVAILABLE", viz_common._SD_AVAILABLE)
+"""
+
+
+#: The same, on a box where PortAudio loads and then cannot initialise:
+#: sounddevice raises its own PortAudioError out of the import. Stood in for
+#: by a module of that name which does exactly that, ahead of the real one.
+_WITHOUT_A_SOUND_SERVER = f"""
+import os, sys, tempfile
+d = tempfile.mkdtemp(prefix="no-sound-server-")
+with open(os.path.join(d, "sounddevice.py"), "w") as f:
+    f.write('class PortAudioError(Exception): pass\\n'
+            'raise PortAudioError("Error initializing PortAudio: '
+            'PulseAudio_Initialize: Can\\'t connect to server")\\n')
+sys.path.insert(0, {HERE!r})
+sys.path.insert(0, d)
 import viz_common
 print("SD_AVAILABLE", viz_common._SD_AVAILABLE)
 """
@@ -106,14 +130,25 @@ def and_it_says_so_rather_than_pretending_the_backend_is_there():
     assert "sounddevice unavailable" in r.stdout, r.stdout[-400:]
 
 
-def the_guard_names_oserror_and_not_just_importerror():
+def a_machine_with_no_sound_server_can_still_start_the_app():
+    r = _run(_WITHOUT_A_SOUND_SERVER)
+    assert r.returncode == 0, (
+        f"viz_common will not import when PortAudio cannot initialise:\n"
+        f"{r.stderr[-700:]}")
+    assert "SD_AVAILABLE False" in r.stdout, r.stdout[-400:]
+    assert "sounddevice unavailable" in r.stdout, r.stdout[-400:]
+
+
+def the_guard_is_wider_than_importerror():
     """Pins the fix itself. `except ImportError` alone reads as sufficient --
-    it is the failure a missing *package* gives -- and this one is a missing
-    *library*, which is a different exception from the same line."""
+    it is the failure a missing *package* gives -- and the other two are a
+    missing *library* (OSError) and a library that will not start
+    (sounddevice.PortAudioError), different exceptions from the same line."""
     src = open(os.path.join(HERE, "viz_common.py"), encoding="utf-8").read()
     at = src.index("import sounddevice as sd")
-    guard = src[at:at + 200]
-    assert "OSError" in guard, guard.splitlines()[:6]
+    line = next(l for l in src[at:at + 300].splitlines()
+                if l.startswith("except"))
+    assert line.startswith("except Exception") or "OSError" in line, line
 
 
 for name, fn in list(globals().items()):

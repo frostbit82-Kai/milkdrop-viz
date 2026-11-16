@@ -11,6 +11,10 @@ bindings dialog, where somebody types a key another row already holds.
 Found in the real app: this repo's own keymaps.json gives "c" to hard cuts,
 which is the default `snapshot` arrived on in 2.1, so pressing "c" toggled
 hard cuts and the snapshot key looked broken.
+
+The defaults moved on 15 Nov 2026 -- hard cuts now ships on "c" and snapshot
+on "s" -- so the checks below name the contested key as "whatever snapshot
+defaults to" rather than spelling a letter that stops being true.
 """
 import json
 import os
@@ -25,6 +29,9 @@ import viz_common as v                                # noqa: E402
 _app = v.QApplication.instance() or v.QApplication([])
 
 _failed = []
+
+#: The key a saved file spends before `snapshot` gets to it.
+SPENT = v.DEFAULT_KEYMAPS["snapshot"]
 
 
 def check(name, fn):
@@ -53,25 +60,26 @@ def _load(saved):
 # ── What the file says wins ──────────────────────────────────────────────
 
 def the_saved_binding_is_kept():
-    km = _load({"toggle_hard_cuts": "c"})
-    assert km["toggle_hard_cuts"] == "c", km["toggle_hard_cuts"]
+    assert v.DEFAULT_KEYMAPS["toggle_hard_cuts"] != "q"
+    km = _load({"toggle_hard_cuts": "q"})
+    assert km["toggle_hard_cuts"] == "q", km["toggle_hard_cuts"]
 
 
 def a_default_the_file_already_spent_comes_up_unbound():
-    assert v.DEFAULT_KEYMAPS["snapshot"] == "c", \
-        "this check is about the key hard cuts was given in the wild"
-    km = _load({"toggle_hard_cuts": "c"})
+    assert v.DEFAULT_KEYMAPS["toggle_hard_cuts"] != SPENT, \
+        "this check needs hard cuts to be taking a key that is not its own"
+    km = _load({"toggle_hard_cuts": SPENT})
     assert km["snapshot"] == "", \
         f"snapshot kept a key it can never receive: {km['snapshot']!r}"
 
 
 def the_match_ignores_case():
-    km = _load({"toggle_hard_cuts": "C"})
+    km = _load({"toggle_hard_cuts": SPENT.upper()})
     assert km["snapshot"] == "", km["snapshot"]
 
 
 def an_uncontested_default_survives():
-    km = _load({"toggle_hard_cuts": "c"})
+    km = _load({"toggle_hard_cuts": SPENT})
     assert km["next"] == v.DEFAULT_KEYMAPS["next"]
     assert km["toggle_dual"] == v.DEFAULT_KEYMAPS["toggle_dual"]
 
@@ -91,7 +99,7 @@ def two_saved_actions_on_one_key_are_left_alone():
 
 def an_empty_saved_binding_claims_nothing():
     km = _load({"toggle_hard_cuts": ""})
-    assert km["snapshot"] == "c", km["snapshot"]
+    assert km["snapshot"] == SPENT, km["snapshot"]
 
 
 # ── A file that is not a file ────────────────────────────────────────────
@@ -131,6 +139,90 @@ def every_default_token_is_one_the_matcher_knows():
         assert key.upper() in v._KEY_LOOKUP, f"{action}: {key}"
 
 
+def the_defaults_are_the_set_asked_for_on_15_nov_2026():
+    """The author's own bindings, settled through use and asked for as the
+    shipped defaults. Seven moved; a fresh install gets these and a saved
+    keymaps.json is not touched."""
+    moved = {"hard_cut_next": "h", "random": "j", "toggle_hard_cuts": "c",
+             "rate_up": "UP", "rate_down": "DOWN", "toggle_mode": "r",
+             "snapshot": "s"}
+    for action, key in moved.items():
+        assert v.DEFAULT_KEYMAPS[action] == key, \
+            f"{action} ships on {v.DEFAULT_KEYMAPS[action]!r}, not {key!r}"
+    stayed = {"next": "RIGHT", "prev": "LEFT", "lock": "SCROLLLOCK",
+              "fullscreen": "f", "fullscreen_alt": "F11", "quit": "ESCAPE",
+              "toggle_borderless": "b", "toggle_on_top": "t",
+              "fullscreen_mouse": "DBLCLICK", "record": "F9",
+              "toggle_wallpaper": "d", "exclude": "x", "toggle_dual": "2",
+              "toggle_visual1": "1", "crossfade_back": "[",
+              "crossfade_fwd": "]", "swap_focus": "TAB"}
+    for action, key in stayed.items():
+        assert v.DEFAULT_KEYMAPS[action] == key, action
+    assert set(v.DEFAULT_KEYMAPS) == set(moved) | set(stayed), \
+        "an action this check has not heard of"
+
+
+def a_file_saved_under_the_old_defaults_keeps_every_key_it_had():
+    """Somebody who opened the dialog on 2.1.13 and pressed OK has all 24
+    bindings on disk. The new defaults must not move one of them."""
+    old = dict(v.DEFAULT_KEYMAPS, hard_cut_next="SPACE", random="r",
+               toggle_hard_cuts="h", rate_up="+", rate_down="-",
+               toggle_mode="m", snapshot="c")
+    assert _load(old) == old
+
+
+# ── Windows: a virtual key, as SDL would have named it ───────────────────
+
+def _us_layout(vk):
+    """MapVirtualKeyW(vk, MAPVK_VK_TO_CHAR) on a US keyboard, near enough:
+    letters and digits are their own codes, and the OEM keys are these."""
+    if 0x30 <= vk <= 0x39 or 0x41 <= vk <= 0x5A:
+        return vk
+    return {0xDB: ord("["), 0xDD: ord("]"), 0xBD: ord("-"), 0xBB: ord("="),
+            0x6B: ord("+"), 0x6D: ord("-")}.get(vk, 0)
+
+
+#: The virtual key behind each token the defaults use, on that keyboard.
+_VK_OF = {"RIGHT": 0x27, "LEFT": 0x25, "UP": 0x26, "DOWN": 0x28,
+          "SCROLLLOCK": 0x91, "ESCAPE": 0x1B, "TAB": 0x09, "F9": 0x78,
+          "F11": 0x7A, "[": 0xDB, "]": 0xDD, "1": 0x31, "2": 0x32}
+
+
+def every_default_key_can_be_named_from_a_windows_virtual_key():
+    """The desktop hook sees virtual keys, the bindings are SDL tokens, and a
+    default the translation cannot reach is a key that silently does nothing
+    from the desktop while working everywhere else."""
+    for action, key in v.DEFAULT_KEYMAPS.items():
+        if key.upper() == "DBLCLICK":
+            continue
+        vk = _VK_OF.get(key.upper(), ord(key.upper()) if len(key) == 1 else 0)
+        assert vk, f"this check has no virtual key for {key}"
+        pair = v.win_vk_to_sdl(vk, _us_layout)
+        assert pair is not None, f"{action}: {key} (vk {vk:#x}) has no name"
+        assert v._token_matches(key, *pair), \
+            f"{action}: vk {vk:#x} came back as {pair}, which is not {key}"
+
+
+def a_letter_is_its_lower_case_self_whatever_the_layout_calls_it():
+    assert v.win_vk_to_sdl(0x48, _us_layout) == (ord("h"), 0)
+    # The same physical key on a layout that puts another letter on it is
+    # that letter, as it is for SDL.
+    assert v.win_vk_to_sdl(0x51, lambda _vk: ord("A")) == (ord("a"), 0)
+
+
+def caps_lock_and_the_modifiers_are_never_named():
+    """Naming one is how the hook would come to swallow it -- and Caps Lock
+    is the key that takes the hook away again."""
+    for vk in (0x14, 0x10, 0x11, 0x12, 0x5B, 0x5C, 0xA0, 0xA2, 0xA4):
+        assert v.win_vk_to_sdl(vk, _us_layout) is None, hex(vk)
+
+
+def a_dead_key_is_its_character_and_a_key_with_none_is_nothing():
+    dead = 0x8000_0000 | ord("`")         # bit 31: MapVirtualKey's dead-key flag
+    assert v.win_vk_to_sdl(0xC0, lambda _vk: dead) == (ord("`"), 0)
+    assert v.win_vk_to_sdl(0xFF, lambda _vk: 0) is None
+
+
 # ── The dialog ───────────────────────────────────────────────────────────
 
 def _dialog(keymaps=None):
@@ -156,16 +248,16 @@ def _type_into(dlg, action, token):
 
 def typing_a_taken_key_clears_the_other_row():
     dlg = _dialog()
-    _type_into(dlg, "toggle_hard_cuts", "c")       # snapshot's default
+    _type_into(dlg, "toggle_hard_cuts", SPENT)     # snapshot's default
     assert dlg._table.item(_row_of(dlg, "snapshot"), 1).text() == "", \
         "the other row still shows a key it will never receive"
     assert dlg.get_keymaps()["snapshot"] == ""
-    assert dlg.get_keymaps()["toggle_hard_cuts"] == "c"
+    assert dlg.get_keymaps()["toggle_hard_cuts"] == SPENT
 
 
 def typing_a_taken_key_ignores_case():
     dlg = _dialog()
-    _type_into(dlg, "toggle_hard_cuts", "C")
+    _type_into(dlg, "toggle_hard_cuts", SPENT.upper())
     assert dlg._table.item(_row_of(dlg, "snapshot"), 1).text() == ""
 
 
@@ -188,7 +280,7 @@ def a_free_key_disturbs_nobody():
 
 def reset_to_defaults_puts_a_cleared_row_back():
     dlg = _dialog()
-    _type_into(dlg, "toggle_hard_cuts", "c")
+    _type_into(dlg, "toggle_hard_cuts", SPENT)
     dlg._reset_defaults()
     assert dlg.get_keymaps()["snapshot"] == v.DEFAULT_KEYMAPS["snapshot"]
 

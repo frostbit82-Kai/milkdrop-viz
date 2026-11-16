@@ -34,24 +34,27 @@ CONTROLS
 
     right-click       menu (settings, preset browser, ratings)
     left / right      previous / next preset
-    space             hard cut to the next preset
-    r                 random preset
+    h                 hard cut to the next preset
+    j                 random preset
     f  or  F11        fullscreen        (double-click also works)
     b                 borderless window
     t                 keep the window above other windows
     F9                start / stop recording a clip
     escape            quit
-    + / -             rate the current preset up or down
+    up / down         rate the current preset up or down
     x                 exclude this one (rate it 0) and move on
-    c                 snapshot this preset for the browser
+    s                 snapshot this preset for the browser
     d                 desktop wallpaper mode on / off
     1                 visual 1 on / off
     2                 visual 2 on / off
     [  /  ]           crossfade towards visual 1 / visual 2
     tab               with two showing, adjust the other one
-    h                 hard cuts on/off
-    m                 shuffle the playlist order on / off
+    c                 hard cuts on/off
+    r                 shuffle the playlist order on / off
     scroll lock       lock the current preset
+
+Every one of these can be changed: right-click -> Key bindings. A set you have
+already saved there is kept as it is when you upgrade.
 
 A preset rated 0 stars is dropped from the rotation. Settings and ratings are
 kept in %APPDATA%\BomsAIVisualizer and survive uninstalling and upgrading.
@@ -155,10 +158,16 @@ DESKTOP WALLPAPER
 -----------------
 
 Right-click -> Set as desktop wallpaper draws the visuals on the desktop,
-behind your icons. Windows hands all input on the desktop to Explorer, so while
-this is on the visualiser cannot be clicked -- a tray icon appears instead, and
-clicking it opens the same menu. Use it to change preset, rate, or leave
-wallpaper mode.
+behind your icons. Press d for the same thing. Windows hands all input on the
+desktop to Explorer, so your icons and the desktop's own right-click menu go
+on working as they always did.
+
+Caps Lock hands the desktop to the visualiser. While it is on, a right-click
+on the desktop opens this app's menu instead of Explorer's, and once you have
+clicked the desktop the keys above work as well: next, previous, rate, d to
+leave. Your icons carry on working. Keys that are not bound to anything here
+still go to Explorer, and typing in another window is never affected. A tray
+icon appears too, and clicking it opens the same menu.
 
 On one monitor that is one click. On more than one, the entry opens a list:
 the whole desktop, or the screen you pick -- and picking a screen while it is

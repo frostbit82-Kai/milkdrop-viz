@@ -113,6 +113,12 @@ def bare(cfg=None, displays=TWO):
     r._wp_box_moaned = False
     r._wp_gave_up = False
     r._wp_front = r._wp_partial = False
+    r._wp_catch = None
+    r._wp_catch_xid = r._wp_catch_id = 0
+    r._wp_catch_fixes = 0
+    r._hook_keys = viz_common.deque()
+    r._keymaps = dict(viz_common.DEFAULT_KEYMAPS)
+    r._context = object()
     r._caps_at = 0.0
     r._rclick = None
     r._menu_open = False
@@ -743,7 +749,7 @@ def the_holds_run_before_the_idle_pause_parks_the_loop():
 
 # --- staying at the bottom ------------------------------------------------
 def _hold(clients, wallpaper=True, hold_at=0.0, now=1000.0, front=False,
-          partial=False):
+          partial=False, catch=0):
     """Run the real _hold_wallpaper_bottom against a fake server.
 
     Returns (renderer, lib) so a test can look at what went on the wire.
@@ -752,6 +758,7 @@ def _hold(clients, wallpaper=True, hold_at=0.0, now=1000.0, front=False,
     r._wallpaper = wallpaper
     r._wp_hold_at = hold_at
     r._wp_front, r._wp_partial = front, partial
+    r._wp_catch_xid = catch
     r._native_handle, r._x11_display = APP_WIN, 1
     lib = FakeXlib()
     lib.clients = list(clients)
@@ -1493,6 +1500,8 @@ def a_partial_stack_is_held_blind_and_more_often():
 
 
 def caps_lock_holds_it_over_the_icons_and_under_the_windows():
+    """Where no catcher can be trusted to be see-through, the visuals
+    themselves are what takes the click, as they were until 15 Nov 2026."""
     r, lib = _hold([APP_WIN, ICONS], front=True)
     assert lib.restacks == [(APP_WIN, 0, viz_common._X11_ABOVE)], lib.restacks
     assert lib.lowered == 0, "lowered while Caps Lock wants it in front"
@@ -1696,12 +1705,13 @@ def the_desktop_hook_can_close_the_menu_it_opened():
         r._set_wallpaper_front(True)
     finally:
         viz_common._DesktopRightClick = real
-    assert made and len(made[0]) == 2, made
-    on_click, on_away = made[0]
+    assert made and len(made[0]) == 3, made
+    on_click, on_away, on_key = made[0]
     on_away()
     assert r._req_close_menu and not r._req_context_menu
     on_click()
     assert r._req_context_menu
+    assert on_key == r._desktop_key, "the hook was not handed the key map"
 
 
 def a_right_click_elsewhere_closes_the_old_menu_before_opening_the_new():
@@ -1769,6 +1779,273 @@ def stopping_the_hook_waits_for_it_to_unhook():
     h.stop()
     assert joined and joined[0], "stop() returned with the hook maybe still in"
     assert h._thread is None
+
+
+
+# --- icons that stay up, and keys from the desktop (15 Nov 2026) -------------
+CATCH = 0x2400007
+
+
+def with_a_catcher_the_visuals_stay_under_the_icons():
+    """Reported 15 Nov 2026 as "desktop mode hides the folder, but shows under
+    opened windows": Caps Lock on raised the visuals over every icon. With a
+    catcher up it is the catcher that goes to the top, and the visuals are
+    asked for the bottom exactly as with Caps Lock off."""
+    r, lib = _hold([APP_WIN], front=True, partial=True, catch=CATCH)
+    assert (CATCH, 0, viz_common._X11_ABOVE) in lib.restacks, lib.restacks
+    assert (APP_WIN, 0, viz_common._X11_BELOW) in lib.restacks, lib.restacks
+    assert (APP_WIN, 0, viz_common._X11_ABOVE) not in lib.restacks, \
+        "the visuals were raised over the icons with a catcher there to click"
+    # Where the stack can be measured the visuals are measured, not raised.
+    r, lib = _hold([APP_WIN, ICONS, CATCH], front=True, catch=CATCH)
+    assert lib.restacks == [(CATCH, 0, viz_common._X11_ABOVE)], lib.restacks
+    assert lib.lowered == 0
+
+
+def the_catcher_follows_the_wallpapers_box():
+    """Picking another monitor moves the wallpaper; the clicks go with it.
+    Bounded, as the visuals' own box is, so a window manager that insists
+    is not fought for ever."""
+    moved = []
+    r = bare({"wallpaper_display": 1}, TWO)
+    r._wp_catch_xid = CATCH
+    lib = FakeXlib()
+    lib.XMoveResizeWindow = lambda _d, w, *box: moved.append((w, box))
+    real_tree, real_rect = viz_common._x11_query_tree, viz_common.x11_window_rect
+    viz_common._x11_query_tree = lambda l, _dpy, w: l.tree(w)
+    viz_common.x11_window_rect = lambda _l, _d, _w: (0, 0, 1920, 1080)
+    try:
+        r._hold_wallpaper_catcher(lib, 1, CATCH)
+        assert moved == [(CATCH, (1920, 0, 3840, 2160))], moved
+        for _ in range(Renderer.WP_FIX_LIMIT + 3):
+            r._hold_wallpaper_catcher(lib, 1, CATCH)
+        assert len(moved) == Renderer.WP_FIX_LIMIT, len(moved)
+        viz_common.x11_window_rect = lambda _l, _d, _w: (1920, 0, 3840, 2160)
+        r._hold_wallpaper_catcher(lib, 1, CATCH)
+        assert r._wp_catch_fixes == 0, "being right did not buy the budget back"
+        # A window that cannot be measured never stops the restack.
+        def boom(*_a): raise OSError("no geometry for you")
+        viz_common.x11_window_rect = boom
+        before = len(lib.restacks)
+        r._hold_wallpaper_catcher(lib, 1, CATCH)
+        assert len(lib.restacks) == before + 1
+    finally:
+        viz_common._x11_query_tree = real_tree
+        viz_common.x11_window_rect = real_rect
+
+
+class CatchSDL(FakeSDL):
+    """SDL as far as opening and closing the catcher needs it."""
+    SDL_WINDOW_HIDDEN, SDL_WINDOW_BORDERLESS = 8, 16
+
+    def __init__(self, log=None, fails=False):
+        super().__init__(log)
+        self.hints, self.made, self.destroyed, self.current = [], [], [], []
+        self.fails = fails
+    def SDL_SetHint(self, name, value):  self.hints.append((name, value))
+    def SDL_CreateWindow(self, title, x, y, w, h, flags):
+        if self.fails:
+            return None
+        self.made.append((title, (x, y, w, h), flags, self.hints[-1][1]))
+        return "catcher"
+    def SDL_GetError(self):                 return b"no window for you"
+    def SDL_GetWindowID(self, _w):          return 7
+    def SDL_DestroyWindow(self, w):         self.destroyed.append(w)
+    def SDL_GL_MakeCurrent(self, w, c):     self.current.append((w, c))
+
+
+class CatchXlib(FakeXlib):
+    def __init__(self, log=None):
+        super().__init__(log)
+        self.backgrounds, self.cleared = [], []
+    def XSetWindowBackground(self, _d, w, px):  self.backgrounds.append((w, px))
+    def XClearWindow(self, _d, w):
+        self.cleared.append(w)
+        self.order.append("clear")
+
+
+@contextlib.contextmanager
+def _catcher_world(composited=True, visual=0x70, fails=False):
+    """A renderer that is the wallpaper, on a desktop that can -- or cannot --
+    show a see-through window."""
+    log, seen = [], []
+    r = bare({"wallpaper_display": 0}, TWO)
+    r._wallpaper, r._native_handle, r._x11_display = True, APP_WIN, 1
+    r._x11_window_of = lambda _win: CATCH
+    lib, fake = CatchXlib(log), CatchSDL(log, fails)
+    saved = {n: getattr(viz_common, n) for n in (
+        "_libx11", "x11_is_composited", "x11_argb_visual",
+        "x11_input_passthrough")}
+    viz_common._libx11 = lambda: lib
+    viz_common.x11_is_composited = lambda _l, _d, env=None: composited
+    viz_common.x11_argb_visual = lambda _l, _d: visual
+    viz_common.x11_input_passthrough = \
+        lambda _l, _d, w, through, ext=None: seen.append((w, through)) or True
+    try:
+        with faked_sdl(fake):
+            yield r, lib, fake, seen, log
+    finally:
+        for n, fn in saved.items():
+            setattr(viz_common, n, fn)
+
+
+def caps_lock_puts_a_see_through_window_over_the_icons():
+    if sys.platform == "win32":
+        return
+    with _catcher_world() as (r, lib, fake, seen, log):
+        r._set_wallpaper_front(True)
+        assert r._wp_catch == "catcher" and r._wp_catch_xid == CATCH
+        assert r._wp_catch_id == 7
+        assert seen == [], \
+            f"the visuals were made clickable with a catcher up: {seen}"
+        title, box, flags, visual = fake.made[0]
+        assert box == (0, 0, 1920, 1080), box
+        assert visual == b"112", f"made on visual {visual!r}, not the ARGB one"
+        assert flags & CatchSDL.SDL_WINDOW_HIDDEN, \
+            "mapped before the window manager could be told what it is"
+        # The hint is read by the next SDL_CreateWindow too -- visual 2's.
+        assert fake.hints[-1] == (viz_common._SDL_X11_VISUALID, b""), fake.hints
+        typ = lib.props.get(lib.atom("_NET_WM_WINDOW_TYPE"))
+        assert typ and typ[2] == [lib.atom("_NET_WM_WINDOW_TYPE_DESKTOP")], typ
+        user_time = lib.props.get(lib.atom("_NET_WM_USER_TIME"))
+        assert user_time == (viz_common._XA_CARDINAL, 32, [0]), \
+            f"appearing may take the keyboard from whoever is typing: {user_time}"
+        assert lib.backgrounds == [(CATCH, 0)] and lib.cleared == [CATCH]
+        assert log.index("sync") < log.index("show") < log.index("clear"), log
+        assert (CATCH, 0, viz_common._X11_ABOVE) in lib.restacks
+        assert fake.current[-1] == (r._window, r._context), \
+            "the GL context was left on the new window"
+
+        r._set_wallpaper_front(False)
+        assert r._wp_catch is None and not r._wp_catch_xid and not r._wp_catch_id
+        assert fake.destroyed == ["catcher"], fake.destroyed
+        assert seen == [(APP_WIN, True)], seen
+
+
+def where_nothing_composites_the_visuals_are_raised_as_before():
+    """An ARGB window with nothing blending it paints opaque black -- measured
+    in the bare muffin rig -- and a black sheet over the desktop is worse than
+    covered icons. So the old way stays wherever the new one cannot be sure."""
+    if sys.platform == "win32":
+        return
+    for kw in ({"composited": False}, {"visual": 0}, {"fails": True}):
+        with _catcher_world(**kw) as (r, lib, fake, seen, log):
+            r._set_wallpaper_front(True)
+            assert r._wp_catch is None, kw
+            assert seen == [(APP_WIN, False)], (kw, seen)
+            r._set_wallpaper_front(False)
+            assert seen == [(APP_WIN, False), (APP_WIN, True)], (kw, seen)
+            assert not fake.destroyed, kw
+
+
+class _SelLib:
+    """Xlib as far as asking who composites screen 0."""
+    def __init__(self, owner): self.owner, self.asked = owner, []
+    def XDefaultScreen(self, _d): return 0
+    def XInternAtom(self, _d, name, _e):
+        self.asked.append(name)
+        return 99
+    def XGetSelectionOwner(self, _d, _atom): return self.owner
+
+
+def a_see_through_window_is_only_trusted_where_something_composites():
+    comp = viz_common.x11_is_composited
+    x11 = {"DISPLAY": ":0", "XDG_SESSION_TYPE": "x11"}
+    assert comp(_SelLib(0), 1, {"WAYLAND_DISPLAY": "wayland-0"}), \
+        "a Wayland compositor always composites"
+    lib = _SelLib(0x400001)
+    assert comp(lib, 1, x11) and lib.asked == [b"_NET_WM_CM_S0"], lib.asked
+    assert not comp(_SelLib(0), 1, x11), "said yes with nobody compositing"
+    # Cinnamon cannot run uncomposited and was measured not to own the
+    # selection (Mint 21.3, Cinnamon 6.0.5).
+    assert comp(_SelLib(0), 1, dict(x11, XDG_CURRENT_DESKTOP="X-Cinnamon"))
+    assert not comp(None, 1, x11), "a missing Xlib was taken for a yes"
+
+
+def the_argb_visual_is_asked_for_by_depth():
+    class Lib:
+        def __init__(self, found): self.found, self.args = found, None
+        def XDefaultScreen(self, _d): return 0
+        def XMatchVisualInfo(self, _d, screen, depth, klass, out):
+            self.args = (screen, depth, klass)
+            if self.found:
+                out._obj.visualid = 0x70
+            return self.found
+    lib = Lib(1)
+    assert viz_common.x11_argb_visual(lib, 1) == 0x70
+    assert lib.args == (0, 32, viz_common._X11_TRUECOLOR), lib.args
+    assert viz_common.x11_argb_visual(Lib(0), 1) == 0
+    assert viz_common.x11_argb_visual(None, 1) == 0
+
+
+def a_double_click_on_the_desktop_says_why_the_icon_did_nothing():
+    r = bare()
+    went = []
+    r._toggle_fullscreen = lambda: went.append("fullscreen")
+    r._double_clicked()
+    assert went == ["fullscreen"], "an ordinary window lost its double-click"
+    r._wallpaper, r._wp_catch = True, "catcher"
+    r._double_clicked()
+    assert went == ["fullscreen"], "went fullscreen from the desktop"
+    assert any("Caps Lock" in str(a[0]) and "icons" in str(a[0])
+               for a in r._bridge.toasts), r._bridge.toasts
+
+
+def _us(vk):
+    return vk if 0x30 <= vk <= 0x39 or 0x41 <= vk <= 0x5A else 0
+
+
+def the_desktop_hook_takes_only_keys_that_are_bound():
+    """Windows. The hook asks about every key pressed while the desktop has
+    the keyboard; a yes keeps the key from Explorer. Anything unbound has to
+    go on to it -- F2 still renames, Delete still deletes."""
+    real = viz_common.win_vk_to_sdl
+    viz_common.win_vk_to_sdl = lambda vk: real(vk, _us)
+    try:
+        r = bare()
+        assert r._desktop_key(0x27), "Right is bound to next and was let go"
+        assert r._desktop_key(0x48), "h is bound to the hard cut"
+        assert list(r._hook_keys) == [(viz_common.sdl2.SDLK_RIGHT, 0),
+                                      (ord("h"), 0)], list(r._hook_keys)
+        assert not r._desktop_key(0x71), "F2 was taken from Explorer"
+        assert not r._desktop_key(0x2E), "Delete was taken from Explorer"
+        assert not r._desktop_key(0x14), "Caps Lock itself was taken"
+        assert len(r._hook_keys) == 2, "an unbound key was queued"
+        # The key map is the live one: unbind it and the key is Explorer's.
+        r._keymaps["hard_cut_next"] = ""
+        assert not r._desktop_key(0x48)
+        r._keymaps["hard_cut_next"] = "F2"
+        assert r._desktop_key(0x71)
+    finally:
+        viz_common.win_vk_to_sdl = real
+
+
+def keys_from_the_hook_are_played_above_every_pause():
+    """A wallpaper is parked most of its life. Below the idle `continue` its
+    keys would wait for the music to come back."""
+    src = inspect.getsource(Renderer.run)
+    drain = src.index("while self._hook_keys:")
+    assert drain < src.index("self._gl_quiet_until:"), \
+        "the hook's keys wait out the GL quiet period"
+    assert drain < src.index("if self._check_idle():"), \
+        "the hook's keys wait for the idle pause to end"
+    body = src[drain:src.index("How busy the loop still is")]
+    assert "close_context_menu" in body and "_handle_key(sym, scancode)" in body
+
+
+def the_catchers_window_events_never_reach_the_viewport():
+    """It is as big as the wallpaper today. The day it is not, a size event
+    of its would resize the picture."""
+    src = inspect.getsource(Renderer.run)
+    branch = src[src.index("elif event.type == sdl2.SDL_WINDOWEVENT:"):]
+    guard = branch.index("event.window.windowID == self._wp_catch_id")
+    assert guard < branch.index("SDL_WINDOWEVENT_SIZE_CHANGED"), \
+        "the size is read before the window is"
+
+
+def leaving_takes_the_catcher_down_with_everything_else():
+    src = inspect.getsource(Renderer.run)
+    assert "self._drop_wallpaper_catcher()" in src[src.rindex("_drop_window2"):]
 
 
 for fn in (the_worker_behind_the_icons_is_chosen,
@@ -1873,7 +2150,18 @@ for fn in (the_worker_behind_the_icons_is_chosen,
            stopping_the_hook_waits_for_it_to_unhook,
            a_switch_leaves_gl_alone_for_a_moment_and_a_failed_one_does_not,
            the_quiet_period_skips_the_frame_before_anything_draws,
-           the_way_in_lets_clicks_through_and_the_way_out_takes_them_back):
+           the_way_in_lets_clicks_through_and_the_way_out_takes_them_back,
+           with_a_catcher_the_visuals_stay_under_the_icons,
+           the_catcher_follows_the_wallpapers_box,
+           caps_lock_puts_a_see_through_window_over_the_icons,
+           where_nothing_composites_the_visuals_are_raised_as_before,
+           a_see_through_window_is_only_trusted_where_something_composites,
+           the_argb_visual_is_asked_for_by_depth,
+           a_double_click_on_the_desktop_says_why_the_icon_did_nothing,
+           the_desktop_hook_takes_only_keys_that_are_bound,
+           keys_from_the_hook_are_played_above_every_pause,
+           the_catchers_window_events_never_reach_the_viewport,
+           leaving_takes_the_catcher_down_with_everything_else):
     results.append(check(fn.__name__, fn))
 
 print("all wallpaper checks passed" if all(results) else "FAILURES")

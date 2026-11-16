@@ -73,10 +73,16 @@ def _log(msg: str):
 # `ctypes.util.find_library`, which searches the *system*, never the bundle.
 # Catching only ImportError takes the whole app down over a capture backend
 # that Linux does not even lead with; parec does.
+#
+# And a third way, 15 Nov 2026: with the library present and no sound server
+# to reach, the import itself raises sounddevice.PortAudioError ("Can't
+# connect to server") -- a plain Exception, and a name that cannot be spelled
+# before the import has worked. A session with no PulseAudio is the same
+# "no sounddevice" as the other two.
 try:
     import sounddevice as sd
     _SD_AVAILABLE = True
-except (ImportError, OSError) as _sd_why:
+except Exception as _sd_why:                             # noqa: BLE001
     _SD_AVAILABLE = False
     print(f"[audio] sounddevice unavailable ({_sd_why}) — "
           f"the PortAudio capture backend is off")
@@ -1053,26 +1059,32 @@ QUALITY_MESH = {
 
 # Default keybindings — SDL2 keysym names
 # Special values: "SCROLLLOCK" uses scancode; "DBLCLICK" is mouse
+#
+# Seven of these changed on 15 Nov 2026, to the set the author had settled on
+# through use: hard cut h (was SPACE), random j (r), hard cuts on/off c (h),
+# rate up/down the arrow keys (+ and -), shuffle r (m), snapshot s (c). Only
+# an install with no keymaps.json sees them: a saved file is somebody's own
+# choice and wins, key by key (load_keymaps_from).
 DEFAULT_KEYMAPS = {
     "next":             "RIGHT",
     "prev":             "LEFT",
-    "hard_cut_next":    "SPACE",
-    "random":           "r",
+    "hard_cut_next":    "h",
+    "random":           "j",
     "lock":             "SCROLLLOCK",
-    "toggle_hard_cuts": "h",
+    "toggle_hard_cuts": "c",
     "fullscreen":       "f",
     "fullscreen_alt":   "F11",
-    "rate_up":          "+",
-    "rate_down":        "-",
+    "rate_up":          "UP",
+    "rate_down":        "DOWN",
     "quit":             "ESCAPE",
-    "toggle_mode":      "m",
+    "toggle_mode":      "r",
     "toggle_borderless": "b",
     "toggle_on_top":    "t",
     "fullscreen_mouse": "DBLCLICK",
     "record":           "F9",
     "toggle_wallpaper": "d",
     "exclude":          "x",
-    "snapshot":         "c",
+    "snapshot":         "s",
     "toggle_dual":      "2",
     "toggle_visual1":   "1",
     "crossfade_back":   "[",
@@ -4362,8 +4374,8 @@ ACTION_NOTES = {
     "lock":             "Stops the timer; next / previous still work",
     "rate_down":        "Rating 0 excludes preset from random rotation",
     "record":           "Needs ffmpeg; clips land in the clips folder",
-    "toggle_wallpaper": "With Caps Lock on, right-click the desktop for the "
-                        "menu. The tray icon works too",
+    "toggle_wallpaper": "With Caps Lock on, the desktop takes these keys and "
+                        "a right-click opens the menu",
     "exclude":          "Hides it from rotation. Nothing is deleted",
     "snapshot":         "Replaces the picture the browser already has",
     "toggle_visual1":   "One of the two always stays on",
@@ -6938,16 +6950,32 @@ class _DesktopRightClick:
     never reached this app -- the hook took it -- so the app never became the
     foreground one, and Windows routes clicks outside a popup to its owner
     only when it is. The hook sees those clicks anyway; it passes them on.
+
+    `on_key` is the keyboard's half, asked for on 15 Nov 2026: the key
+    bindings, while the desktop is what has the keyboard. The wallpaper never
+    does -- it is a child of WorkerW and is never focused -- so a second
+    low-level hook on the same thread sees each key first. `on_key(vk)` says
+    whether that key is bound to anything; a bound one is kept from Explorer,
+    down and up, and everything else goes on untouched. Three things are
+    never taken, so the hook cannot lock anybody out of their own keyboard:
+    a key pressed while any window but the desktop is in the foreground; a
+    key pressed with Ctrl, Alt or a Windows key held (those are shortcuts,
+    and Windows'); and Caps Lock itself, which `win_vk_to_sdl` has no name
+    for -- it is what takes the hook away again.
     """
 
-    _WH_MOUSE_LL, _HC_ACTION, _GA_ROOT = 14, 0, 2
+    _WH_MOUSE_LL, _WH_KEYBOARD_LL, _HC_ACTION, _GA_ROOT = 14, 13, 0, 2
     _WM_RBUTTONDOWN, _WM_RBUTTONUP, _WM_QUIT = 0x0204, 0x0205, 0x0012
+    _WM_KEYDOWN, _WM_KEYUP = 0x0100, 0x0101
     #: Left, right, middle and X button down.
     _DOWNS = (0x0201, 0x0204, 0x0207, 0x020B)
+    #: Ctrl, Alt, and the two Windows keys.
+    _CHORD_KEYS = (0x11, 0x12, 0x5B, 0x5C)
 
-    def __init__(self, on_click, on_away=None):
+    def __init__(self, on_click, on_away=None, on_key=None):
         self._on_click = on_click
         self._on_away = on_away
+        self._on_key = on_key
         self._thread = None
         self._tid = 0
         self._armed = False
@@ -7001,6 +7029,9 @@ class _DesktopRightClick:
                                     ctypes.c_int)
         u.GetWindowThreadProcessId.argtypes = (ctypes.c_void_p,
                                                ctypes.POINTER(wt.DWORD))
+        u.GetForegroundWindow.restype = ctypes.c_void_p
+        u.GetAsyncKeyState.restype = ctypes.c_short
+        u.GetAsyncKeyState.argtypes = (ctypes.c_int,)
         k.GetModuleHandleW.restype = ctypes.c_void_p
         name = ctypes.create_unicode_buffer(64)
         me, owner = os.getpid(), wt.DWORD()
@@ -7036,22 +7067,79 @@ class _DesktopRightClick:
                     return 1
             return u.CallNextHookEx(None, code, wparam, lparam)
 
+        class KBDLL(ctypes.Structure):
+            _fields_ = [("vkCode", wt.DWORD), ("scanCode", wt.DWORD),
+                        ("flags", wt.DWORD), ("time", wt.DWORD),
+                        ("extra", ctypes.c_size_t)]
+
+        #: Keys whose press was kept from Explorer, so the release is too.
+        held = set()
+
+        def desktop_has_keys() -> bool:
+            top = u.GetForegroundWindow()
+            return bool(top) and u.GetClassNameW(top, name, 64) > 0 and \
+                is_desktop_window_class(name.value)
+
+        def chord() -> bool:
+            return any(u.GetAsyncKeyState(c) & 0x8000
+                       for c in self._CHORD_KEYS)
+
+        def bound(vk) -> bool:
+            # An exception out of a hook is an event Windows never hears the
+            # end of. A key nobody could judge goes on to whoever it was for.
+            try:
+                return bool(self._on_key(vk))
+            except Exception:                            # noqa: BLE001
+                return False
+
+        def key_hook(code, wparam, lparam):
+            # As short as the mouse one, for the same reason: every key on
+            # the machine comes through here while Caps Lock is on. Alt
+            # combinations arrive as WM_SYSKEYDOWN and are not looked at.
+            if code == self._HC_ACTION:
+                vk = ctypes.cast(lparam, ctypes.POINTER(KBDLL)).contents.vkCode
+                if wparam == self._WM_KEYDOWN:
+                    # A key already held is repeating: the same answer as
+                    # its first press, wherever the focus has gone since.
+                    if (vk in held or (desktop_has_keys() and not chord())) \
+                            and bound(vk):
+                        held.add(vk)
+                        return 1
+                elif wparam == self._WM_KEYUP and vk in held:
+                    held.discard(vk)
+                    return 1
+            return u.CallNextHookEx(None, code, wparam, lparam)
+
         self._proc = proc_t(hook)            # kept, or ctypes frees it under us
+        self._key_proc = proc_t(key_hook)
         msg = wt.MSG()
         u.PeekMessageW(ctypes.byref(msg), None, 0, 0, 0)   # make the queue
         handle = u.SetWindowsHookExW(self._WH_MOUSE_LL, self._proc,
                                      k.GetModuleHandleW(None), 0)
+        key_handle = None
+        if self._on_key is not None:
+            key_handle = u.SetWindowsHookExW(
+                self._WH_KEYBOARD_LL, self._key_proc,
+                k.GetModuleHandleW(None), 0)
+            if not key_handle:
+                # The menu still works without it; say which half is missing.
+                print(f"[wallpaper] no desktop key hook "
+                      f"(error {ctypes.get_last_error()})", flush=True)
         self._tid = k.GetCurrentThreadId()
         ready.set()
         if not handle:
             print(f"[wallpaper] no desktop right-click hook "
                   f"(error {ctypes.get_last_error()})", flush=True)
-            return
+            if not key_handle:
+                return
         try:
             while u.GetMessageW(ctypes.byref(msg), None, 0, 0) > 0:
                 pass
         finally:
-            u.UnhookWindowsHookEx(handle)
+            if handle:
+                u.UnhookWindowsHookEx(handle)
+            if key_handle:
+                u.UnhookWindowsHookEx(key_handle)
 
 
 #: How long the render loop has to run without a slow pass before it becomes
@@ -7132,6 +7220,14 @@ class _XEvent(ctypes.Union):
                 ("pad", ctypes.c_long * 24)]
 
 
+class _XVisualInfo(ctypes.Structure):
+    _fields_ = [("visual", ctypes.c_void_p), ("visualid", ctypes.c_ulong),
+                ("screen", ctypes.c_int), ("depth", ctypes.c_int),
+                ("klass", ctypes.c_int), ("red_mask", ctypes.c_ulong),
+                ("green_mask", ctypes.c_ulong), ("blue_mask", ctypes.c_ulong),
+                ("colormap_size", ctypes.c_int), ("bits_per_rgb", ctypes.c_int)]
+
+
 def _libx11():
     """Xlib, already loaded into this process by SDL's x11 driver.
 
@@ -7177,6 +7273,13 @@ def _libx11():
         ptr, ulong, ulong, ctypes.c_long, ctypes.c_long, i, ulong,
         ctypes.POINTER(ulong), ctypes.POINTER(i), ctypes.POINTER(ulong),
         ctypes.POINTER(ulong), ctypes.POINTER(ctypes.POINTER(ctypes.c_ubyte))]
+    lib.XDefaultScreen.argtypes = [ptr]
+    lib.XMatchVisualInfo.argtypes = [ptr, i, i, i,
+                                     ctypes.POINTER(_XVisualInfo)]
+    lib.XGetSelectionOwner.restype = ulong
+    lib.XGetSelectionOwner.argtypes = [ptr, ulong]
+    lib.XSetWindowBackground.argtypes = [ptr, ulong, ulong]
+    lib.XClearWindow.argtypes = [ptr, ulong]
     return lib
 
 
@@ -7510,6 +7613,54 @@ def x11_stack_is_partial(env=None) -> bool:
         env.get("XDG_SESSION_TYPE", "").lower() == "wayland"
 
 
+#: XVisualInfo's class for a visual whose pixel values are the colours.
+_X11_TRUECOLOR = 4
+#: SDL's hint naming the visual its next X11 window is made on.
+_SDL_X11_VISUALID = b"SDL_VIDEO_X11_WINDOW_VISUALID"
+
+
+def x11_argb_visual(lib, dpy) -> int:
+    """The id of a 32-bit TrueColor visual -- one with an alpha channel -- or
+    0. A window made on it shows whatever is under it wherever its own pixels
+    are zero, as long as something is compositing the screen."""
+    try:
+        vi = _XVisualInfo()
+        if lib.XMatchVisualInfo(dpy, lib.XDefaultScreen(dpy), 32,
+                                _X11_TRUECOLOR, ctypes.byref(vi)):
+            return int(vi.visualid)
+    except (OSError, AttributeError, ctypes.ArgumentError) as e:
+        print(f"[wallpaper] no see-through visual: {e}", flush=True)
+    return 0
+
+
+def x11_is_composited(lib, dpy, env=None) -> bool:
+    """Will a see-through window really show what is under it here?
+
+    Only where something blends the windows together. Without that an ARGB
+    window paints opaque black -- measured in the bare muffin rig, 9 Sep 2026,
+    where nemo-desktop's own depth-32 window blacked out the visuals -- and a
+    black sheet over the whole desktop is a far worse answer than the icons
+    being covered. So this says yes only where it is sure:
+
+    - a Wayland session: the compositor is the display server;
+    - the screen's compositing-manager selection has an owner (ICCCM's
+      `_NET_WM_CM_Sn`), which xfwm4, marco and KWin take while they composite;
+    - Cinnamon, whose shell cannot run without compositing and which was
+      measured *not* to own that selection (Mint 21.3, Cinnamon 6.0.5).
+    """
+    env = os.environ if env is None else env
+    if x11_stack_is_partial(env):
+        return True
+    try:
+        sel = lib.XInternAtom(
+            dpy, f"_NET_WM_CM_S{lib.XDefaultScreen(dpy)}".encode(), False)
+        if lib.XGetSelectionOwner(dpy, sel):
+            return True
+    except (OSError, AttributeError, ctypes.ArgumentError):
+        pass
+    return "cinnamon" in env.get("XDG_CURRENT_DESKTOP", "").lower()
+
+
 def x11_lower_to_bottom(lib, dpy, win, timeout=1.0, partial=False):
     """Lower the window until it is below everything the desktop draws.
 
@@ -7592,6 +7743,17 @@ def x11_set_atoms(lib, dpy, win, prop, values):
     buf = (ctypes.c_ulong * len(atoms))(*atoms)
     lib.XChangeProperty(dpy, win, target, _XA_ATOM, 32, _PROP_REPLACE,
                         buf, len(atoms))
+
+
+_XA_CARDINAL = 6
+
+
+def x11_set_cardinal(lib, dpy, win, prop, value):
+    """Set a one-number CARDINAL property on a window."""
+    # Format 32 is an array of long here too -- see x11_set_atoms.
+    buf = (ctypes.c_ulong * 1)(int(value))
+    lib.XChangeProperty(dpy, win, lib.XInternAtom(dpy, prop.encode(), False),
+                        _XA_CARDINAL, 32, _PROP_REPLACE, buf, 1)
 
 
 def wallpaper_support(env=None):
@@ -8822,6 +8984,45 @@ def _token_matches(token: str, sym: int, scancode: int) -> bool:
     return sym == expected_sym
 
 
+#: Windows virtual-key codes that are not a character, as SDL names them.
+_VK_TO_SDLK = {
+    0x08: sdl2.SDLK_BACKSPACE, 0x09: sdl2.SDLK_TAB, 0x0D: sdl2.SDLK_RETURN,
+    0x1B: sdl2.SDLK_ESCAPE, 0x20: sdl2.SDLK_SPACE,
+    0x21: sdl2.SDLK_PAGEUP, 0x22: sdl2.SDLK_PAGEDOWN,
+    0x23: sdl2.SDLK_END, 0x24: sdl2.SDLK_HOME,
+    0x25: sdl2.SDLK_LEFT, 0x26: sdl2.SDLK_UP,
+    0x27: sdl2.SDLK_RIGHT, 0x28: sdl2.SDLK_DOWN, 0x2E: sdl2.SDLK_DELETE,
+    **{0x6F + n: getattr(sdl2, f"SDLK_F{n}") for n in range(1, 13)},
+}
+_VK_SCROLL = 0x91
+
+
+def win_vk_to_sdl(vk: int, to_char=None):
+    """A Windows virtual-key code as the (sym, scancode) SDL would have
+    reported for the same key, or None for one no binding can name.
+
+    For the desktop keyboard hook, which sees virtual keys and has to ask the
+    same question `_token_matches` answers for an SDL event. A character key
+    is its unshifted character in the current layout, which is what both an
+    SDL keycode and VK_A..VK_Z mean; `to_char` is MapVirtualKeyW's
+    VK-to-character mode, a seam for the tests. Caps Lock, Shift and the
+    other modifiers have no character and come back None, which is what keeps
+    the hook from ever taking the key that switches it off.
+    """
+    if vk == _VK_SCROLL:
+        return sdl2.SDLK_SCROLLLOCK, sdl2.SDL_SCANCODE_SCROLLLOCK
+    sym = _VK_TO_SDLK.get(vk)
+    if sym is None:
+        if to_char is None:
+            def to_char(v):
+                return ctypes.windll.user32.MapVirtualKeyW(v, 2)
+        ch = to_char(vk) & 0xFFFF           # bit 31 marks a dead key
+        if not 32 < ch < 127:
+            return None
+        sym = ord(chr(ch).lower())
+    return sym, 0
+
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 #  Renderer
@@ -8902,6 +9103,16 @@ class Renderer:
         #: x11_stack_is_partial. Set on the way into wallpaper mode.
         self._wp_partial = False
         self._rclick = None        # _DesktopRightClick, Windows only
+        #: X11, Caps Lock on: the see-through window over the icons that
+        #: takes the desktop's clicks and keys. Its SDL window, its X id and
+        #: SDL's id for it. See _open_wallpaper_catcher.
+        self._wp_catch = None
+        self._wp_catch_xid = self._wp_catch_id = 0
+        self._wp_catch_fixes = 0
+        #: Windows: keys the desktop hook kept from Explorer, as (sym,
+        #: scancode), waiting for the render loop. A deque because the hook
+        #: appends from its own thread and may not wait on a lock.
+        self._hook_keys = deque()
         self._shuffle             = False  # list order is as loaded
         self._shuffled_paths      = []     # that order, when it is shuffled
         self._running             = False
@@ -10022,12 +10233,17 @@ class Renderer:
                         if token.upper() == "DBLCLICK":
                             now = _time.monotonic()
                             if now - self._last_click < 0.35:
-                                self._toggle_fullscreen()
+                                self._double_clicked()
                                 self._last_click = 0.0
                             else:
                                 self._last_click = now
 
                 elif event.type == sdl2.SDL_WINDOWEVENT:
+                    if event.window.windowID == self._wp_catch_id:
+                        # The catcher over the icons coming, going or being
+                        # placed. It is not the window the visuals are drawn
+                        # in, so none of it is the viewport's business.
+                        continue
                     # SIZE_CHANGED, not RESIZED. SDL sends RESIZED only for a
                     # size somebody *else* chose -- the window manager, a
                     # drag -- and deliberately not for its own
@@ -10059,6 +10275,17 @@ class Renderer:
 
             if not self._running:
                 break
+
+            # ── Keys the Windows desktop hook took ────────────────────────
+            # Up here beside the SDL events, above every `continue` below: a
+            # parked wallpaper still answers its keys. A key with the menu
+            # up closes the menu, as one arriving through SDL does.
+            while self._hook_keys:
+                sym, scancode = self._hook_keys.popleft()
+                if self._menu_open:
+                    self._bridge.close_context_menu.emit()
+                else:
+                    self._handle_key(sym, scancode)
 
             # ── How busy the loop still is ────────────────────────────────
             # A pass that took longer than a frame should is startup still
@@ -10409,6 +10636,7 @@ class Renderer:
             self._pms[i] = None
         self._pm = None
         self._drop_window2()
+        self._drop_wallpaper_catcher()
         if self._context:
             sdl2.SDL_GL_DeleteContext(self._context)
         if self._window:
@@ -10450,9 +10678,9 @@ class Renderer:
         elif km("exclude", sym, scancode):
             self.request_exclude()
         elif km("toggle_wallpaper", sym, scancode):
-            # Both ways on X11 now: with Caps Lock on the wallpaper sits over
-            # the icons and can take the keyboard. On Windows it never can, so
-            # the tray icon stays the way out there.
+            # Both ways, with Caps Lock on: on X11 the catcher over the icons
+            # has the keyboard once the desktop is clicked, and on Windows the
+            # desktop hook hands the key over. The tray icon works either way.
             self.request_wallpaper()
         elif km("fullscreen", sym, scancode) or km("fullscreen_alt", sym, scancode):
             self._toggle_fullscreen()
@@ -11250,6 +11478,7 @@ class Renderer:
         now = _time.monotonic()
         front = getattr(self, "_wp_front", False)
         partial = getattr(self, "_wp_partial", False)
+        catch = getattr(self, "_wp_catch_xid", 0)
         every = self.WP_HOLD_BLIND_EVERY if front or partial \
             else self.WP_HOLD_EVERY
         if now - self._wp_hold_at < every:
@@ -11272,12 +11501,21 @@ class Renderer:
                     self._wp_box_moaned = True
                     print(f"[wallpaper] could not hold the geometry: {e}",
                           flush=True)
-            if front or partial:
-                # Caps Lock on: the top of the desktop layer -- over the icons,
-                # under every window. Otherwise the bottom of it, asked for
-                # blind because the stack cannot see what draws the icons.
+            if catch:
+                # Caps Lock on, and a catcher to take the clicks: *it* is
+                # what stays at the top of the desktop layer, and the visuals
+                # carry on under the icons exactly as with Caps Lock off.
+                self._hold_wallpaper_catcher(lib, dpy, catch)
+            # Caps Lock on with no catcher (nothing here composites): the
+            # visuals themselves go to the top of the desktop layer -- over
+            # the icons, under every window -- because that is the only way
+            # left for a click to reach them.
+            raised = front and not catch
+            if raised or partial:
+                # Otherwise the bottom of the layer, asked for blind because
+                # the stack cannot see what draws the icons.
                 x11_restack(lib, dpy, win, 0,
-                            _X11_ABOVE if front else _X11_BELOW)
+                            _X11_ABOVE if raised else _X11_BELOW)
                 lib.XSync(dpy, False)
                 return
             stack = x11_client_stack(lib, dpy)
@@ -11302,11 +11540,14 @@ class Renderer:
         """Wallpaper mode: Caps Lock picks whose menu the desktop answers with.
 
         Off is the desktop's own -- the icons stay on top and get the click.
-        On is the visualiser's: on X11 the window is held over the icon layer
-        (still under every ordinary window) so the click reaches it, and on
-        Windows a mouse hook takes the click away from Explorer instead.
+        On is the visualiser's, and so are the key bindings once the desktop
+        has the keyboard. On X11 a see-through window is held over the icon
+        layer (still under every ordinary window) and takes both; on Windows
+        a mouse hook and a keyboard hook take them away from Explorer. The
+        icons stay visible either way.
         Asked for on 2 Oct 2026, so that the menu can be reached from the
-        desktop itself rather than only from the tray.
+        desktop itself rather than only from the tray; the keys, and the
+        icons staying up on Linux, on 15 Nov 2026.
         """
         now = _time.monotonic()
         if now - self._caps_at < self.CAPS_POLL_S:
@@ -11341,16 +11582,26 @@ class Renderer:
                     # assignment is all the dispatch needs to see.
                     self._rclick = _DesktopRightClick(
                         lambda: setattr(self, "_req_context_menu", True),
-                        lambda: setattr(self, "_req_close_menu", True))
+                        lambda: setattr(self, "_req_close_menu", True),
+                        self._desktop_key)
                 self._rclick.start()
             elif self._rclick is not None:
                 self._rclick.stop()
         else:
             self._wp_hold_at = 0.0          # restack on this very pass
             if self._wallpaper and self._native_handle and self._x11_display:
-                # Clickable in front of the icons, click-through behind them.
-                x11_input_passthrough(_libx11(), self._x11_display,
-                                      self._native_handle, not on)
+                if on and self._open_wallpaper_catcher():
+                    # The catcher has the clicks. The visuals stay under the
+                    # icons and click-through, as they already were.
+                    pass
+                else:
+                    # Off -- or on, where a see-through window cannot be
+                    # trusted to be see-through. Then the visuals are what
+                    # goes over the icons (_hold_wallpaper_bottom), and they
+                    # have to be clickable there and click-through behind.
+                    self._drop_wallpaper_catcher()
+                    x11_input_passthrough(_libx11(), self._x11_display,
+                                          self._native_handle, not on)
         if not on and self._menu_open:
             # The desktop has its menu back, so ours goes. On Windows nothing
             # else would close it now: the hook that saw clicks beside it is
@@ -11358,8 +11609,173 @@ class Renderer:
             self._bridge.close_context_menu.emit()
         if not quiet:
             self._bridge.status_message.emit(
-                "Caps Lock on — right-click the desktop for this menu"
-                if on else "Caps Lock off — the desktop has its menu back")
+                "Caps Lock on — the desktop's right-click and keys are the "
+                "visualiser's"
+                if on else "Caps Lock off — the desktop has its clicks back")
+
+    def _open_wallpaper_catcher(self) -> bool:
+        """X11: put a see-through window over the desktop icons, to take the
+        desktop's clicks and keys while Caps Lock is on. True if it is up.
+        Render thread.
+
+        Until 15 Nov 2026 the visuals themselves were raised over the icons
+        for this, which hid every icon for as long as Caps Lock was on --
+        reported as "desktop mode hides the folder, but shows under opened
+        windows". Under Wayland nothing else was thought possible: the icons
+        are Desktop Icons NG's Wayland window, and an X client is never told
+        about a click on one. But the click only has to land on *an* X window
+        of ours, not on the one with the picture in it. So: a second window,
+        desktop type like the first, on a 32-bit visual with every pixel
+        zero. The compositor blends it to nothing, the icons and the visuals
+        show through, and the clicks and -- once it has been clicked -- the
+        keyboard are its own. SDL makes it, so both arrive in the ordinary
+        event loop already spelled as SDL spells them.
+
+        Measured in a headless GNOME 50.1 / mutter session with Desktop Icons
+        NG the same day: icons and visuals both on screen through it; a
+        right-click, a left-click on an icon and two keys all delivered to it;
+        the icon under the click did not react. That last part is the cost:
+        the icons are visible and inert until Caps Lock goes off.
+
+        False -- and the caller falls back to raising the visuals -- wherever
+        a see-through window might not be: see x11_is_composited.
+        """
+        if getattr(self, "_wp_catch", None) is not None:
+            return True
+        try:
+            lib, dpy = _libx11(), self._x11_display
+            if not x11_is_composited(lib, dpy):
+                return False
+            visual = x11_argb_visual(lib, dpy)
+            box = self._wallpaper_box()
+            if not visual or box is None:
+                return False
+            x, y, w, h = box
+            # The hint is read once, by SDL_CreateWindow, and would be read
+            # again by the next window made -- visual 2's -- so it comes
+            # straight back off.
+            sdl2.SDL_SetHint(_SDL_X11_VISUALID, str(visual).encode())
+            try:
+                win = sdl2.SDL_CreateWindow(
+                    f"{APP_NAME} \u2014 desktop".encode(), x, y, w, h,
+                    sdl2.SDL_WINDOW_HIDDEN | sdl2.SDL_WINDOW_BORDERLESS)
+            finally:
+                sdl2.SDL_SetHint(_SDL_X11_VISUALID, b"")
+            if not win:
+                print(f"[wallpaper] no window over the icons: "
+                      f"{sdl2.SDL_GetError()}", flush=True)
+                return False
+            xid = self._x11_window_of(win)
+            if not xid:
+                sdl2.SDL_DestroyWindow(win)
+                return False
+            # Everything the window manager reads at map time, before the
+            # map: the type that puts it in the desktop layer, and a user
+            # time of zero, which is EWMH for "do not give me the keyboard
+            # just for appearing". Caps Lock goes on while somebody is
+            # typing in another window far more often than for this.
+            x11_set_atoms(lib, dpy, xid, _X11_TYPE, [_X11_DESKTOP])
+            x11_set_atoms(lib, dpy, xid, _X11_STATE, list(_X11_STATES))
+            x11_set_cardinal(lib, dpy, xid, "_NET_WM_USER_TIME", 0)
+            lib.XSetWindowBackground(dpy, xid, 0)     # ARGB zero: nothing
+            lib.XSync(dpy, False)
+            sdl2.SDL_ShowWindow(win)
+            lib.XClearWindow(dpy, xid)
+            x11_restack(lib, dpy, xid, 0, _X11_ABOVE)
+            lib.XSync(dpy, False)
+            # A new window can take the GL context with it merely by being
+            # made (see _do_set_window2). The visuals' window keeps it.
+            sdl2.SDL_GL_MakeCurrent(self._window, self._context)
+            self._wp_catch, self._wp_catch_xid = win, xid
+            self._wp_catch_id = sdl2.SDL_GetWindowID(win)
+            self._wp_catch_fixes = 0
+            return True
+        except Exception as e:                           # noqa: BLE001
+            print(f"[wallpaper] no window over the icons: {e}", flush=True)
+            return False
+
+    def _x11_window_of(self, win) -> int:
+        """The X id behind an SDL window, or 0."""
+        info = sdl2.SDL_SysWMinfo()
+        sdl2.SDL_VERSION(info.version)
+        if not sdl2.SDL_GetWindowWMInfo(win, _ctypes.byref(info)):
+            return 0
+        return int(info.info.x11.window or 0)
+
+    def _drop_wallpaper_catcher(self):
+        """Take the catcher away again. Render thread."""
+        win = getattr(self, "_wp_catch", None)
+        self._wp_catch = None
+        self._wp_catch_xid = self._wp_catch_id = 0
+        if win is not None:
+            sdl2.SDL_DestroyWindow(win)
+            sdl2.SDL_GL_MakeCurrent(self._window, self._context)
+
+    def _hold_wallpaper_catcher(self, lib, dpy, xid):
+        """Keep the catcher over the icons and over the whole wallpaper.
+
+        The same two holds the visuals get, pointed the other way. Desktop
+        Icons NG lowers itself on every click and every map, which only ever
+        leaves the catcher higher -- but another desktop-layer window can be
+        mapped above it, so the top is asked for on every pass, blind, at the
+        rate the bottom is. And it follows the wallpaper's box, so moving the
+        wallpaper to another monitor moves the clicks with it.
+        """
+        x11_restack(lib, dpy, xid, 0, _X11_ABOVE)
+        lib.XSync(dpy, False)
+        # Its own try, as the visuals' box has: a window that cannot be
+        # measured is no reason to stop holding the stacking, which is what
+        # an exception out of here would do for the next minute.
+        try:
+            box = self._wallpaper_box()
+            top = x11_toplevel_of(lib, dpy, xid)
+            rect = x11_window_rect(lib, dpy, top)
+            if box is None or rect is None or rect == tuple(box):
+                self._wp_catch_fixes = 0
+            elif self._wp_catch_fixes < self.WP_FIX_LIMIT:
+                # Bounded like the visuals' own box, and for the same reason:
+                # a window manager that insists gets its way, not a fight.
+                self._wp_catch_fixes += 1
+                lib.XMoveResizeWindow(dpy, top, *box)
+                lib.XSync(dpy, False)
+        except Exception as e:                           # noqa: BLE001
+            if not self._wp_box_moaned:
+                self._wp_box_moaned = True
+                print(f"[wallpaper] could not hold the geometry: {e}",
+                      flush=True)
+
+    def _double_clicked(self):
+        """A double-click on a window of ours: fullscreen, unless it landed
+        on the desktop."""
+        if self._wallpaper and getattr(self, "_wp_catch", None) is not None:
+            # The likeliest double-click on a desktop is on an icon, and the
+            # icon is right there on screen doing nothing. Say why, rather
+            # than answer with fullscreen's "Leave wallpaper mode first".
+            self._bridge.show_toast.emit(
+                "Caps Lock is on — turn it off to use the desktop icons")
+            return
+        self._toggle_fullscreen()
+
+    def _desktop_key(self, vk: int) -> bool:
+        """Windows, on the desktop hook's own thread: a key pressed while the
+        desktop has the keyboard. True if it is bound to something, in which
+        case it is queued for the render loop and the hook keeps it from
+        Explorer.
+
+        No lock, for the reason the hook's other callbacks take none: every
+        key on the machine waits while this runs. The key map is read through
+        one `list()` call, which the interpreter does not interleave with the
+        Qt thread's update of it.
+        """
+        pair = win_vk_to_sdl(vk)
+        if pair is None:
+            return False
+        sym, scancode = pair
+        if not any(_token_matches(str(token), sym, scancode)
+                   for token in list(self._keymaps.values())):
+            return False
+        self._hook_keys.append(pair)
+        return True
 
     #: How many times running the geometry may be put back before the window
     #: manager is taken to have meant it. Without a stop, a window manager that

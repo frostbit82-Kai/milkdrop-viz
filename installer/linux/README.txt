@@ -63,24 +63,27 @@ CONTROLS
 
     right-click       menu (settings, preset browser, ratings)
     left / right      previous / next preset
-    space             hard cut to the next preset
-    r                 random preset
+    h                 hard cut to the next preset
+    j                 random preset
     f  or  F11        fullscreen        (double-click also works)
     b                 borderless window
     t                 keep the window above other windows
     F9                start / stop recording a clip
     escape            quit
-    + / -             rate the current preset up or down
+    up / down         rate the current preset up or down
     x                 exclude this one (rate it 0) and move on
-    c                 snapshot this preset for the browser
-    d                 desktop wallpaper mode on / off (X11 sessions)
+    s                 snapshot this preset for the browser
+    d                 desktop wallpaper mode on / off
     1                 visual 1 on / off
     2                 visual 2 on / off
     [  /  ]           crossfade towards visual 1 / visual 2
     tab               with two showing, adjust the other one
-    h                 hard cuts on/off
-    m                 shuffle the playlist order on / off
+    c                 hard cuts on/off
+    r                 shuffle the playlist order on / off
     scroll lock       lock the current preset
+
+Every one of these can be changed: right-click -> Key bindings. A set you have
+already saved there is kept as it is when you upgrade.
 
 A preset rated 0 stars is dropped from the rotation. Ratings and settings are
 kept in ~/.config/BomsAIVisualizer and survive uninstalling.
@@ -135,24 +138,29 @@ DESKTOP WALLPAPER
 
 Right-click -> Set as desktop wallpaper draws the visuals on the desktop,
 behind your icons. Press d for the same thing. The window sits below
-everything, so it cannot be clicked while it is there -- a tray icon appears
-instead, and clicking it opens the same menu. Use it to change preset, rate,
-or leave wallpaper mode.
+everything and lets every click through, so your icons and the desktop's own
+right-click menu go on working as they always did.
+
+Caps Lock hands the desktop to the visualiser. While it is on, a right-click
+on the desktop opens this app's menu instead of the desktop's, and once you
+have clicked the desktop the keys above work as well: next, previous, rate,
+d to leave. Your icons stay on screen but do not answer until Caps Lock is
+off again. Typing in another window is never affected. Where the desktop has
+a tray, an icon appears there too, and clicking it opens the same menu.
 
 With a monitor chosen under Fullscreen display it fills that one; otherwise it
 spans every monitor. Settings -> At login can start it this way.
 
-This needs an X11 session. Wayland gives an application no way to draw behind
-the desktop icons -- there is no such layer in the protocol, and running under
-XWayland does not add one. If your login screen offers a session ending in "on
-Xorg", picking that gets you wallpaper mode; the menu entry says so and stays
-greyed out otherwise. Everything else in the app works the same either way.
+This needs an X server, and a Wayland session has one: XWayland, which GNOME,
+KDE and Cinnamon all start for you. The menu entry is greyed out only where
+there is none at all.
 
 How your desktop draws its icons decides what you get:
 
-  Cinnamon, and anything else that draws icons on a see-through layer of
-  their own, is the one this was built for. The visuals become the wallpaper
-  and your icons stay on top of them, exactly as on Windows.
+  GNOME with desktop icons (Ubuntu's default), Cinnamon, and anything else
+  that draws icons on a see-through layer of their own, is what this was
+  built for. The visuals become the wallpaper and your icons stay on top of
+  them, exactly as on Windows.
 
   XFCE paints the wallpaper and the icons on the same window, so there is no
   layer to slip underneath. Wallpaper mode still fills the screen, but your

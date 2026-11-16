@@ -1,0 +1,2 @@
+{"uuid": "rigprobe@local", "name": "Rig probe", "description": "Test rig: stack dumps, screenshots, injected input",
+ "shell-version": ["50"]}
