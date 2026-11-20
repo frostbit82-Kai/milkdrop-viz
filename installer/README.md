@@ -8,7 +8,7 @@ Release packaging for BomsAI Visualizer. Two platforms, one shared spec.
       Dockerfile.linux        that container
       bomsai-visualizer.spec       PyInstaller spec, used by both platforms
       vendor/linux/           prebuilt libprojectM-4 .so files, committed
-      licenses/               projectM's LGPL-2.1 text, shipped with the app
+      licenses/               our MIT LICENSE.txt + third-party licence texts, shipped with the app
       linux/                  what goes inside the tarball for the end user
       build/  dist/           output, gitignored
 
@@ -41,7 +41,7 @@ are committed under `vendor/linux/`. Set `PROJECTM_LIB_DIR` to override:
 
 projectM is LGPL-2.1. It stays a separate shared library loaded with `ctypes`,
 and `licenses/` travels with the app, which is what keeps that licence satisfied
-for a paid product. Do not statically link it.
+whatever the app's own licence. Do not statically link it.
 
 ### Older systems
 

@@ -260,8 +260,8 @@ no ads, no in-app purchases, no gambling.
 - Privacy policy: `https://bomsaisoftware.com/privacy`
 - Support: `https://bomsaisoftware.com/contact`
 - Website: `https://bomsaisoftware.com`
-- EULA: paste `installer/licenses/EULA.txt` into the store's own field.
-  Complete — section 12 names Wisconsin.
+- Licence: free and open source, MIT (`installer/licenses/LICENSE.txt`). The
+  paid-app EULA was retired on 2026-11-20.
 
 ## What version this listing is for
 
@@ -398,7 +398,12 @@ the ten above are what to shoot.
 
 ## Pricing — decided
 
-**$5.00, no trial, no subscription.**
+**Free, and open source under MIT, since 2026-11-20.** The owner's call: nobody
+had bought a copy, and free shows what the studio can do at no cost to anyone.
+Repo made public the same day. Everything below is the paid-era history, kept
+for the record; do not re-open it unasked.
+
+**Was: $5.00, no trial, no subscription.**
 
 Was $4.99 while the app was curation alone, then $7.99 once recording and
 wallpaper mode landed. Dropped to a flat $5 on 2026-09-08, the owner's call:

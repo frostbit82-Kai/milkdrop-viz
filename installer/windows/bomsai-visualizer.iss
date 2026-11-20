@@ -45,7 +45,7 @@ MinVersion=10.0.14393
 ; Program Files needs elevation; per-user would dodge it but Steam and the
 ; Start Menu both expect a normal machine-wide install.
 PrivilegesRequired=admin
-LicenseFile={#StageDir}\licenses\EULA.txt
+LicenseFile={#StageDir}\licenses\LICENSE.txt
 InfoAfterFile={#StageDir}\README.txt
 DisableProgramGroupPage=yes
 ; Inno remembers the group from the previous install, so without this an

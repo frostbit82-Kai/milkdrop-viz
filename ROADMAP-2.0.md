@@ -326,6 +326,12 @@ fits (93px of a 99px box, "New list 10" included).
 **Windows builds 2.1.14 next**, and has one piece to prove first -- the last
 item):
 
+- **Free and open source, MIT** (20 Nov). Nobody had bought a copy, so the
+  owner made it free and the repo public. `LICENSE` at the root;
+  `installer/licenses/LICENSE.txt` replaces the paid-app EULA in both
+  packages and is the page the Windows installer shows. Releases go on
+  GitHub under version-free asset names -- PORTING.md has the steps.
+
 - **Wallpaper mode with Caps Lock on no longer hides the desktop icons on
   Linux.** Reported from Ubuntu as "desktop mode hides the folder, but shows
   under opened windows". The visuals used to be raised over the icons so a

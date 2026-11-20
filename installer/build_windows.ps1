@@ -18,14 +18,6 @@ $Repo    = Split-Path $Here -Parent
 $Version = (Get-Content (Join-Path $Repo 'VERSION') -Raw).Trim()
 $Name    = "BomsAIVisualizer-$Version-win64"
 
-# The EULA names the version it applies to in prose, and nothing reads it back:
-# the version half moves with every bump, the terms date deliberately does not,
-# and a line that has drifted looks exactly like one that has not. Fail here
-# rather than ship a licence that talks about the version before this one.
-$Eula = Join-Path $Repo 'installer\licenses\EULA.txt'
-if (-not (Select-String -Path $Eula -SimpleMatch "Applies to version $Version " -Quiet)) {
-    throw "installer\licenses\EULA.txt does not say ""Applies to version $Version"""
-}
 $Build   = Join-Path $Here 'build'
 $Out     = Join-Path $Here 'dist'
 

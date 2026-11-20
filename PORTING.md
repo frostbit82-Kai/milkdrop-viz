@@ -3125,3 +3125,35 @@ nothing of the user's was lost on this machine.
 
 **Windows is not affected** (Program Files and `%LOCALAPPDATA%`), and its
 build is unchanged by this.
+
+#### Free and MIT, and releases on GitHub — 2026-11-20
+
+The app is free and open source from 2.1.14 on: nobody had bought a copy, and
+the owner made the repo public. Root `LICENSE` is MIT, and
+`installer/licenses/LICENSE.txt` (MIT plus three short notes: third-party
+licences, no presets included, photosensitivity) replaces `EULA.txt`. It is
+what the Windows installer's licence page shows (`LicenseFile` in the .iss).
+The EULA's "Applies to version" check is gone from both build scripts, so a
+version bump is `VERSION` alone again.
+
+**Releases live on GitHub.** The site's download buttons point at
+`/releases/latest/download/<name>`, so the uploaded assets carry **no
+version**. The builders still write versioned names; copy before uploading:
+
+| built                                          | uploaded as                             |
+|------------------------------------------------|-----------------------------------------|
+| `BomsAIVisualizer-<v>-linux-x86_64.tar.gz`     | `BomsAIVisualizer-linux-x86_64.tar.gz`  |
+| `BomsAIVisualizer-<v>-win64-setup.exe`         | `BomsAIVisualizer-win64-setup.exe`      |
+
+A **draft** release `v2.1.14` holds the Linux asset. On Windows, after the
+prove-list above and the build:
+
+    Copy-Item installer\dist\BomsAIVisualizer-2.1.14-win64-setup.exe $env:TEMP\BomsAIVisualizer-win64-setup.exe
+    gh release upload v2.1.14 $env:TEMP\BomsAIVisualizer-win64-setup.exe
+
+Then publish the draft on GitHub, and only then deploy the site: its buttons
+are dead links until a published release carries both names.
+
+Rebuilt for the licence swap (same code): **89,969,516 bytes**, sha256
+`64522c6c529b4d07bc1f00ea46b9c444e711c6e1cb4fd800efbe9c59579981f1`;
+`licenses/LICENSE.txt` is MIT and no EULA is left in the package.

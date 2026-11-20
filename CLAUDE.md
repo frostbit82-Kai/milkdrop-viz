@@ -100,12 +100,11 @@ somebody remembered. The install needs a UAC click and there is no
 non-interactive elevation on this box, so this check is one thing an agent
 cannot do alone -- ask.
 
-**The version lives in `VERSION` and nowhere else, bar one guarded line.**
-Both build scripts read that file. `installer/licenses/EULA.txt` also names the
-version, in prose, and nothing reads it back — so both scripts refuse to build
-unless the licence says "Applies to version `<VERSION>`". The other half of
-that line, the date the *terms* were written, deliberately does not move with
-the version.
+**The version lives in `VERSION` and nowhere else.** Both build scripts read
+that file. **Free and MIT since 2026-11-20** (repo public, root `LICENSE`):
+`installer/licenses/LICENSE.txt` replaced the paid-app EULA, names no version,
+and is what the Windows installer shows. The EULA's "Applies to version" build
+check went with it.
 
 **`installer/PROJECTM_COMMIT` pins the exact libprojectM commit both platforms
 build.** It is a SHA on master, not a tag, because the API we want has never
@@ -122,7 +121,7 @@ instead of reusing stale DLLs. Bump the pin and re-run both.
 purpose.** Upstream release links have gone dead before, and rebuilding needs a
 toolchain the packaging box may not have. `PROJECTM_LIB_DIR` overrides them.
 projectM is LGPL-2.1 and stays a separate `ctypes`-loaded library with its
-licence in `installer/licenses/` — that is what makes shipping it in a paid app
+licence in `installer/licenses/` — that is what makes shipping it
 legitimate, so do not link it statically. `installer/vendor/windows/` holds
 `projectM-4.dll` and `projectM-4-playlist.dll` for the same reason. There is no
 third: `glew32.dll` was dropped at the pin below, where projectM stopped using
@@ -1206,7 +1205,7 @@ There is no display in an agent shell and SDL needs one, so:
   name reads "Unknown". A directory change goes through
   `_reload_preset_dir()`, which takes the same route startup does.
 - **The Qt binding is PySide6, and viz_common picks it at import.** PySide6 is
-  LGPL, which is what lets it ship inside a paid app; PyQt6 is
+  LGPL, which is what lets it ship inside an app under any licence; PyQt6 is
   GPL-or-commercial. `viz_common` falls back to PyQt6 when PySide6 is absent,
   because the same file is Bomsai Player's visualiser and that app is PyQt6
   throughout -- and it prefers whichever binding is **already imported**, since

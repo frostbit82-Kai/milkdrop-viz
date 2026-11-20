@@ -211,6 +211,10 @@ missing OpenGL driver and a preset directory that has not been set yet.
 LICENSES
 --------
 
+BomsAI Visualizer is free and open source under the MIT licence — see
+LICENSE.txt in the licenses folder. Source:
+https://github.com/frostbit82-Kai/milkdrop-viz
+
 See the licenses/ directory, starting with README-third-party.txt.
 
 This app renders through projectM (LGPL-2.1) and uses Qt 6 with PySide6
